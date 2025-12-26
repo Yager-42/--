@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IUserPrivacyDao">
+
+    <resultMap id="PrivacyMap" type="cn.nexus.infrastructure.dao.social.po.UserPrivacyPO">
+        <id property="userId" column="user_id"/>
+        <result property="needApproval" column="need_approval"/>
+    </resultMap>
+
+    <select id="selectByUserId" resultMap="PrivacyMap">
+        SELECT user_id, need_approval FROM user_privacy_setting WHERE user_id = #{userId}
+    </select>
+</mapper>

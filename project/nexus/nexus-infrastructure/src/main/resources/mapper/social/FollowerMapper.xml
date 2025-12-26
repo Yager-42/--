@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IFollowerDao">
+
+    <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.FollowerPO">
+        INSERT INTO user_follower(id, user_id, follower_id)
+        VALUES(#{id}, #{userId}, #{followerId})
+        ON DUPLICATE KEY UPDATE follower_id = VALUES(follower_id)
+    </insert>
+
+    <delete id="delete">
+        DELETE FROM user_follower WHERE user_id = #{userId} AND follower_id = #{followerId}
+    </delete>
+</mapper>

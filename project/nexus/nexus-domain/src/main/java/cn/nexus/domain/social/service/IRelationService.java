@@ -15,5 +15,14 @@ public interface IRelationService {
 
     OperationResultVO block(Long sourceId, Long targetId);
 
-    RelationGroupVO manageGroup(Long userId, String action, String listName, Long listId, java.util.List<Long> memberIds);
+    RelationGroupVO manageGroup(Long userId,
+                                String action,
+                                String listName,
+                                Long listId,
+                                java.util.List<Long> memberIds,
+                                Long sourceListId,
+                                Long targetListId,
+                                java.util.List<Long> addMemberIds,
+                                java.util.List<Long> removeMemberIds,
+                                String idempotentToken);
 }

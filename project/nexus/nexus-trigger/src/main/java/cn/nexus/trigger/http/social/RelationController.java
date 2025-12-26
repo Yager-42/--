@@ -68,7 +68,12 @@ public class RelationController implements IRelationApi {
                 requestDTO.getAction(),
                 requestDTO.getListName(),
                 requestDTO.getListId(),
-                requestDTO.getMemberIds());
+                requestDTO.getMemberIds(),
+                requestDTO.getSourceListId(),
+                requestDTO.getTargetListId(),
+                requestDTO.getAddMemberIds(),
+                requestDTO.getRemoveMemberIds(),
+                requestDTO.getIdempotentToken());
         RelationGroupResponseDTO dto = RelationGroupResponseDTO.builder()
                 .listId(vo.getListId())
                 .listName(vo.getListName())

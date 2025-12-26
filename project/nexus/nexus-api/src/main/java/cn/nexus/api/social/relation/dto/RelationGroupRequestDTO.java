@@ -20,4 +20,9 @@ public class RelationGroupRequestDTO {
     private String listName;
     private Long listId;
     private List<Long> memberIds;
+    private Long sourceListId;
+    private Long targetListId;
+    private List<Long> addMemberIds;
+    private List<Long> removeMemberIds;
+    private String idempotentToken;
 }

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IRelationGroupMemberDao">
+
+    <resultMap id="GroupMemberMap" type="cn.nexus.infrastructure.dao.social.po.RelationGroupMemberPO">
+        <id property="id" column="id"/>
+        <result property="groupId" column="group_id"/>
+        <result property="memberId" column="member_id"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <delete id="deleteByGroup">
+        DELETE FROM user_relation_group_member WHERE group_id = #{groupId}
+    </delete>
+
+    <insert id="batchInsert">
+        INSERT INTO user_relation_group_member(id, group_id, member_id)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.id}, #{item.groupId}, #{item.memberId})
+        </foreach>
+        ON DUPLICATE KEY UPDATE member_id = VALUES(member_id)
+    </insert>
+
+    <select id="selectByGroup" resultMap="GroupMemberMap">
+        SELECT id, group_id, member_id, create_time
+        FROM user_relation_group_member
+        WHERE group_id = #{groupId}
+    </select>
+
+    <delete id="deleteBatch">
+        DELETE FROM user_relation_group_member
+        WHERE group_id = #{groupId}
+        <if test="memberIds != null and memberIds.size() > 0">
+            AND member_id IN
+            <foreach collection="memberIds" item="mid" open="(" separator="," close=")">
+                #{mid}
+            </foreach>
+        </if>
+    </delete>
+</mapper>

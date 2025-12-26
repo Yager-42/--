@@ -1,0 +1,4 @@
+# 生产环境占位配置
+logging:
+  level:
+    root: WARN

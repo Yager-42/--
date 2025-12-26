@@ -1,0 +1,4 @@
+# 开发环境占位配置
+logging:
+  level:
+    cn.nexus: DEBUG

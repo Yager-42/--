@@ -554,7 +554,7 @@ RPC 远程调用: Dubbo。
 
 2. 数据存储层 (Data Persistence) - Polyglot Persistence
 
-关系型数据库 (OLTP): MySQL。
+关系型数据库 (OLTP): MySQL，使用mybatis交互。
 
 中间件: ShardingSphere-JDBC。
 
@@ -577,6 +577,14 @@ Java 客户端: Redisson。
 消息队列: Apache RabbitMQ。
 
 分布式任务调度: XXL-JOB。
+
+---
+每一个类文件都需要注释，包括作者和创建时间：
+作者需要添加 @author {$authorName}，对于后续的修改者，请在原来的作者下面添加一行新的信息；
+创建时间为该类的创建日期，格式是 @since yyyy-MM-dd，一旦文件被创建，该时间不可修改。
+所有被 public 和 protected 修饰的类、方法、字段等都需要添加注释，注释风格请参考当前项目中已有的文件：
+所有 @param 和 @return 的注释，最后都需要根据其类型添加引用，基本类型需要添加 {@code } 标记，其他需要添加 {@link } 标记。
+所有半角字符和全角字符之间需要增加一个空格，来使得整体排版规整，方便超长内容的换行。
 
 *文档版本：v1.0*
 *生成日期：2025-01-11*

@@ -22,6 +22,15 @@
         WHERE request_id = #{requestId}
     </select>
 
+    <select id="selectByIds" resultMap="FriendRequestMap">
+        SELECT request_id, source_id, target_id, status, create_time
+        FROM friend_request
+        WHERE request_id IN
+        <foreach collection="requestIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
     <select id="selectPending" resultMap="FriendRequestMap">
         SELECT request_id, source_id, target_id, idempotent_key, status, version, create_time
         FROM friend_request
@@ -31,7 +40,16 @@
     <update id="updateStatusIfPending">
         UPDATE friend_request
         SET status = #{status}, version = version + 1
-        WHERE request_id = #{requestId} AND status = 2 AND version = #{version}
+        WHERE request_id = #{requestId} AND status = 2
+    </update>
+
+    <update id="updateStatusIfPendingBatch">
+        UPDATE friend_request
+        SET status = #{status}, version = version + 1
+        WHERE status = 2 AND request_id IN
+        <foreach collection="requestIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
     </update>
 
     <delete id="deleteBetween">

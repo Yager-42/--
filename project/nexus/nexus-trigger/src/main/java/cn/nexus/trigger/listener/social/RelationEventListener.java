@@ -13,8 +13,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 /**
@@ -29,24 +27,6 @@ public class RelationEventListener {
     private final IInteractionService interactionService;
     private final IRiskService riskService;
     private final IRelationEventInboxPort relationEventInboxPort;
-
-    @Async
-    @EventListener
-    public void onFollow(RelationFollowEvent event) {
-        handleFollow(event);
-    }
-
-    @Async
-    @EventListener
-    public void onFriend(RelationFriendEvent event) {
-        handleFriend(event);
-    }
-
-    @Async
-    @EventListener
-    public void onBlock(RelationBlockEvent event) {
-        handleBlock(event);
-    }
 
     @RabbitListener(queues = "relation.follow.queue")
     public void consumeFollow(RelationFollowEvent event) {

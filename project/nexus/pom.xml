@@ -35,6 +35,32 @@
                 <version>${lombok.version}</version>
                 <scope>provided</scope>
             </dependency>
+            <!-- Internal module versions managed here to allow omission in child poms -->
+            <dependency>
+                <groupId>cn.nexus</groupId>
+                <artifactId>nexus-types</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>cn.nexus</groupId>
+                <artifactId>nexus-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>cn.nexus</groupId>
+                <artifactId>nexus-domain</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>cn.nexus</groupId>
+                <artifactId>nexus-infrastructure</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>cn.nexus</groupId>
+                <artifactId>nexus-trigger</artifactId>
+                <version>${project.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 

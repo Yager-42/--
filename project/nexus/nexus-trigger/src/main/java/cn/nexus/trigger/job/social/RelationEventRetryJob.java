@@ -2,10 +2,10 @@ package cn.nexus.trigger.job.social;
 
 import cn.nexus.domain.social.adapter.port.IRelationEventInboxPort;
 import cn.nexus.domain.social.adapter.port.IRelationEventPort;
+import cn.nexus.domain.social.model.valobj.RelationEventInboxVO;
 import cn.nexus.infrastructure.adapter.social.port.RelationBlockEvent;
 import cn.nexus.infrastructure.adapter.social.port.RelationFollowEvent;
 import cn.nexus.infrastructure.adapter.social.port.RelationFriendEvent;
-import cn.nexus.infrastructure.dao.social.po.RelationEventInboxPO;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,8 +32,8 @@ public class RelationEventRetryJob {
      */
     @Scheduled(fixedDelay = 60000)
     public void retryFailed() {
-        List<RelationEventInboxPO> list = inboxPort.fetchRetry(100);
-        for (RelationEventInboxPO po : list) {
+        List<RelationEventInboxVO> list = inboxPort.fetchRetry(100);
+        for (RelationEventInboxVO po : list) {
             try {
                 replay(po);
                 inboxPort.markDone(po.getFingerprint());
@@ -54,7 +54,7 @@ public class RelationEventRetryJob {
         log.info("清理收件箱已完成记录 rows={}", deleted);
     }
 
-    private void replay(RelationEventInboxPO po) throws Exception {
+    private void replay(RelationEventInboxVO po) throws Exception {
         String type = po.getEventType();
         String payload = po.getPayload();
         if ("FOLLOW".equals(type)) {

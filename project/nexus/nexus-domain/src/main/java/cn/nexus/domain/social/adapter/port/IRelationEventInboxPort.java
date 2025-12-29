@@ -23,7 +23,7 @@ public interface IRelationEventInboxPort {
     /**
      * 拉取需要重放/补偿的事件（失败或长期未处理）。
      */
-    java.util.List<cn.nexus.infrastructure.dao.social.po.RelationEventInboxPO> fetchRetry(int limit);
+    java.util.List<cn.nexus.domain.social.model.valobj.RelationEventInboxVO> fetchRetry(int limit);
 
     /**
      * 清理过期已完成记录。

@@ -11,7 +11,7 @@ public interface IRelationService {
 
     FriendRequestResultVO friendRequest(Long sourceId, Long targetId, String verifyMsg, String sourceChannel);
 
-    FriendDecisionResultVO friendDecision(Long requestId, String action);
+    FriendDecisionResultVO friendDecision(java.util.List<Long> requestIds, String action);
 
     OperationResultVO block(Long sourceId, Long targetId);
 

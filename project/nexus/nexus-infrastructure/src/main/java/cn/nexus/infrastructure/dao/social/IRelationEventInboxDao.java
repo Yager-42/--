@@ -2,6 +2,7 @@ package cn.nexus.infrastructure.dao.social;
 
 import cn.nexus.infrastructure.dao.social.po.RelationEventInboxPO;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 @Mapper
 public interface IRelationEventInboxDao {

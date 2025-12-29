@@ -1,0 +1,5 @@
+# Maven build output
+**/target/
+
+# IDE files (already under .idea, keep for safety)
+.idea

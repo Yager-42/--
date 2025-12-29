@@ -1,6 +1,7 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IRelationEventInboxPort;
+import cn.nexus.domain.social.model.valobj.RelationEventInboxVO;
 import cn.nexus.infrastructure.dao.social.IRelationEventInboxDao;
 import cn.nexus.infrastructure.dao.social.po.RelationEventInboxPO;
 import lombok.RequiredArgsConstructor;
@@ -36,12 +37,28 @@ public class RelationEventInboxPort implements IRelationEventInboxPort {
     }
 
     @Override
-    public java.util.List<RelationEventInboxPO> fetchRetry(int limit) {
-        return relationEventInboxDao.selectByStatus("FAIL", limit);
+    public java.util.List<RelationEventInboxVO> fetchRetry(int limit) {
+        return relationEventInboxDao.selectByStatus("FAIL", limit).stream()
+                .map(this::toVO)
+                .toList();
     }
 
     @Override
     public int cleanBefore(java.util.Date beforeTime) {
         return relationEventInboxDao.deleteOlderThan(beforeTime, "DONE");
+    }
+
+    private RelationEventInboxVO toVO(RelationEventInboxPO po) {
+        if (po == null) {
+            return null;
+        }
+        return RelationEventInboxVO.builder()
+                .eventType(po.getEventType())
+                .fingerprint(po.getFingerprint())
+                .payload(po.getPayload())
+                .status(po.getStatus())
+                .createTime(po.getCreateTime())
+                .updateTime(po.getUpdateTime())
+                .build();
     }
 }

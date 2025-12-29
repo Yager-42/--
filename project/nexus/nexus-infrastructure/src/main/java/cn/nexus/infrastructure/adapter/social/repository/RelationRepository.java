@@ -110,9 +110,17 @@ public class RelationRepository implements IRelationRepository {
     }
 
     @Override
+    public java.util.List<FriendRequestEntity> listFriendRequests(java.util.List<Long> requestIds) {
+        if (requestIds == null || requestIds.isEmpty()) {
+            return java.util.List.of();
+        }
+        java.util.List<FriendRequestPO> list = friendRequestDao.selectByIds(requestIds);
+        return list.stream().map(this::toEntity).filter(Objects::nonNull).collect(Collectors.toList());
+    }
+
+    @Override
     public FriendRequestEntity findPendingFriendRequest(Long sourceId, Long targetId) {
-        String idem = sourceId + "-" + targetId;
-        FriendRequestPO po = friendRequestDao.selectPending(idem);
+        FriendRequestPO po = friendRequestDao.selectPending(idempotentKey(sourceId, targetId));
         return toEntity(po);
     }
 
@@ -122,7 +130,15 @@ public class RelationRepository implements IRelationRepository {
         if (po == null) {
             return false;
         }
-        return friendRequestDao.updateStatusIfPending(requestId, status, po.getVersion()) > 0;
+        return friendRequestDao.updateStatusIfPending(requestId, status) > 0;
+    }
+
+    @Override
+    public int updateFriendRequestsStatus(java.util.List<Long> requestIds, Integer status) {
+        if (requestIds == null || requestIds.isEmpty()) {
+            return 0;
+        }
+        return friendRequestDao.updateStatusIfPendingBatch(requestIds, status);
     }
 
     @Override
@@ -205,6 +221,12 @@ public class RelationRepository implements IRelationRepository {
             return;
         }
         relationGroupMemberDao.deleteBatch(groupId, memberIds);
+    }
+
+    private String idempotentKey(Long sourceId, Long targetId) {
+        long safeSource = sourceId == null ? 0 : sourceId;
+        long safeTarget = targetId == null ? 0 : targetId;
+        return safeSource + "-" + safeTarget;
     }
 
     private RelationEntity toEntity(RelationPO po) {

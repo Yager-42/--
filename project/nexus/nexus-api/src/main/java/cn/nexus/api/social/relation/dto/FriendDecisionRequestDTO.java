@@ -13,6 +13,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class FriendDecisionRequestDTO {
-    private Long requestId;
+    private java.util.List<Long> requestIds;
     private String action;
 }

@@ -6,6 +6,7 @@ import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRelationCachePort;
 import cn.nexus.domain.social.adapter.port.IRelationGroupLockPort;
+import cn.nexus.domain.social.adapter.port.IFriendRequestIdempotentPort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.FriendRequestEntity;
 import cn.nexus.domain.social.model.entity.RelationEntity;
@@ -31,6 +32,7 @@ public class RelationService implements IRelationService {
     private final IRelationAdjacencyCachePort adjacencyCachePort;
     private final IRelationCachePort relationCachePort;
     private final IRelationGroupLockPort relationGroupLockPort;
+    private final IFriendRequestIdempotentPort friendRequestIdempotentPort;
 
     private static final int RELATION_FOLLOW = 1;
     private static final int RELATION_FRIEND = 2;
@@ -90,9 +92,11 @@ public class RelationService implements IRelationService {
         if (invalidPair(sourceId, targetId)) {
             return FriendRequestResultVO.builder().status("INVALID").build();
         }
+        long idemId = deterministicEdgeId(sourceId, targetId);
+        String idemKey = friendRequestKey(sourceId, targetId);
         if (blockedPair(sourceId, targetId)) {
             return FriendRequestResultVO.builder()
-                    .requestId(deterministicEdgeId(sourceId, targetId))
+                    .requestId(idemId)
                     .status("BLOCKED")
                     .build();
         }
@@ -100,7 +104,7 @@ public class RelationService implements IRelationService {
         RelationEntity reverseFriend = relationRepository.findRelation(targetId, sourceId, RELATION_FRIEND);
         if (friendEdge != null || reverseFriend != null) {
             return FriendRequestResultVO.builder()
-                    .requestId(friendEdge != null ? friendEdge.getId() : deterministicEdgeId(sourceId, targetId))
+                    .requestId(friendEdge != null ? friendEdge.getId() : idemId)
                     .status("ACCEPTED")
                     .build();
         }
@@ -112,11 +116,28 @@ public class RelationService implements IRelationService {
                     .build();
         }
 
+        boolean acquired = friendRequestIdempotentPort.acquire(idemKey, 60);
+        if (!acquired) {
+            FriendRequestEntity existing = relationRepository.findFriendRequest(idemId);
+            if (existing != null) {
+                return FriendRequestResultVO.builder()
+                        .requestId(existing.getRequestId())
+                        .status(toStatus(existing.getStatus()))
+                        .build();
+            }
+            return FriendRequestResultVO.builder()
+                    .requestId(idemId)
+                    .status("PENDING")
+                    .build();
+        }
+
         FriendRequestEntity entity = FriendRequestEntity.builder()
-                .requestId(socialIdPort.nextId())
+                .requestId(idemId)
                 .sourceId(sourceId)
                 .targetId(targetId)
+                .idempotentKey(friendRequestKey(sourceId, targetId))
                 .status(STATUS_PENDING)
+                .version(0L)
                 .build();
         relationRepository.saveFriendRequest(entity);
         return FriendRequestResultVO.builder()
@@ -127,45 +148,50 @@ public class RelationService implements IRelationService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public FriendDecisionResultVO friendDecision(Long requestId, String action) {
-        FriendRequestEntity request = requestId == null ? null : relationRepository.findFriendRequest(requestId);
-        if (request == null || !Objects.equals(request.getStatus(), STATUS_PENDING)) {
+    public FriendDecisionResultVO friendDecision(List<Long> requestIds, String action) {
+        if (requestIds == null || requestIds.isEmpty()) {
             return FriendDecisionResultVO.builder().success(false).build();
         }
+        requestIds = new ArrayList<>(new LinkedHashSet<>(requestIds));
         boolean accept = "ACCEPT".equalsIgnoreCase(action);
-        boolean updated = relationRepository.updateFriendRequestStatus(requestId, accept ? STATUS_ACTIVE : STATUS_REJECTED);
-        if (!updated) {
+        List<FriendRequestEntity> requests = relationRepository.listFriendRequests(requestIds);
+        if (requests.size() != requestIds.size()) {
             return FriendDecisionResultVO.builder().success(false).build();
         }
-        FriendRequestEntity refreshed = relationRepository.findFriendRequest(requestId);
-        if (refreshed == null || !Objects.equals(refreshed.getStatus(), accept ? STATUS_ACTIVE : STATUS_REJECTED)) {
+        boolean allPending = requests.stream().allMatch(r -> Objects.equals(r.getStatus(), STATUS_PENDING));
+        if (!allPending) {
+            return FriendDecisionResultVO.builder().success(false).build();
+        }
+        int updated = relationRepository.updateFriendRequestsStatus(requestIds, accept ? STATUS_ACTIVE : STATUS_REJECTED);
+        if (updated != requestIds.size()) {
             return FriendDecisionResultVO.builder().success(false).build();
         }
         if (!accept) {
             return FriendDecisionResultVO.builder().success(true).build();
         }
-        // 写入双向好友边
-        RelationEntity forward = RelationEntity.builder()
-                .id(socialIdPort.nextId())
-                .sourceId(request.getSourceId())
-                .targetId(request.getTargetId())
-                .relationType(RELATION_FRIEND)
-                .status(STATUS_ACTIVE)
-                .build();
-        RelationEntity backward = RelationEntity.builder()
-                .id(socialIdPort.nextId())
-                .sourceId(request.getTargetId())
-                .targetId(request.getSourceId())
-                .relationType(RELATION_FRIEND)
-                .status(STATUS_ACTIVE)
-                .build();
-        relationRepository.saveRelation(forward);
-        relationRepository.saveRelation(backward);
-        relationRepository.saveFollower(socialIdPort.nextId(), request.getTargetId(), request.getSourceId());
-        relationRepository.saveFollower(socialIdPort.nextId(), request.getSourceId(), request.getTargetId());
-        adjacencyCachePort.addFollow(request.getSourceId(), request.getTargetId());
-        adjacencyCachePort.addFollow(request.getTargetId(), request.getSourceId());
-        relationEventPort.onFriendEstablished(request.getSourceId(), request.getTargetId());
+        for (FriendRequestEntity request : requests) {
+            RelationEntity forward = RelationEntity.builder()
+                    .id(socialIdPort.nextId())
+                    .sourceId(request.getSourceId())
+                    .targetId(request.getTargetId())
+                    .relationType(RELATION_FRIEND)
+                    .status(STATUS_ACTIVE)
+                    .build();
+            RelationEntity backward = RelationEntity.builder()
+                    .id(socialIdPort.nextId())
+                    .sourceId(request.getTargetId())
+                    .targetId(request.getSourceId())
+                    .relationType(RELATION_FRIEND)
+                    .status(STATUS_ACTIVE)
+                    .build();
+            relationRepository.saveRelation(forward);
+            relationRepository.saveRelation(backward);
+            relationRepository.saveFollower(socialIdPort.nextId(), request.getTargetId(), request.getSourceId());
+            relationRepository.saveFollower(socialIdPort.nextId(), request.getSourceId(), request.getTargetId());
+            adjacencyCachePort.addFollow(request.getSourceId(), request.getTargetId());
+            adjacencyCachePort.addFollow(request.getTargetId(), request.getSourceId());
+            relationEventPort.onFriendEstablished(request.getSourceId(), request.getTargetId());
+        }
         return FriendDecisionResultVO.builder().success(true).build();
     }
 
@@ -372,6 +398,12 @@ public class RelationService implements IRelationService {
         long safeSource = sourceId == null ? 0 : sourceId;
         long safeTarget = targetId == null ? 0 : targetId;
         return Math.abs(safeSource * 37 + safeTarget);
+    }
+
+    private String friendRequestKey(Long sourceId, Long targetId) {
+        long safeSource = sourceId == null ? 0 : sourceId;
+        long safeTarget = targetId == null ? 0 : targetId;
+        return safeSource + "-" + safeTarget;
     }
 
     private String normalizeAction(String action) {

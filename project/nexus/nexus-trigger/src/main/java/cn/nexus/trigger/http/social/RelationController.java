@@ -47,7 +47,7 @@ public class RelationController implements IRelationApi {
     @PostMapping("/friend/decision")
     @Override
     public Response<FriendDecisionResponseDTO> friendDecision(@RequestBody FriendDecisionRequestDTO requestDTO) {
-        FriendDecisionResultVO vo = relationService.friendDecision(requestDTO.getRequestId(), requestDTO.getAction());
+        FriendDecisionResultVO vo = relationService.friendDecision(requestDTO.getRequestIds(), requestDTO.getAction());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                 FriendDecisionResponseDTO.builder().success(vo.isSuccess()).build());
     }

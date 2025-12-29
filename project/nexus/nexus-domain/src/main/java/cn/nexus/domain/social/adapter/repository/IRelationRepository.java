@@ -33,9 +33,13 @@ public interface IRelationRepository {
 
     FriendRequestEntity findFriendRequest(Long requestId);
 
+    java.util.List<FriendRequestEntity> listFriendRequests(java.util.List<Long> requestIds);
+
     FriendRequestEntity findPendingFriendRequest(Long sourceId, Long targetId);
 
     boolean updateFriendRequestStatus(Long requestId, Integer status);
+
+    int updateFriendRequestsStatus(java.util.List<Long> requestIds, Integer status);
 
     void deleteFriendRequestsBetween(Long sourceId, Long targetId);
 

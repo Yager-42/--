@@ -22,5 +22,6 @@ public interface IContentPostDao {
                                 @Param("versionNum") Integer versionNum,
                                 @Param("isEdited") Integer isEdited,
                                 @Param("status") Integer status,
-                                @Param("visibility") Integer visibility);
+                                @Param("visibility") Integer visibility,
+                                @Param("expectedVersion") Integer expectedVersion);
 }

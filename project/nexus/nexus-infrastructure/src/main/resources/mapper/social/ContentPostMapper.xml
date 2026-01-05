@@ -50,6 +50,7 @@
             status = #{status},
             visibility = #{visibility}
         WHERE post_id = #{postId}
+          AND version_num = #{expectedVersion}
     </update>
 
 </mapper>

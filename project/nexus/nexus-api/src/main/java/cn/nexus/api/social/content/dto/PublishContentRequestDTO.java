@@ -13,6 +13,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PublishContentRequestDTO {
+    /** 复用已有内容的postId，空则创建新内容 */
+    private Long postId;
     private Long userId;
     private String text;
     private String mediaInfo;

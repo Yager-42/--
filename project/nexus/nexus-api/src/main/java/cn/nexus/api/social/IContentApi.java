@@ -21,7 +21,11 @@ public interface IContentApi {
 
     Response<DraftSyncResponseDTO> syncDraft(Long draftId, DraftSyncRequestDTO requestDTO);
 
-    Response<ContentHistoryResponseDTO> history(Long postId, Long userId, Integer limit);
+    Response<ContentHistoryResponseDTO> history(Long postId, Long userId, Integer limit, Integer offset);
 
     Response<OperationResultDTO> rollback(Long postId, ContentRollbackRequestDTO requestDTO);
+
+    Response<OperationResultDTO> updateSchedule(cn.nexus.api.social.content.dto.ScheduleUpdateRequestDTO requestDTO);
+
+    Response<ScheduleAuditResponseDTO> scheduleAudit(Long taskId, Long userId);
 }

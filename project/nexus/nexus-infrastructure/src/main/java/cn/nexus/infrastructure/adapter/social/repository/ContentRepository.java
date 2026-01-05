@@ -9,10 +9,16 @@ import cn.nexus.infrastructure.dao.social.IContentDraftDao;
 import cn.nexus.infrastructure.dao.social.IContentHistoryDao;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
 import cn.nexus.infrastructure.dao.social.IContentScheduleDao;
+import cn.nexus.infrastructure.dao.social.IContentChunkDao;
+import cn.nexus.infrastructure.dao.social.IContentPatchDao;
+import cn.nexus.infrastructure.dao.social.IContentRevisionDao;
+import cn.nexus.infrastructure.dao.social.po.ContentChunkPO;
 import cn.nexus.infrastructure.dao.social.po.ContentDraftPO;
 import cn.nexus.infrastructure.dao.social.po.ContentHistoryPO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.infrastructure.dao.social.po.ContentSchedulePO;
+import cn.nexus.infrastructure.dao.social.po.ContentPatchPO;
+import cn.nexus.infrastructure.dao.social.po.ContentRevisionPO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +39,9 @@ public class ContentRepository implements IContentRepository {
     private final IContentPostDao contentPostDao;
     private final IContentHistoryDao contentHistoryDao;
     private final IContentScheduleDao contentScheduleDao;
+    private final IContentChunkDao contentChunkDao;
+    private final IContentPatchDao contentPatchDao;
+    private final IContentRevisionDao contentRevisionDao;
 
     @Override
     public ContentDraftEntity saveDraft(ContentDraftEntity draft) {
@@ -61,6 +70,7 @@ public class ContentRepository implements IContentRepository {
     @Override
     public boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
                                               String contentText, String mediaInfo, String locationInfo, Integer visibility) {
+        Integer expectedVersion = versionNum == null ? null : Math.max(0, versionNum - 1);
         int rows = contentPostDao.updateContentAndVersion(
                 postId,
                 contentText,
@@ -69,7 +79,8 @@ public class ContentRepository implements IContentRepository {
                 versionNum,
                 edited == null ? null : (edited ? 1 : 0),
                 status,
-                visibility);
+                visibility,
+                expectedVersion);
         return rows > 0;
     }
 
@@ -105,8 +116,9 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
-    public boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount) {
-        return contentScheduleDao.updateStatus(taskId, status, retryCount) > 0;
+    public boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount, String lastError, Integer alarmSent, Long nextScheduleTime) {
+        return contentScheduleDao.updateStatus(taskId, status, retryCount, lastError, alarmSent,
+                nextScheduleTime == null ? null : new Date(nextScheduleTime)) > 0;
     }
 
     @Override
@@ -116,6 +128,97 @@ public class ContentRepository implements IContentRepository {
             return java.util.List.of();
         }
         return list.stream().map(this::toScheduleEntity).collect(Collectors.toList());
+    }
+
+    @Override
+    public ContentScheduleEntity findSchedule(Long taskId) {
+        return toScheduleEntity(contentScheduleDao.selectById(taskId));
+    }
+
+    @Override
+    public boolean cancelSchedule(Long taskId, Long userId, String reason) {
+        ContentSchedulePO po = contentScheduleDao.selectById(taskId);
+        if (po == null) {
+            return false;
+        }
+        if (po.getStatus() != null && po.getStatus() != 0) {
+            return false;
+        }
+        return contentScheduleDao.cancel(taskId, userId, reason) > 0;
+    }
+
+    @Override
+    public ContentScheduleEntity findScheduleByToken(String token) {
+        return toScheduleEntity(contentScheduleDao.selectByToken(token));
+    }
+
+    @Override
+    public boolean updateSchedule(Long taskId, Long userId, Long scheduleTime, String contentData, String idempotentToken, String reason) {
+        return contentScheduleDao.updateSchedule(taskId, userId, scheduleTime == null ? null : new Date(scheduleTime), contentData, idempotentToken, reason) > 0;
+    }
+
+    @Override
+    public void saveChunk(String chunkHash, byte[] compressedData, long size, String compressAlgo) {
+        ContentChunkPO po = new ContentChunkPO();
+        po.setChunkHash(chunkHash);
+        po.setChunkData(compressedData);
+        po.setSize(size);
+        po.setCompressAlgo(compressAlgo);
+        contentChunkDao.insertIgnore(po);
+    }
+
+    @Override
+    public byte[] findChunk(String chunkHash) {
+        ContentChunkPO po = contentChunkDao.selectByHash(chunkHash);
+        return po == null ? null : po.getChunkData();
+    }
+
+    @Override
+    public void savePatch(String patchHash, byte[] compressedPatch, long size, String compressAlgo) {
+        ContentPatchPO po = new ContentPatchPO();
+        po.setPatchHash(patchHash);
+        po.setPatchData(compressedPatch);
+        po.setSize(size);
+        po.setCompressAlgo(compressAlgo);
+        contentPatchDao.insertIgnore(po);
+    }
+
+    @Override
+    public byte[] findPatch(String patchHash) {
+        ContentPatchPO po = contentPatchDao.selectByHash(patchHash);
+        return po == null ? null : po.getPatchData();
+    }
+
+    @Override
+    public void saveRevision(Long postId, Integer versionNum, Integer baseVersion, boolean isBase, String patchHash, String chunkHash, String requestId) {
+        ContentRevisionPO po = new ContentRevisionPO();
+        po.setPostId(postId);
+        po.setVersionNum(versionNum);
+        po.setBaseVersion(baseVersion);
+        po.setIsBase(isBase ? 1 : 0);
+        po.setPatchHash(patchHash);
+        po.setChunkHash(chunkHash);
+        po.setRequestId(requestId);
+        contentRevisionDao.insert(po);
+    }
+
+    @Override
+    public cn.nexus.domain.social.model.entity.ContentRevisionEntity findRevision(Long postId, Integer versionNum) {
+        return toRevisionEntity(contentRevisionDao.selectOne(postId, versionNum));
+    }
+
+    @Override
+    public cn.nexus.domain.social.model.entity.ContentRevisionEntity findLatestRevision(Long postId) {
+        return toRevisionEntity(contentRevisionDao.selectLatest(postId));
+    }
+
+    @Override
+    public List<cn.nexus.domain.social.model.entity.ContentRevisionEntity> listRevisions(Long postId, Integer limit, Integer offset) {
+        List<ContentRevisionPO> list = contentRevisionDao.selectRecent(postId, limit, offset);
+        if (list == null) {
+            return java.util.List.of();
+        }
+        return list.stream().map(this::toRevisionEntity).collect(Collectors.toList());
     }
 
     private ContentDraftPO toDraftPO(ContentDraftEntity entity) {
@@ -211,6 +314,10 @@ public class ContentRepository implements IContentRepository {
         po.setScheduleTime(entity.getScheduleTime() == null ? null : new Date(entity.getScheduleTime()));
         po.setStatus(entity.getStatus());
         po.setRetryCount(entity.getRetryCount());
+        po.setIdempotentToken(entity.getIdempotentToken());
+        po.setIsCanceled(entity.getIsCanceled());
+        po.setLastError(entity.getLastError());
+        po.setAlarmSent(entity.getAlarmSent());
         return po;
     }
 
@@ -225,6 +332,26 @@ public class ContentRepository implements IContentRepository {
                 .scheduleTime(po.getScheduleTime() == null ? null : po.getScheduleTime().getTime())
                 .status(po.getStatus())
                 .retryCount(po.getRetryCount())
+                .idempotentToken(po.getIdempotentToken())
+                .isCanceled(po.getIsCanceled())
+                .lastError(po.getLastError())
+                .alarmSent(po.getAlarmSent())
+                .build();
+    }
+
+    private cn.nexus.domain.social.model.entity.ContentRevisionEntity toRevisionEntity(ContentRevisionPO po) {
+        if (po == null) {
+            return null;
+        }
+        return cn.nexus.domain.social.model.entity.ContentRevisionEntity.builder()
+                .postId(po.getPostId())
+                .versionNum(po.getVersionNum())
+                .baseVersion(po.getBaseVersion())
+                .isBase(po.getIsBase() != null && po.getIsBase() == 1)
+                .patchHash(po.getPatchHash())
+                .chunkHash(po.getChunkHash())
+                .requestId(po.getRequestId())
+                .createTime(po.getCreateTime() == null ? null : po.getCreateTime().getTime())
                 .build();
     }
 }

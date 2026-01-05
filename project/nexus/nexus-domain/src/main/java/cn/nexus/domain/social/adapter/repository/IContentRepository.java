@@ -33,7 +33,31 @@ public interface IContentRepository {
 
     ContentScheduleEntity createSchedule(ContentScheduleEntity schedule);
 
-    boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount);
+    boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount, String lastError, Integer alarmSent, Long nextScheduleTime);
 
     java.util.List<ContentScheduleEntity> listPendingSchedules(Long beforeTime, Integer limit);
+
+    ContentScheduleEntity findSchedule(Long taskId);
+
+    boolean cancelSchedule(Long taskId, Long userId, String reason);
+
+    ContentScheduleEntity findScheduleByToken(String token);
+    boolean updateSchedule(Long taskId, Long userId, Long scheduleTime, String contentData, String idempotentToken, String reason);
+
+    // 新增：基准/补丁存储
+    void saveChunk(String chunkHash, byte[] compressedData, long size, String compressAlgo);
+
+    byte[] findChunk(String chunkHash);
+
+    void savePatch(String patchHash, byte[] compressedPatch, long size, String compressAlgo);
+
+    byte[] findPatch(String patchHash);
+
+    void saveRevision(Long postId, Integer versionNum, Integer baseVersion, boolean isBase, String patchHash, String chunkHash, String requestId);
+
+    cn.nexus.domain.social.model.entity.ContentRevisionEntity findRevision(Long postId, Integer versionNum);
+
+    cn.nexus.domain.social.model.entity.ContentRevisionEntity findLatestRevision(Long postId);
+
+    List<cn.nexus.domain.social.model.entity.ContentRevisionEntity> listRevisions(Long postId, Integer limit, Integer offset);
 }

@@ -15,4 +15,8 @@ public class ContentSchedulePO {
     private Date scheduleTime;
     private Integer status;
     private Integer retryCount;
+    private String idempotentToken;
+    private Integer isCanceled;
+    private String lastError;
+    private Integer alarmSent;
 }

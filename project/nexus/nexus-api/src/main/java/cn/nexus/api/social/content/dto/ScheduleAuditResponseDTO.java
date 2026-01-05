@@ -1,4 +1,4 @@
-package cn.nexus.domain.social.model.entity;
+package cn.nexus.api.social.content.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -6,21 +6,20 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 定时发布任务实体。
+ * 定时任务审计查询响应。
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ContentScheduleEntity {
+public class ScheduleAuditResponseDTO {
     private Long taskId;
     private Long userId;
-    private String contentData;
     private Long scheduleTime;
     private Integer status;
     private Integer retryCount;
-    private String idempotentToken;
     private Integer isCanceled;
     private String lastError;
     private Integer alarmSent;
+    private String contentData;
 }

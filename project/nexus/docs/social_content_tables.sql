@@ -43,8 +43,52 @@ CREATE TABLE `content_schedule` (
   `user_id` BIGINT,
   `content_data` LONGTEXT COMMENT '待发布内容Payload',
   `schedule_time` DATETIME NOT NULL COMMENT '预定发布时间',
-  `status` TINYINT DEFAULT 0 COMMENT '0待执行,1执行中,2已完成,3失败',
+  `status` TINYINT DEFAULT 0 COMMENT '0待执行,1执行中,2已完成,3失败/取消',
   `retry_count` INT DEFAULT 0,
+  `idempotent_token` VARCHAR(128) DEFAULT NULL,
+  `is_canceled` TINYINT DEFAULT 0,
+  `last_error` TEXT,
+  `alarm_sent` TINYINT DEFAULT 0,
   PRIMARY KEY (`task_id`),
   INDEX `idx_time_status` (`schedule_time`, `status`)
 ) ENGINE=InnoDB COMMENT='定时发布任务表';
+
+-- 文本基准/补丁存储（Git风格）
+CREATE TABLE `content_chunk` (
+  `chunk_hash` VARCHAR(128) NOT NULL,
+  `chunk_data` LONGBLOB,
+  `size` BIGINT,
+  `compress_algo` VARCHAR(16) DEFAULT 'gzip',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`chunk_hash`)
+) ENGINE=InnoDB COMMENT='文本基准块（gzip压缩的全文或分块）';
+
+CREATE TABLE `content_patch` (
+  `patch_hash` VARCHAR(128) NOT NULL,
+  `patch_data` LONGBLOB,
+  `size` BIGINT,
+  `compress_algo` VARCHAR(16) DEFAULT 'gzip',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`patch_hash`)
+) ENGINE=InnoDB COMMENT='文本差分补丁（gzip压缩后的 unified diff）';
+
+CREATE TABLE `content_revision` (
+  `post_id` BIGINT NOT NULL,
+  `version_num` INT NOT NULL,
+  `base_version` INT NOT NULL,
+  `is_base` TINYINT DEFAULT 0 COMMENT '1=基准全文，0=补丁',
+  `patch_hash` VARCHAR(128) DEFAULT NULL,
+  `chunk_hash` VARCHAR(128) DEFAULT NULL,
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`post_id`, `version_num`),
+  KEY `idx_post_ver` (`post_id`, `version_num`)
+) ENGINE=InnoDB COMMENT='文本版本记录（指向基准或补丁）';
+
+-- 定时发布死信队列
+-- 依赖 RabbitMQ x-delayed-message 插件，DLX 配置在代码中
+
+-- 如需增加幂等 token / 取消标记，可在 content_schedule 表增加：
+--   idempotent_token VARCHAR(128), is_canceled TINYINT DEFAULT 0
+
+-- 建议扩展字段以支持取消/变更与告警：
+--   last_error TEXT, alarm_sent TINYINT DEFAULT 0

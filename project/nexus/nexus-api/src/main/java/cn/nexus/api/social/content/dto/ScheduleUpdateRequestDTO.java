@@ -6,15 +6,16 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 定时发布请求。
+ * 变更定时发布请求。
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ScheduleContentRequestDTO {
+public class ScheduleUpdateRequestDTO {
+    private Long taskId;
     private Long userId;
-    private String contentData;
     private Long publishTime;
-    private String timezone;
+    private String contentData;
+    private String reason;
 }

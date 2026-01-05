@@ -16,6 +16,10 @@ import java.util.List;
 @AllArgsConstructor
 public class ContentHistoryVO {
     private List<ContentVersionVO> versions;
+    /**
+     * 分页游标（下一次查询的偏移量），为空表示没有更多。
+     */
+    private Integer nextCursor;
 
     @Data
     @Builder

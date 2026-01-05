@@ -6,17 +6,19 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 内容版本历史实体（兼容旧表）。
+ * 版本修订记录。
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ContentHistoryEntity {
-    private Long historyId;
+public class ContentRevisionEntity {
     private Long postId;
     private Integer versionNum;
-    private String snapshotContent;
-    private String snapshotMedia;
+    private Integer baseVersion;
+    private Boolean isBase;
+    private String patchHash;
+    private String chunkHash;
+    private String requestId;
     private Long createTime;
 }

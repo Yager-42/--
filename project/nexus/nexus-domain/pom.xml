@@ -19,6 +19,11 @@
             <artifactId>nexus-types</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.github.difflib</groupId>
+            <artifactId>java-diff-utils</artifactId>
+            <version>4.12</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
         </dependency>

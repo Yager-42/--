@@ -9,28 +9,74 @@
         <result property="scheduleTime" column="schedule_time"/>
         <result property="status" column="status"/>
         <result property="retryCount" column="retry_count"/>
+        <result property="idempotentToken" column="idempotent_token"/>
+        <result property="isCanceled" column="is_canceled"/>
+        <result property="lastError" column="last_error"/>
+        <result property="alarmSent" column="alarm_sent"/>
     </resultMap>
 
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentSchedulePO">
-        INSERT INTO content_schedule(task_id, user_id, content_data, schedule_time, status, retry_count)
-        VALUES(#{taskId}, #{userId}, #{contentData}, #{scheduleTime}, #{status}, #{retryCount})
+        INSERT INTO content_schedule(task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent)
+        VALUES(#{taskId}, #{userId}, #{contentData}, #{scheduleTime}, #{status}, #{retryCount}, #{idempotentToken}, #{isCanceled}, #{lastError}, #{alarmSent})
     </insert>
 
     <update id="updateStatus">
         UPDATE content_schedule
-        SET status = #{status},
-            retry_count = #{retryCount}
+        <set>
+            status = #{status},
+            retry_count = #{retryCount},
+            last_error = #{lastError},
+            alarm_sent = #{alarmSent}
+            <if test="nextTime != null">
+                , schedule_time = #{nextTime}
+            </if>
+        </set>
         WHERE task_id = #{taskId}
     </update>
 
     <select id="selectPending" resultMap="ContentScheduleMap">
-        SELECT task_id, user_id, content_data, schedule_time, status, retry_count
+        SELECT task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
         FROM content_schedule
         WHERE status = 0
           AND schedule_time <= #{before}
         <if test="limit != null">
+            ORDER BY schedule_time ASC
             LIMIT #{limit}
         </if>
     </select>
+
+    <select id="selectById" resultMap="ContentScheduleMap">
+        SELECT task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
+        FROM content_schedule
+        WHERE task_id = #{taskId}
+    </select>
+
+    <select id="selectByToken" resultMap="ContentScheduleMap">
+        SELECT task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
+        FROM content_schedule
+        WHERE idempotent_token = #{idempotentToken}
+    </select>
+
+    <update id="cancel">
+        UPDATE content_schedule
+        SET status = 3,
+            is_canceled = 1,
+            last_error = #{reason}
+        WHERE task_id = #{taskId}
+          AND status = 0
+          AND user_id = #{userId}
+    </update>
+
+    <update id="updateSchedule">
+        UPDATE content_schedule
+        SET schedule_time = #{scheduleTime},
+            content_data = #{contentData},
+            idempotent_token = #{idempotentToken},
+            last_error = #{reason}
+        WHERE task_id = #{taskId}
+          AND status = 0
+          AND (is_canceled IS NULL OR is_canceled = 0)
+          AND user_id = #{userId}
+    </update>
 
 </mapper>

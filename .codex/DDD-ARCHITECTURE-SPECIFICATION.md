@@ -589,6 +589,12 @@ Java 客户端: Redisson。
 ---
 所有的新数据库表都放在docs文件夹下
 
+---
+当前的项目路仅为project\nexus
+
+---
+要么 Redisson 的分布式锁，要么使用数据库版本号字段做乐观锁，不要使用JVM自带的锁
+
 *文档版本：v1.0*
 *生成日期：2025-01-11*
 *适用项目：Java Spring Boot DDD 架构*

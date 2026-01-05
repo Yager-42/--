@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IContentChunkDao">
+
+    <resultMap id="ChunkMap" type="cn.nexus.infrastructure.dao.social.po.ContentChunkPO">
+        <id property="chunkHash" column="chunk_hash"/>
+        <result property="chunkData" column="chunk_data"/>
+        <result property="size" column="size"/>
+        <result property="compressAlgo" column="compress_algo"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.ContentChunkPO">
+        INSERT INTO content_chunk(chunk_hash, chunk_data, size, compress_algo, create_time)
+        VALUES(#{chunkHash}, #{chunkData}, #{size}, #{compressAlgo}, NOW())
+        ON DUPLICATE KEY UPDATE chunk_hash = chunk_hash
+    </insert>
+
+    <select id="selectByHash" resultMap="ChunkMap">
+        SELECT chunk_hash, chunk_data, size, compress_algo, create_time
+        FROM content_chunk
+        WHERE chunk_hash = #{chunkHash}
+    </select>
+</mapper>

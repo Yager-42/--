@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IContentPatchDao">
+
+    <resultMap id="PatchMap" type="cn.nexus.infrastructure.dao.social.po.ContentPatchPO">
+        <id property="patchHash" column="patch_hash"/>
+        <result property="patchData" column="patch_data"/>
+        <result property="size" column="size"/>
+        <result property="compressAlgo" column="compress_algo"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.ContentPatchPO">
+        INSERT INTO content_patch(patch_hash, patch_data, size, compress_algo, create_time)
+        VALUES(#{patchHash}, #{patchData}, #{size}, #{compressAlgo}, NOW())
+        ON DUPLICATE KEY UPDATE patch_hash = patch_hash
+    </insert>
+
+    <select id="selectByHash" resultMap="PatchMap">
+        SELECT patch_hash, patch_data, size, compress_algo, create_time
+        FROM content_patch
+        WHERE patch_hash = #{patchHash}
+    </select>
+</mapper>

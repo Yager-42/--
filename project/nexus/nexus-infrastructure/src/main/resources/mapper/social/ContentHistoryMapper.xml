@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IContentHistoryDao">
+
+    <resultMap id="ContentHistoryMap" type="cn.nexus.infrastructure.dao.social.po.ContentHistoryPO">
+        <id property="historyId" column="history_id"/>
+        <result property="postId" column="post_id"/>
+        <result property="versionNum" column="version_num"/>
+        <result property="snapshotContent" column="snapshot_content"/>
+        <result property="snapshotMedia" column="snapshot_media"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentHistoryPO">
+        INSERT INTO content_history(history_id, post_id, version_num, snapshot_content, snapshot_media, create_time)
+        VALUES(#{historyId}, #{postId}, #{versionNum}, #{snapshotContent}, #{snapshotMedia}, NOW())
+    </insert>
+
+    <select id="selectByPostId" resultMap="ContentHistoryMap">
+        SELECT history_id, post_id, version_num, snapshot_content, snapshot_media, create_time
+        FROM content_history
+        WHERE post_id = #{postId}
+        ORDER BY version_num DESC
+        <if test="limit != null">
+            LIMIT #{limit}
+        </if>
+    </select>
+
+    <select id="selectOne" resultMap="ContentHistoryMap">
+        SELECT history_id, post_id, version_num, snapshot_content, snapshot_media, create_time
+        FROM content_history
+        WHERE post_id = #{postId} AND version_num = #{versionNum}
+    </select>
+
+</mapper>

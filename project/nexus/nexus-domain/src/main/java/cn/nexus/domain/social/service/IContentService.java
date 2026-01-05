@@ -22,4 +22,9 @@ public interface IContentService {
     ContentHistoryVO history(Long postId, Long userId, Integer limit);
 
     OperationResultVO rollback(Long postId, Long targetVersionId);
+
+    /**
+     * 定时发布扫描处理器，占位：扫描到期任务并发布。
+     */
+    OperationResultVO processSchedules(Long now, Integer limit);
 }

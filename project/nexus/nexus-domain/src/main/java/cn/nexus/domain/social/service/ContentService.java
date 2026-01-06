@@ -2,6 +2,7 @@ package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IContentDispatchPort;
 import cn.nexus.domain.social.adapter.port.IContentRiskPort;
+import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
 import cn.nexus.domain.social.adapter.port.IMediaTranscodePort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
@@ -12,7 +13,10 @@ import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.*;
 import com.github.difflib.DiffUtils;
 import com.github.difflib.UnifiedDiffUtils;
+import com.github.difflib.patch.Patch;
 import lombok.RequiredArgsConstructor;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,28 +29,31 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 内容领域服务实现。
  */
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class ContentService implements IContentService {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ContentService.class);
 
     private final ISocialIdPort socialIdPort;
     private final IContentRepository contentRepository;
     private final IContentRiskPort contentRiskPort;
+    private final IMediaStoragePort mediaStoragePort;
     private final IMediaTranscodePort mediaTranscodePort;
     private final IContentDispatchPort contentDispatchPort;
+    private final RedissonClient redissonClient;
 
     private static final int STATUS_DRAFT = 0;
     private static final int STATUS_PENDING_REVIEW = 1;
@@ -63,9 +70,13 @@ public class ContentService implements IContentService {
     private static final int BASE_INTERVAL = 20;
     private static final double PATCH_FULL_THRESHOLD = 0.5; // patch 大于 50% 时改存基准
     private static final int MAX_TEXT_LENGTH_FOR_PATCH = 10000; // 超大文本直接存基准
+    private static final long MAX_UPLOAD_SIZE_BYTES = 50L * 1024 * 1024; // 50MB 限制
+    private static final List<String> ALLOWED_UPLOAD_TYPES = Arrays.asList("image/jpeg", "image/png", "image/jpg", "video/mp4", "application/octet-stream");
     // 重建保护
     private static final int MAX_PATCH_HOPS = 200;
 
+    private static final String POST_LOCK_KEY_PREFIX = "lock:content:post:";
+    private static final String REBUILD_CACHE_LOCK_KEY = "lock:content:rebuild-cache";
     // 简易重建缓存：最近 500 个版本
     private static final int CACHE_SIZE = 500;
     private final Map<String, String> rebuildCache = new LinkedHashMap<>(CACHE_SIZE, 0.75f, true) {
@@ -74,8 +85,6 @@ public class ContentService implements IContentService {
             return size() > CACHE_SIZE;
         }
     };
-    // 按 post 维度的锁，降低并发版本冲突
-    private final ConcurrentHashMap<Long, Object> postLocks = new ConcurrentHashMap<>();
 
     // 重试退避策略
     private static final int MAX_RETRY = 5;
@@ -84,15 +93,25 @@ public class ContentService implements IContentService {
     private static final double BACKOFF_JITTER_RATE = 0.2;
     private final java.util.concurrent.atomic.AtomicInteger rebuildFailureCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
+    /**
+     * 上传会话：对基础参数做轻量校验后，委托媒体存储端口生成预签名上传凭证。
+     */
     @Override
     public UploadSessionVO createUploadSession(String fileType, Long fileSize, String crc32) {
-        return UploadSessionVO.builder()
-                .uploadUrl("https://mock-upload/" + socialIdPort.nextId())
-                .token("token-" + socialIdPort.nextId())
-                .sessionId("session-" + socialIdPort.nextId())
-                .build();
+        if (fileSize != null && fileSize > MAX_UPLOAD_SIZE_BYTES) {
+            throw new IllegalArgumentException("文件大小超出上限");
+        }
+        String normalizedType = fileType == null || fileType.isBlank() ? "application/octet-stream" : fileType.toLowerCase();
+        if (!ALLOWED_UPLOAD_TYPES.contains(normalizedType)) {
+            normalizedType = "application/octet-stream";
+        }
+        String sessionId = "session-" + socialIdPort.nextId();
+        return mediaStoragePort.generateUploadSession(sessionId, normalizedType, fileSize, crc32);
     }
 
+    /**
+     * 草稿保存：生成 draftId，构建 ContentDraftEntity 持久化，并回传 draftId。未做内容校验与设备/版本约束，保持幂等由上层控制。
+     */
     @Override
     public DraftVO saveDraft(Long userId, String contentText, List<String> mediaIds) {
         Long draftId = socialIdPort.nextId();
@@ -100,6 +119,7 @@ public class ContentService implements IContentService {
                 .draftId(draftId)
                 .userId(userId)
                 .draftContent(contentText)
+                .mediaIds(mediaIds == null ? null : String.join(",", mediaIds))
                 .deviceId("unknown")
                 .clientVersion("1")
                 .updateTime(socialIdPort.now())
@@ -108,16 +128,24 @@ public class ContentService implements IContentService {
         return DraftVO.builder().draftId(draftId).build();
     }
 
+    /**
+     * 内容发布主流程：
+     * 1) 获取锁并校验作者权限，确定新版本号、上一个版本全文及请求幂等键；
+     * 2) 风控扫描、媒体转码失败时落 REJECTED/PROCESSING 状态并记录基准快照；
+     * 3) 根据文本差异与基准策略选择存基准或差分，持久化 chunk/patch + 修订记录 + 历史快照；
+     * 4) upsert post 状态为已发布，更新缓存并通知分发；全过程要求在事务内，避免版本冲突。
+     */
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public PublishResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility) {
+    public OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility) {
         assertTx("publish");
         Long targetPostId = postId == null ? socialIdPort.nextId() : postId;
-        Object lock = lockFor(targetPostId);
-        synchronized (lock) {
+        RLock lock = lockFor(targetPostId);
+        lock.lock();
+        try {
             ContentPostEntity existedPost = contentRepository.findPostForUpdate(targetPostId);
             if (existedPost != null && userId != null && existedPost.getUserId() != null && !existedPost.getUserId().equals(userId)) {
-                return PublishResultVO.builder().postId(targetPostId).status("NO_PERMISSION").build();
+                return OperationResultVO.builder().success(false).id(targetPostId).status("NO_PERMISSION").message("无权限").build();
             }
             // 取最新版本，确定新版本号
             ContentRevisionEntity latest = contentRepository.findLatestRevisionForUpdate(targetPostId);
@@ -142,7 +170,7 @@ public class ContentService implements IContentService {
                         .snapshotMedia(mediaInfo)
                         .createTime(socialIdPort.now())
                         .build());
-                return PublishResultVO.builder().postId(targetPostId).status("REJECTED").build();
+                return OperationResultVO.builder().success(false).id(targetPostId).status("REJECTED").message("风控拦截").build();
             }
             boolean mediaReady = mediaTranscodePort.transcode(mediaInfo);
             if (!mediaReady) {
@@ -156,7 +184,7 @@ public class ContentService implements IContentService {
                         .snapshotMedia(mediaInfo)
                         .createTime(socialIdPort.now())
                         .build());
-                return PublishResultVO.builder().postId(targetPostId).status("PROCESSING").build();
+                return OperationResultVO.builder().success(false).id(targetPostId).status("PROCESSING").message("媒体处理中").build();
             }
 
             // 生成基准或 patch
@@ -189,10 +217,15 @@ public class ContentService implements IContentService {
                     .build());
             cachePut(targetPostId, newVersion, text);
             contentDispatchPort.onPublished(targetPostId, userId);
-            return PublishResultVO.builder().postId(targetPostId).status("PUBLISHED").build();
+            return OperationResultVO.builder().success(true).id(targetPostId).status("PUBLISHED").message("发布成功").build();
+        } finally {
+            lock.unlock();
         }
     }
 
+    /**
+     * 软删内容：按 userId 校验后设置删除状态，返回是否删除成功及状态文案。
+     */
     @Override
     public OperationResultVO delete(Long userId, Long postId) {
         boolean ok = contentRepository.softDelete(postId, userId);
@@ -204,6 +237,9 @@ public class ContentService implements IContentService {
                 .build();
     }
 
+    /**
+     * 定时发布创建：校验 userId，使用内容+时间生成幂等 token，若已有未执行任务直接返回；否则创建任务并处理并发主键冲突，返回任务状态。
+     */
     @Override
     public OperationResultVO schedule(Long userId, String contentData, Long publishTime, String timezone) {
         if (userId == null) {
@@ -256,13 +292,17 @@ public class ContentService implements IContentService {
                 .build();
     }
 
+    /**
+     * 客户端草稿同步：查找草稿并基于客户端版本号判定是否可覆盖，更新内容/设备/版本并回写；不存在则创建新草稿。
+     */
     @Override
-    public OperationResultVO syncDraft(Long draftId, String diffContent, String clientVersion, String deviceId) {
+    public OperationResultVO syncDraft(Long draftId, String diffContent, String clientVersion, String deviceId, List<String> mediaIds) {
         ContentDraftEntity entity = contentRepository.findDraft(draftId);
         if (entity == null) {
             entity = ContentDraftEntity.builder()
                     .draftId(draftId)
                     .draftContent(diffContent)
+                    .mediaIds(mediaIds == null ? null : String.join(",", mediaIds))
                     .deviceId(deviceId)
                     .clientVersion(clientVersion)
                     .updateTime(socialIdPort.now())
@@ -279,6 +319,9 @@ public class ContentService implements IContentService {
             entity.setDraftContent(diffContent);
             entity.setDeviceId(deviceId);
             entity.setClientVersion(clientVersion);
+            if (mediaIds != null) {
+                entity.setMediaIds(String.join(",", mediaIds));
+            }
             entity.setUpdateTime(socialIdPort.now());
         }
         contentRepository.saveDraft(entity);
@@ -290,12 +333,15 @@ public class ContentService implements IContentService {
                 .build();
     }
 
+    /**
+     * 内容历史查询：校验访问权限，分页拉取修订记录，必要时从旧历史迁移；逐版本重建正文生成 VO，输出下一游标及异常状态。
+     */
     @Override
     public ContentHistoryVO history(Long postId, Long userId, Integer limit, Integer offset) {
         ContentPostEntity post = contentRepository.findPost(postId);
         if (post != null && userId != null && post.getUserId() != null && !post.getUserId().equals(userId)) {
-            log.warn("history access denied postId={}, requestUser={}, owner={}", postId, userId, post.getUserId());
-            return ContentHistoryVO.builder().versions(java.util.List.of()).nextCursor(null).status("NO_PERMISSION").build();
+            log.warn("history access denied postId=" + postId + ", requestUser=" + userId + ", owner=" + post.getUserId());
+            return ContentHistoryVO.builder().versions(Collections.emptyList()).nextCursor(null).status("NO_PERMISSION").build();
         }
         long start = System.currentTimeMillis();
         int pageSize = limit == null ? 20 : Math.min(limit, 100);
@@ -319,12 +365,12 @@ public class ContentService implements IContentService {
                         .build());
             }
         } catch (IllegalStateException e) {
-            log.error("history rebuild failed postId={}, offset={}, err={}", postId, cursor, e.getMessage(), e);
-            return ContentHistoryVO.builder().versions(java.util.List.of()).nextCursor(null).status("REBUILD_FAILED").build();
+            log.error("history rebuild failed postId=" + postId + ", offset=" + cursor + ", err=" + e.getMessage(), e);
+            return ContentHistoryVO.builder().versions(Collections.emptyList()).nextCursor(null).status("REBUILD_FAILED").build();
         }
         long cost = System.currentTimeMillis() - start;
         if (cost > 1500L) {
-            log.warn("history rebuild slow postId={}, cost={}ms, limit={}", postId, cost, pageSize);
+            log.warn("history rebuild slow postId=" + postId + ", cost=" + cost + "ms, limit=" + pageSize);
         }
         Integer nextCursor = hasMore ? cursor + pageSize : null;
         return ContentHistoryVO.builder().versions(versions).nextCursor(nextCursor).build();
@@ -332,10 +378,14 @@ public class ContentService implements IContentService {
 
     @Transactional(rollbackFor = Exception.class)
     @Override
+    /**
+     * 内容回滚：在事务与行锁下校验权限，定位目标版本并重建正文，按基准策略生成新版本（可能存基准或差分），更新帖子状态与历史并写入缓存。
+     */
     public OperationResultVO rollback(Long postId, Long userId, Long targetVersionId) {
         assertTx("rollback");
-        Object lock = lockFor(postId);
-        synchronized (lock) {
+        RLock lock = lockFor(postId);
+        lock.lock();
+        try {
             ContentPostEntity post = contentRepository.findPostForUpdate(postId);
             if (post != null && post.getUserId() != null && userId != null && !post.getUserId().equals(userId)) {
                 return OperationResultVO.builder()
@@ -403,9 +453,14 @@ public class ContentService implements IContentService {
                     .status(ok ? "ROLLED_BACK" : "ROLLBACK_FAIL")
                     .message(ok ? "已回滚" : "回滚失败")
                     .build();
+        } finally {
+            lock.unlock();
         }
     }
 
+    /**
+     * 批量执行到期定时任务：按时间查询待处理任务，跳过已取消，逐条调用 publish 并按结果更新状态与重试计数，超过重试上限则标记失败报警。
+     */
     @Override
     public OperationResultVO processSchedules(Long now, Integer limit) {
         long ts = now == null ? socialIdPort.now() : now;
@@ -436,7 +491,7 @@ public class ContentService implements IContentService {
                         nextTime,
                         SCHEDULE_STATUS_SCHEDULED);
                 if (exceed) {
-                    log.error("schedule task reach max retry, taskId={}, retry={}, err={}", task.getTaskId(), nextRetry, err);
+                    log.error("schedule task reach max retry, taskId=" + task.getTaskId() + ", retry=" + nextRetry + ", err=" + err);
                 }
             }
         }
@@ -447,6 +502,9 @@ public class ContentService implements IContentService {
                 .build();
     }
 
+    /**
+     * 单个定时任务执行：校验状态/取消标记，调用 publish 产出，按结果更新重试/延迟或置成功/终止。
+     */
     @Override
     public OperationResultVO executeSchedule(Long taskId) {
         ContentScheduleEntity task = contentRepository.findSchedule(taskId);
@@ -471,12 +529,15 @@ public class ContentService implements IContentService {
             Integer alarm = exceed ? 1 : 0;
             contentRepository.updateScheduleStatus(taskId, exceed ? SCHEDULE_STATUS_CANCELED : SCHEDULE_STATUS_SCHEDULED, nextRetry, res.getMessage(), alarm, nextTime, SCHEDULE_STATUS_SCHEDULED);
             if (exceed) {
-                log.error("execute schedule reach max retry, taskId={}, retry={}, err={}", taskId, nextRetry, res.getMessage());
+                log.error("execute schedule reach max retry, taskId=" + taskId + ", retry=" + nextRetry + ", err=" + res.getMessage());
             }
         }
         return res;
     }
 
+    /**
+     * 取消定时任务：校验归属与存在性，设置取消原因并返回操作结果。
+     */
     @Override
     public OperationResultVO cancelSchedule(Long taskId, Long userId, String reason) {
         ContentScheduleEntity task = contentRepository.findSchedule(taskId);
@@ -495,6 +556,9 @@ public class ContentService implements IContentService {
                 .build();
     }
 
+    /**
+     * 更新定时任务：校验归属/状态/取消标志，重算幂等 token 后更新时间与内容，返回更新是否成功。
+     */
     @Override
     public OperationResultVO updateSchedule(Long taskId, Long userId, Long publishTime, String contentData, String reason) {
         ContentScheduleEntity task = contentRepository.findSchedule(taskId);
@@ -520,6 +584,9 @@ public class ContentService implements IContentService {
                 .build();
     }
 
+    /**
+     * 审计接口：返回指定任务详情，若非任务拥有者则返回空，供外部审批查看。
+     */
     @Override
     public ContentScheduleEntity getScheduleAudit(Long taskId, Long userId) {
         ContentScheduleEntity task = contentRepository.findSchedule(taskId);
@@ -532,6 +599,9 @@ public class ContentService implements IContentService {
         return task;
     }
 
+    /**
+     * 存储重平衡：若当前补丁链过长，基于最新内容生成一个新的基准修订，减少后续重建开销，并返回新版本号。
+     */
     @Override
     public OperationResultVO rebalanceStorage(Long postId) {
         ContentRevisionEntity latest = contentRepository.findLatestRevision(postId);
@@ -553,7 +623,7 @@ public class ContentService implements IContentService {
     }
 
     private int deriveMediaType(String mediaInfo) {
-        if (mediaInfo == null || mediaInfo.isBlank()) {
+        if (mediaInfo == null || mediaInfo.trim().isEmpty()) {
             return 0;
         }
         if (mediaInfo.contains("video")) {
@@ -569,11 +639,14 @@ public class ContentService implements IContentService {
         if (visibility == null) {
             return 0;
         }
-        return switch (visibility.toUpperCase()) {
-            case "FRIEND" -> 1;
-            case "PRIVATE" -> 2;
-            default -> 0;
-        };
+        switch (visibility.toUpperCase()) {
+            case "FRIEND":
+                return 1;
+            case "PRIVATE":
+                return 2;
+            default:
+                return 0;
+        }
     }
 
     private boolean isNewerClientVersion(String incoming, String current) {
@@ -657,14 +730,18 @@ public class ContentService implements IContentService {
             return "";
         }
         String cacheKey = cacheKey(postId, targetVersion);
-        synchronized (rebuildCache) {
+        RLock cacheLock = rebuildCacheLock();
+        cacheLock.lock();
+        try {
             if (rebuildCache.containsKey(cacheKey)) {
                 return rebuildCache.get(cacheKey);
             }
+        } finally {
+            cacheLock.unlock();
         }
         ContentRevisionEntity target = contentRepository.findRevision(postId, targetVersion);
         if (target == null) {
-            log.error("rebuild target missing revision postId={}, version={}", postId, targetVersion);
+            log.error("rebuild target missing revision postId=" + postId + ", version=" + targetVersion);
             recordRebuildFailure(postId, targetVersion, "revision_missing");
             throw new IllegalStateException("缺失目标版本，无法重建 postId=" + postId + ", version=" + targetVersion);
         }
@@ -682,7 +759,7 @@ public class ContentService implements IContentService {
         }
         chain.sort(Comparator.comparing(ContentRevisionEntity::getVersionNum));
         if (chain.size() > MAX_PATCH_HOPS) {
-            log.warn("rebuild chain too long, truncate, postId={}, targetVersion={}, hops={}", postId, targetVersion, chain.size());
+            log.warn("rebuild chain too long, truncate, postId=" + postId + ", targetVersion=" + targetVersion + ", hops=" + chain.size());
             int startIdx = Math.max(0, chain.size() - MAX_PATCH_HOPS);
             chain = new ArrayList<>(chain.subList(startIdx, chain.size()));
             ContentRevisionEntity baseInWindow = chain.stream().filter(r -> Boolean.TRUE.equals(r.getIsBase())).findFirst().orElse(null);
@@ -692,7 +769,7 @@ public class ContentService implements IContentService {
                 if (anchorBase != null) {
                     chain.add(0, anchorBase);
                 } else {
-                    log.error("rebuild chain missing base after truncate postId={}, version={}", postId, targetVersion);
+                    log.error("rebuild chain missing base after truncate postId=" + postId + ", version=" + targetVersion);
                     recordRebuildFailure(postId, targetVersion, "base_missing");
                     throw new IllegalStateException("缺失基准版本，无法重建 postId=" + postId + ", version=" + targetVersion);
                 }
@@ -705,7 +782,7 @@ public class ContentService implements IContentService {
         if (Boolean.TRUE.equals(base.getIsBase())) {
             byte[] chunk = contentRepository.findChunk(base.getChunkHash());
             if (chunk == null) {
-                log.error("缺失chunk数据，无法重建内容 postId={}, version={}, chunk={}", postId, targetVersion, base.getChunkHash());
+                log.error("缺失chunk数据，无法重建内容 postId=" + postId + ", version=" + targetVersion + ", chunk=" + base.getChunkHash());
                 recordRebuildFailure(postId, targetVersion, "chunk_missing");
                 throw new IllegalStateException("缺失基准数据，无法重建 postId=" + postId + ", version=" + targetVersion);
             }
@@ -717,7 +794,7 @@ public class ContentService implements IContentService {
             if (Boolean.TRUE.equals(rev.getIsBase())) {
                 byte[] chunk = contentRepository.findChunk(rev.getChunkHash());
                 if (chunk == null) {
-                    log.error("缺失chunk数据，无法重建内容 postId={}, version={}, chunk={}", postId, rev.getVersionNum(), rev.getChunkHash());
+                    log.error("缺失chunk数据，无法重建内容 postId=" + postId + ", version=" + rev.getVersionNum() + ", chunk=" + rev.getChunkHash());
                     recordRebuildFailure(postId, rev.getVersionNum(), "chunk_missing");
                     return "";
                 }
@@ -725,7 +802,7 @@ public class ContentService implements IContentService {
             } else {
                 byte[] patchBytes = contentRepository.findPatch(rev.getPatchHash());
                 if (patchBytes == null) {
-                    log.error("缺失patch数据，无法重建内容 postId={}, version={}, patch={}", postId, rev.getVersionNum(), rev.getPatchHash());
+                    log.error("缺失patch数据，无法重建内容 postId=" + postId + ", version=" + rev.getVersionNum() + ", patch=" + rev.getPatchHash());
                     recordRebuildFailure(postId, rev.getVersionNum(), "patch_missing");
                     throw new IllegalStateException("缺失补丁数据，无法重建 postId=" + postId + ", version=" + rev.getVersionNum());
                 }
@@ -737,23 +814,31 @@ public class ContentService implements IContentService {
         return content;
     }
 
+    private List<String> splitLines(String text) {
+        if (text == null || text.isEmpty()) {
+            return Collections.emptyList();
+        }
+        String[] parts = text.split("\\r?\\n", -1);
+        return Arrays.asList(parts);
+    }
+
     private String diff(String prev, String curr) {
-        List<String> prevLines = prev == null ? List.of() : prev.lines().toList();
-        List<String> currLines = curr == null ? List.of() : curr.lines().toList();
+        List<String> prevLines = splitLines(prev);
+        List<String> currLines = splitLines(curr);
         if (prevLines.size() + currLines.size() > 20000) {
             // 超大文本，直接存基准（返回空 diff）
             return "";
         }
-        var patch = DiffUtils.diff(prevLines, currLines);
+        Patch<String> patch = DiffUtils.diff(prevLines, currLines);
         List<String> unified = UnifiedDiffUtils.generateUnifiedDiff("prev", "curr", prevLines, patch, 3);
         return String.join("\n", unified);
     }
 
     private String applyDiff(String baseText, String diffText) {
-        List<String> baseLines = baseText == null ? List.of() : baseText.lines().toList();
-        List<String> diffLines = diffText == null ? List.of() : diffText.lines().toList();
+        List<String> baseLines = splitLines(baseText);
+        List<String> diffLines = splitLines(diffText);
         try {
-            var patch = UnifiedDiffUtils.parseUnifiedDiff(diffLines);
+            Patch<String> patch = UnifiedDiffUtils.parseUnifiedDiff(diffLines);
             List<String> result = DiffUtils.patch(baseLines, patch);
             return String.join("\n", result);
         } catch (Exception e) {
@@ -787,7 +872,7 @@ public class ContentService implements IContentService {
             while ((n = gis.read(buf)) > 0) {
                 baos.write(buf, 0, n);
             }
-            return baos.toString(StandardCharsets.UTF_8);
+            return new String(baos.toByteArray(), StandardCharsets.UTF_8);
         } catch (Exception e) {
             return "";
         }
@@ -801,6 +886,16 @@ public class ContentService implements IContentService {
         } catch (Exception e) {
             return String.valueOf(data.length);
         }
+    }
+
+    /**
+     * 便捷的字符串哈希，统一使用 UTF-8，避免调用方误用 byte[] 签名导致报错。
+     */
+    private String hash(String text) {
+        if (text == null) {
+            text = "";
+        }
+        return hash(text.getBytes(StandardCharsets.UTF_8));
     }
 
     private String gzipAndHash(String text) {
@@ -843,19 +938,27 @@ public class ContentService implements IContentService {
     }
 
     private void cachePut(Long postId, Integer version, String content) {
-        synchronized (rebuildCache) {
+        RLock cacheLock = rebuildCacheLock();
+        cacheLock.lock();
+        try {
             rebuildCache.put(cacheKey(postId, version), content);
+        } finally {
+            cacheLock.unlock();
         }
     }
 
-    private Object lockFor(Long postId) {
+    private RLock lockFor(Long postId) {
         Long key = postId == null ? -1L : postId;
-        return postLocks.computeIfAbsent(key, k -> new Object());
+        return redissonClient.getLock(POST_LOCK_KEY_PREFIX + key);
+    }
+
+    private RLock rebuildCacheLock() {
+        return redissonClient.getLock(REBUILD_CACHE_LOCK_KEY);
     }
 
     private void recordRebuildFailure(Long postId, Integer version, String reason) {
         int count = rebuildFailureCount.incrementAndGet();
-        log.warn("rebuild failure postId={}, version={}, reason={}, totalFail={}", postId, version, reason, count);
+        log.warn("rebuild failure postId=" + postId + ", version=" + version + ", reason=" + reason + ", totalFail=" + count);
     }
 
     private void assertTx(String scene) {

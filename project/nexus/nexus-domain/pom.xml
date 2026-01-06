@@ -19,7 +19,7 @@
             <artifactId>nexus-types</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.github.difflib</groupId>
+            <groupId>io.github.java-diff-utils</groupId>
             <artifactId>java-diff-utils</artifactId>
             <version>4.12</version>
         </dependency>
@@ -30,6 +30,10 @@
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-tx</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>

@@ -50,11 +50,11 @@ public class ContentController implements IContentApi {
     @PostMapping("/content/publish")
     @Override
     public Response<PublishContentResponseDTO> publish(@RequestBody PublishContentRequestDTO requestDTO) {
-        PublishResultVO vo = contentService.publish(
+        OperationResultVO vo = contentService.publish(
                 requestDTO.getPostId(), requestDTO.getUserId(), requestDTO.getText(), requestDTO.getMediaInfo(),
                 requestDTO.getLocation(), requestDTO.getVisibility());
         PublishContentResponseDTO dto = PublishContentResponseDTO.builder()
-                .postId(vo.getPostId())
+                .postId(vo.getId())
                 .status(vo.getStatus())
                 .build();
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
@@ -96,7 +96,7 @@ public class ContentController implements IContentApi {
     @PatchMapping("/content/draft/{draftId}")
     @Override
     public Response<DraftSyncResponseDTO> syncDraft(@PathVariable("draftId") Long draftId, @RequestBody DraftSyncRequestDTO requestDTO) {
-        OperationResultVO vo = contentService.syncDraft(draftId, requestDTO.getDiffContent(), requestDTO.getClientVersion(), requestDTO.getDeviceId());
+        OperationResultVO vo = contentService.syncDraft(draftId, requestDTO.getDiffContent(), requestDTO.getClientVersion(), requestDTO.getDeviceId(), requestDTO.getMediaIds());
         DraftSyncResponseDTO dto = DraftSyncResponseDTO.builder()
                 .serverVersion(vo.getMessage())
                 .syncTime(vo.getId() == null ? null : vo.getId())

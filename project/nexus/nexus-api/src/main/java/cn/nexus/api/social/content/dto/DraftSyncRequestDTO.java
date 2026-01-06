@@ -17,4 +17,5 @@ public class DraftSyncRequestDTO {
     private String diffContent;
     private String clientVersion;
     private String deviceId;
+    private java.util.List<String> mediaIds;
 }

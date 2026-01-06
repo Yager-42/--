@@ -31,6 +31,7 @@ CREATE TABLE `content_draft` (
   `draft_id` BIGINT NOT NULL,
   `user_id` BIGINT NOT NULL,
   `draft_content` LONGTEXT,
+  `media_ids` TEXT COMMENT '草稿媒体标识列表（逗号或JSON）',
   `device_id` VARCHAR(64) COMMENT '最后编辑设备',
   `client_version` BIGINT COMMENT '客户端版本号',
   `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

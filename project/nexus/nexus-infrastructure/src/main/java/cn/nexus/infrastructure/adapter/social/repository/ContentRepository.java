@@ -249,6 +249,7 @@ public class ContentRepository implements IContentRepository {
         po.setDraftId(entity.getDraftId());
         po.setUserId(entity.getUserId());
         po.setDraftContent(entity.getDraftContent());
+        po.setMediaIds(entity.getMediaIds());
         po.setDeviceId(entity.getDeviceId());
         po.setClientVersion(entity.getClientVersion());
         po.setUpdateTime(entity.getUpdateTime() == null ? null : new Date(entity.getUpdateTime()));
@@ -263,6 +264,7 @@ public class ContentRepository implements IContentRepository {
                 .draftId(po.getDraftId())
                 .userId(po.getUserId())
                 .draftContent(po.getDraftContent())
+                .mediaIds(po.getMediaIds())
                 .deviceId(po.getDeviceId())
                 .clientVersion(po.getClientVersion())
                 .updateTime(po.getUpdateTime() == null ? null : po.getUpdateTime().getTime())

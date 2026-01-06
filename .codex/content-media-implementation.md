@@ -8,10 +8,11 @@
 - 存储治理：新增重平衡入口 `ContentService.rebalanceStorage(postId)`（链路过长时生成新的基准版本，降低补丁链长度），重建链路超限时自动截断保护。
 - 分布式互斥：`publish/rollback`/定时消费读取 post 与最新 revision 使用 `FOR UPDATE`，结合 `(post_id,version_num)`/`(post_id,request_id)` 唯一键阻断并发漂移。
 - 事务契约：`ContentRepository` 类级 REQUIRED 事务，读方法标注 readOnly；`ContentService.publish/rollback` 进入时校验必须处于事务内，防止非事务环境的半写。
+- 媒体上传：`createUploadSession` 接入 MinIO 预签名 PUT URL（50MB 上限，fileType 白名单自动回退 `application/octet-stream`），配置项 `minio.media.*` 控制 endpoint/凭证/bucket/basePath/expirySeconds。
 
 ## 1. 接口与领域映射（保持现有契约）
 - 分层约束（对齐 `.codex/DDD-ARCHITECTURE-SPECIFICATION.md`）：`api` 仅定义 DTO/Response 契约，`trigger` 只负责组装入参→调用 `domain` 服务；`domain` 仅依赖 `types` 并暴露 `ContentService` 领域服务；`infrastructure` 实现仓储/端口（chunk/patch 存储、MQ、定时任务/对象存储），不可上行穿透。
-- 获取上传凭证：POST `/api/v1/media/upload/session` → `ContentService.createUploadSession` → 占位返回 URL/token/sessionId。
+- 获取上传凭证：POST `/api/v1/media/upload/session` → `ContentService.createUploadSession` → 调用存储端口生成 MinIO 预签名上传 URL/token/sessionId。
 - 保存草稿：PUT `/api/v1/content/draft` → `ContentService.saveDraft/syncDraft` → `content_draft` upsert（clientVersion 防旧覆盖）。
 - 发布内容：POST `/api/v1/content/publish` → `ContentService.publish` → 生成版本（基准或补丁），写 `content_revision` + `content_chunk/patch`，更新 `content_post` 状态=Published，触发分发端口。
 - 删除内容：DELETE `/api/v1/content/{postId}` → 校验 userId 软删 `content_post`。
@@ -38,9 +39,10 @@
 ```mermaid
 graph TD
     U[请求上传凭证] --> U1[ContentService.createUploadSession]
-    U1 --> U2[生成 sessionId/token/uploadUrl(占位)]
+    U1 --> U2[生成 sessionId + MinIO 预签名 uploadUrl/token]
     U2 --> U3[返回凭证]
 ```
+- 使用方式：1) 客户端调用接口获取 `uploadUrl/token/sessionId`；2) 直接对 `uploadUrl` 发起 `PUT` 二进制（`Content-Type=fileType`），token 即 URL；3) 成功后将生成的对象键/sessionId 写入 `mediaInfo` 随发布/草稿保存。
 
 **保存草稿 `/content/draft`**
 ```mermaid
@@ -183,4 +185,19 @@ graph TD
 - 存储治理：定义基准重平衡/冷数据清理任务（按版本跨度/时间），结合监控阈值自动触发，补丁/基准孤儿清理。
 - 观测性/测试：补充链路级指标（成功率/耗时/重试次数/缓存命中），落地发布/回滚/定时的自动化冒烟与回归用例。
 - 定时发布：接入统一监控/告警平台，完善自动补偿流转到运维工单。 
+
+## 9. MinIO 上传配置与调用
+- 配置示例（application.yml）：
+```
+minio:
+  media:
+    endpoint: http://127.0.0.1:9000
+    accessKey: yourAccessKey
+    secretKey: yourSecretKey
+    bucket: social-media
+    basePath: content
+    expirySeconds: 900
+```
+- 接口：POST `/api/v1/media/upload/session`，body `{fileType,fileSize,crc32}`，返回 `uploadUrl/token/sessionId`；`fileSize` 超过 50MB 拒绝；非白名单 `fileType` 自动降级为 `application/octet-stream`。
+- 上传方式：前端直接对 `uploadUrl` 发起 `PUT` 二进制（可附带 `Content-Type=fileType`），无需额外鉴权；上传完成后将媒体摘要写入 `mediaInfo` 字段参与发布。
 .codex\DDD-ARCHITECTURE-SPECIFICATION.md

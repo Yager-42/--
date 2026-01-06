@@ -12,6 +12,8 @@ public class ContentDraftPO {
     private Long draftId;
     private Long userId;
     private String draftContent;
+    /** 草稿关联的媒体标识列表（逗号/JSON） */
+    private String mediaIds;
     private String deviceId;
     private String clientVersion;
     private Date updateTime;

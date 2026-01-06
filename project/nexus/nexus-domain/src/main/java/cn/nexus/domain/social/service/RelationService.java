@@ -45,6 +45,9 @@ public class RelationService implements IRelationService {
     private static final String ACTION_MOVE = "MOVE";
     private static final String ACTION_MERGE = "MERGE";
 
+    /**
+     * 关注流程：先校验参数与屏蔽、关注上限，再判断已有关注/好友边；根据策略决定是否进入待审批或直接生效，写关系表、粉丝表、缓存并触发关注事件。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public FollowResultVO follow(Long sourceId, Long targetId) {
@@ -86,6 +89,9 @@ public class RelationService implements IRelationService {
         return FollowResultVO.builder().status(toStatus(saved.getStatus())).build();
     }
 
+    /**
+     * 好友申请：校验参数与屏蔽，检查已是好友或存在待处理记录；使用幂等键防重复写，保存待审批申请并返回请求号和当前状态。
+     */
     @Override
     public FriendRequestResultVO friendRequest(Long sourceId, Long targetId, String verifyMsg, String sourceChannel) {
         // 参数/屏蔽/好友/重复申请校验
@@ -146,6 +152,9 @@ public class RelationService implements IRelationService {
                 .build();
     }
 
+    /**
+     * 好友审批：去重请求号后批量加载申请，全部为待处理才允许，依据 action 决定通过或拒绝；通过时写双向好友关系、粉丝表、缓存并触发事件，保持事务一致。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public FriendDecisionResultVO friendDecision(List<Long> requestIds, String action) {
@@ -195,6 +204,9 @@ public class RelationService implements IRelationService {
         return FriendDecisionResultVO.builder().success(true).build();
     }
 
+    /**
+     * 屏蔽：创建屏蔽边，同时删除双方关注/好友及待处理申请、粉丝记录，清理缓存并触发屏蔽事件，返回操作结果。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO block(Long sourceId, Long targetId) {
@@ -234,6 +246,9 @@ public class RelationService implements IRelationService {
                 .build();
     }
 
+    /**
+     * 关系分组管理：基于 action 执行创建/更新/删除/移动/合并/成员增删/查询。先做成员数量与幂等结果检查，再加分布式锁防并发；操作完成缓存幂等结果并释放锁。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public RelationGroupVO manageGroup(Long userId,

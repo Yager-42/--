@@ -12,13 +12,13 @@ public interface IContentService {
 
     DraftVO saveDraft(Long userId, String contentText, java.util.List<String> mediaIds);
 
-    PublishResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility);
+    OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility);
 
     OperationResultVO delete(Long userId, Long postId);
 
     OperationResultVO schedule(Long userId, String contentData, Long publishTime, String timezone);
 
-    OperationResultVO syncDraft(Long draftId, String diffContent, String clientVersion, String deviceId);
+    OperationResultVO syncDraft(Long draftId, String diffContent, String clientVersion, String deviceId, java.util.List<String> mediaIds);
 
     ContentHistoryVO history(Long postId, Long userId, Integer limit, Integer offset);
 

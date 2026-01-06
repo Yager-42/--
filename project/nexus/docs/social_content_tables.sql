@@ -50,6 +50,7 @@ CREATE TABLE `content_schedule` (
   `last_error` TEXT,
   `alarm_sent` TINYINT DEFAULT 0,
   PRIMARY KEY (`task_id`),
+  UNIQUE KEY `uk_idempotent_token` (`idempotent_token`),
   INDEX `idx_time_status` (`schedule_time`, `status`)
 ) ENGINE=InnoDB COMMENT='定时发布任务表';
 
@@ -79,8 +80,10 @@ CREATE TABLE `content_revision` (
   `is_base` TINYINT DEFAULT 0 COMMENT '1=基准全文，0=补丁',
   `patch_hash` VARCHAR(128) DEFAULT NULL,
   `chunk_hash` VARCHAR(128) DEFAULT NULL,
+  `request_id` VARCHAR(128) DEFAULT NULL COMMENT '幂等键',
   `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`post_id`, `version_num`),
+  UNIQUE KEY `uk_post_request` (`post_id`, `request_id`),
   KEY `idx_post_ver` (`post_id`, `version_num`)
 ) ENGINE=InnoDB COMMENT='文本版本记录（指向基准或补丁）';
 

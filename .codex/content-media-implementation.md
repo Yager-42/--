@@ -6,6 +6,8 @@
 - 历史迁移/查询稳态：按需/批次迁移 legacy `content_history`，默认全量哈希校验；历史重建接口增加分页/限流与耗时告警，定义重建 SLO（P95<500ms，P99<1500ms，错误率<0.1% 报警）；新增历史分页游标 offset/nextCursor，重建链长超过阈值自动截断并强制包含基准。
 - 定时发布稳态：幂等 token 入库校验，取消/变更入库可审计并强制 userId ACL；消费侧分布式锁/单活校验 + 指数退避+抖动重试（超限告警标记 alarmSent）；DLQ 消费增加值班路由日志；新增审计回查接口 GET `/api/v1/content/schedule/{taskId}?userId=`。
 - 存储治理：新增重平衡入口 `ContentService.rebalanceStorage(postId)`（链路过长时生成新的基准版本，降低补丁链长度），重建链路超限时自动截断保护。
+- 分布式互斥：`publish/rollback`/定时消费读取 post 与最新 revision 使用 `FOR UPDATE`，结合 `(post_id,version_num)`/`(post_id,request_id)` 唯一键阻断并发漂移。
+- 事务契约：`ContentRepository` 类级 REQUIRED 事务，读方法标注 readOnly；`ContentService.publish/rollback` 进入时校验必须处于事务内，防止非事务环境的半写。
 
 ## 1. 接口与领域映射（保持现有契约）
 - 分层约束（对齐 `.codex/DDD-ARCHITECTURE-SPECIFICATION.md`）：`api` 仅定义 DTO/Response 契约，`trigger` 只负责组装入参→调用 `domain` 服务；`domain` 仅依赖 `types` 并暴露 `ContentService` 领域服务；`infrastructure` 实现仓储/端口（chunk/patch 存储、MQ、定时任务/对象存储），不可上行穿透。
@@ -182,33 +184,3 @@ graph TD
 - 观测性/测试：补充链路级指标（成功率/耗时/重试次数/缓存命中），落地发布/回滚/定时的自动化冒烟与回归用例。
 - 定时发布：接入统一监控/告警平台，完善自动补偿流转到运维工单。 
 .codex\DDD-ARCHITECTURE-SPECIFICATION.md
-
-## 9. 代码审查（2025-XX-XX，依据 `.codex/DDD-ARCHITECTURE-SPECIFICATION.md`）
-- 🟥 版本链路不可用：`ContentService.publish` 总是使用 `socialIdPort.nextId()` 生成全新 `postId` 再去查最新版本（project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java:105），导致永远找不到历史版本、无法追加新版本，也就无法支撑 `history`/`rollback` 的多版本业务。应改为接收已有 `postId`（或创建后复用），保证版本链按同一聚合累加。
-- 🟥 版本写入缺少并发防护：`ContentRepository.saveRevision` 直接 insert（project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ContentRepository.java:90），`ContentService.saveRevision` 也未做 `version_num` 乐观锁或 `request_id` 幂等校验，`updatePostStatusAndContent` 仅按版本号-1 预期更新但不检查并发写。并发发布/回滚会产生重复版本或部分更新，违反文档第3节“仓储实现负责事务边界+幂等”。需在仓储层加唯一约束与乐观锁，领域层传递 requestId 幂等键并处理冲突。
-- 🟧 事务一致性缺失：发布/回滚链路涉及 revision、chunk/patch、post、history 多表写入，但领域层未使用事务（ContentService 无 @Transactional），仓储层只有 `savePost` 标注事务，其余方法裸写。任一写失败会造成链路残缺（例如写了 revision 未写 post），违背 DDD “聚合内操作为一个一致性单元”。应在应用服务或仓储实现对跨表写入加事务。
-- 🟧 鉴权缺口：删除/回滚/历史查询未在领域层校验 `userId` 所有权，仅依赖上层透传（如 delete 直接软删，rollback/history 不校验用户），与文档“接口契约/ACL 由 domain 保证”不符。需在领域层显式校验请求用户与 post 所属一致，否则返回 NO_PERMISSION。
-- 🟨 可观测性与重建健壮性：`rebuildContent` 缺失链路上报和缺块/补丁失败处理，出现空 chunk/patch 时直接返回空串（ContentService.java:272），易导致静默返回空内容。应记录告警并短路失败，符合文档对“重建耗时/失败率”监控要求。
-
-### 9.1 二次CR（2025-XX-XX）
-- 🟥 编译错误：`rollback` 方法内重复声明 `ContentPostEntity post`（project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java:289, 295），Java 不允许同作用域重定义变量，当前代码不可编译，需移除第二次声明并复用已查询的 `post`。
-- 🟧 并发/幂等仍不足：`saveRevision` 只在内存中 `findRevision` 判断，缺少数据库唯一约束与事务内加锁，两个并发发布仍可能同时插入同一 `(post_id,version_num)`。应在存储层加唯一键并捕获冲突或使用版本号乐观锁更新。
-- 🟨 ACL 体验：`history` 权限不符时返回空列表而非显式 `NO_PERMISSION`，调用方难以区分“无权限”与“无数据”，与“Never break userspace”不冲突但可读性差，建议返回明确状态码。
-- 🟨 重建降级：缺块/补丁时只打印错误并返回空/原文，无上报或熔断，仍有静默风险（ContentService.rebuildContent）。需按 SLO 记录监控并对上层返回错误状态。
-
-### 9.2 三次CR（2025-XX-XX）
-- 🟧 数据并发保护仍不充分：`publish/rollback` 仅使用 JVM 级 `ConcurrentHashMap` 对 `postId` 加锁（同文件：69-85），在多实例或分布式部署下无效，仍可能出现并发写同一版本。仓储层 `saveRevision` 捕获 `DuplicateKeyException` 但基础设施未见数据库唯一约束校验（ContentRepository 仍直接 insert）。需在 DB 层添加 `(post_id,version_num)` 唯一键并在仓储层处理冲突，或者使用版本号乐观锁更新。 
-- 🟨 ACL 体验：`history` 无权限时仍返回空列表（265-270）仅打印 warn，调用方无法分辨无权限 vs 无数据，建议返回显式状态或错误码，避免业务误判。
-- 🟨 可观测性占位但未落监控：`recordRebuildFailure` 仅日志 warn，未计数/未上报；缺块/补丁时仍返回空或部分内容（651-667），上层无法感知重建失败。需补监控指标或错误码，满足文档 SLO 约束。
-- 🟨 业务契约：发布/回滚锁粒度为单实例内存锁；多实例下“Never break userspace”风险未消除，定时任务并发消费仍可能双写版本。需结合分布式锁或 DB 约束完善。
-
-#### 数据并发保护不足的具体位置
-- 内存锁局限：`publish` 与 `rollback` 仅依赖 `postLocks`（project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java:70-85），无法跨实例互斥，同一内容在多实例同时写仍会竞争。
-- 缺少 DB 唯一/乐观锁：`ContentRepository.saveRevision` 直接 insert（project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ContentRepository.java:193-203），`saveRevision` 只是内存查找+捕获 DuplicateKey，但数据库层未声明 `(post_id,version_num)` 唯一键，也没有版本号条件更新。
-- 定时/发布并发：`processSchedules/executeSchedule` 调用 `publish(null, ...)`（ContentService.java:333, 404）未加分布式锁，延时消息在多消费者/多实例下仍可能重复落版本。
-- 新建/保存帖子无唯一约束：`upsertPost` 先查再 insert（ContentService.java:707-728）依赖应用逻辑，`content_post` 未声明唯一校验 userId+postId 并无幂等键，多实例并发创建相同 postId 可能重复。
-- 定时任务幂等依赖应用级 token：`schedule` 使用哈希 token 查重（ContentService.java:176-214），`content_schedule` 未声明 token 唯一索引，多个实例同时提交仍可能重复写任务。
-- 历史/回滚版本获取无分布式保护：`findLatestRevision`/`findRevision` + 本地锁组合，缺少数据库层乐观锁/唯一约束，多个实例同时回滚/发布可能产生空洞或重复版本。
-- 草稿写入无版本保护：`saveDraft/syncDraft` 仅做客户端版本比较（ContentService.java:117-174），`content_draft` 未有版本号或乐观锁，多个设备并发同步仍可能互踩。
-- 定时状态更新缺 CAS：`updateScheduleStatus/updateSchedule/cancelSchedule`（ContentRepository.java:142-161, 155-158）直接按 taskId 更新，无当前状态判断；多实例/多消费者可能互相覆盖状态或重试计数。
-- 迁移任务无并发防护：`migrateLegacyHistory`（ContentService.java:580-607）可被多线程/多实例同时触发，可能重复写 revision/历史。

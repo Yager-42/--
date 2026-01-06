@@ -33,6 +33,7 @@ import java.util.stream.Collectors;
  */
 @Repository
 @RequiredArgsConstructor
+@Transactional(rollbackFor = Exception.class, propagation = org.springframework.transaction.annotation.Propagation.REQUIRED)
 public class ContentRepository implements IContentRepository {
 
     private final IContentDraftDao contentDraftDao;
@@ -50,6 +51,7 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public ContentDraftEntity findDraft(Long draftId) {
         ContentDraftPO po = contentDraftDao.selectById(draftId);
         return toDraftEntity(po);
@@ -63,8 +65,15 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public ContentPostEntity findPost(Long postId) {
         return toPostEntity(contentPostDao.selectById(postId));
+    }
+
+    @Override
+    @Transactional(readOnly = false)
+    public ContentPostEntity findPostForUpdate(Long postId) {
+        return toPostEntity(contentPostDao.selectByIdForUpdate(postId));
     }
 
     @Override
@@ -90,6 +99,7 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<ContentHistoryEntity> listHistory(Long postId, Integer limit) {
         return contentHistoryDao.selectByPostId(postId, limit).stream()
                 .map(this::toHistoryEntity)
@@ -97,6 +107,7 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public ContentHistoryEntity findHistoryVersion(Long postId, Integer versionNum) {
         return toHistoryEntity(contentHistoryDao.selectOne(postId, versionNum));
     }
@@ -116,9 +127,9 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
-    public boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount, String lastError, Integer alarmSent, Long nextScheduleTime) {
+    public boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount, String lastError, Integer alarmSent, Long nextScheduleTime, Integer expectedStatus) {
         return contentScheduleDao.updateStatus(taskId, status, retryCount, lastError, alarmSent,
-                nextScheduleTime == null ? null : new Date(nextScheduleTime)) > 0;
+                nextScheduleTime == null ? null : new Date(nextScheduleTime), expectedStatus) > 0;
     }
 
     @Override
@@ -131,6 +142,7 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public ContentScheduleEntity findSchedule(Long taskId) {
         return toScheduleEntity(contentScheduleDao.selectById(taskId));
     }
@@ -148,6 +160,7 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public ContentScheduleEntity findScheduleByToken(String token) {
         return toScheduleEntity(contentScheduleDao.selectByToken(token));
     }
@@ -168,6 +181,7 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public byte[] findChunk(String chunkHash) {
         ContentChunkPO po = contentChunkDao.selectByHash(chunkHash);
         return po == null ? null : po.getChunkData();
@@ -184,6 +198,7 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public byte[] findPatch(String patchHash) {
         ContentPatchPO po = contentPatchDao.selectByHash(patchHash);
         return po == null ? null : po.getPatchData();
@@ -203,13 +218,21 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public cn.nexus.domain.social.model.entity.ContentRevisionEntity findRevision(Long postId, Integer versionNum) {
         return toRevisionEntity(contentRevisionDao.selectOne(postId, versionNum));
     }
 
     @Override
+    @Transactional(readOnly = true)
     public cn.nexus.domain.social.model.entity.ContentRevisionEntity findLatestRevision(Long postId) {
         return toRevisionEntity(contentRevisionDao.selectLatest(postId));
+    }
+
+    @Override
+    @Transactional(readOnly = false)
+    public cn.nexus.domain.social.model.entity.ContentRevisionEntity findLatestRevisionForUpdate(Long postId) {
+        return toRevisionEntity(contentRevisionDao.selectLatestForUpdate(postId));
     }
 
     @Override

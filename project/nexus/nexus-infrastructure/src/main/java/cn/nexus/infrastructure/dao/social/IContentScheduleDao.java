@@ -14,7 +14,8 @@ public interface IContentScheduleDao {
                      @Param("retryCount") Integer retryCount,
                      @Param("lastError") String lastError,
                      @Param("alarmSent") Integer alarmSent,
-                     @Param("nextTime") java.util.Date nextTime);
+                     @Param("nextTime") java.util.Date nextTime,
+                     @Param("expectedStatus") Integer expectedStatus);
 
     java.util.List<ContentSchedulePO> selectPending(@Param("before") java.util.Date before, @Param("limit") Integer limit);
 

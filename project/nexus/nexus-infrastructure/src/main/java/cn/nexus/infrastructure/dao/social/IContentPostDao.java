@@ -15,6 +15,8 @@ public interface IContentPostDao {
 
     int updateStatusWithUser(@Param("postId") Long postId, @Param("userId") Long userId, @Param("status") Integer status);
 
+    ContentPostPO selectByIdForUpdate(@Param("postId") Long postId);
+
     int updateContentAndVersion(@Param("postId") Long postId,
                                 @Param("contentText") String contentText,
                                 @Param("mediaInfo") String mediaInfo,

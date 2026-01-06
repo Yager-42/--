@@ -17,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -81,6 +82,7 @@ public class ContentService implements IContentService {
     private static final long BACKOFF_BASE_MS = 5_000L;
     private static final long BACKOFF_MAX_MS = 5 * 60_000L;
     private static final double BACKOFF_JITTER_RATE = 0.2;
+    private final java.util.concurrent.atomic.AtomicInteger rebuildFailureCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
     @Override
     public UploadSessionVO createUploadSession(String fileType, Long fileSize, String crc32) {
@@ -109,15 +111,16 @@ public class ContentService implements IContentService {
     @Transactional(rollbackFor = Exception.class)
     @Override
     public PublishResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility) {
+        assertTx("publish");
         Long targetPostId = postId == null ? socialIdPort.nextId() : postId;
         Object lock = lockFor(targetPostId);
         synchronized (lock) {
-            ContentPostEntity existedPost = contentRepository.findPost(targetPostId);
+            ContentPostEntity existedPost = contentRepository.findPostForUpdate(targetPostId);
             if (existedPost != null && userId != null && existedPost.getUserId() != null && !existedPost.getUserId().equals(userId)) {
                 return PublishResultVO.builder().postId(targetPostId).status("NO_PERMISSION").build();
             }
             // 取最新版本，确定新版本号
-            ContentRevisionEntity latest = contentRepository.findLatestRevision(targetPostId);
+            ContentRevisionEntity latest = contentRepository.findLatestRevisionForUpdate(targetPostId);
             int fallbackVersion = existedPost == null || existedPost.getVersionNum() == null ? 0 : existedPost.getVersionNum();
             int currentVersion = latest == null ? fallbackVersion : latest.getVersionNum();
             int newVersion = currentVersion + 1;
@@ -221,17 +224,30 @@ public class ContentService implements IContentService {
                     .build();
         }
         Long taskId = socialIdPort.nextId();
-        contentRepository.createSchedule(ContentScheduleEntity.builder()
-                .taskId(taskId)
-                .userId(userId)
-                .contentData(contentData)
-                .scheduleTime(publishTime)
-                .status(SCHEDULE_STATUS_SCHEDULED)
-                .retryCount(0)
-                .idempotentToken(token)
-                .isCanceled(0)
-                .alarmSent(0)
-                .build());
+        try {
+            contentRepository.createSchedule(ContentScheduleEntity.builder()
+                    .taskId(taskId)
+                    .userId(userId)
+                    .contentData(contentData)
+                    .scheduleTime(publishTime)
+                    .status(SCHEDULE_STATUS_SCHEDULED)
+                    .retryCount(0)
+                    .idempotentToken(token)
+                    .isCanceled(0)
+                    .alarmSent(0)
+                    .build());
+        } catch (DuplicateKeyException e) {
+            ContentScheduleEntity duplicated = contentRepository.findScheduleByToken(token);
+            if (duplicated != null) {
+                return OperationResultVO.builder()
+                        .success(true)
+                        .id(duplicated.getTaskId())
+                        .status("SCHEDULED_DUPLICATE")
+                        .message("已存在同内容定时任务")
+                        .build();
+            }
+            throw e;
+        }
         return OperationResultVO.builder()
                 .success(true)
                 .id(taskId)
@@ -279,7 +295,7 @@ public class ContentService implements IContentService {
         ContentPostEntity post = contentRepository.findPost(postId);
         if (post != null && userId != null && post.getUserId() != null && !post.getUserId().equals(userId)) {
             log.warn("history access denied postId={}, requestUser={}, owner={}", postId, userId, post.getUserId());
-            return ContentHistoryVO.builder().versions(java.util.List.of()).nextCursor(null).build();
+            return ContentHistoryVO.builder().versions(java.util.List.of()).nextCursor(null).status("NO_PERMISSION").build();
         }
         long start = System.currentTimeMillis();
         int pageSize = limit == null ? 20 : Math.min(limit, 100);
@@ -293,13 +309,18 @@ public class ContentService implements IContentService {
         List<ContentHistoryVO.ContentVersionVO> versions = new ArrayList<>();
         boolean hasMore = revisions.size() > pageSize;
         List<ContentRevisionEntity> page = revisions.size() > pageSize ? revisions.subList(0, pageSize) : revisions;
-        for (ContentRevisionEntity rev : page) {
-            String content = rebuildContent(postId, rev.getVersionNum());
-            versions.add(ContentHistoryVO.ContentVersionVO.builder()
-                    .versionId(rev.getVersionNum().longValue())
-                    .content(content)
-                    .time(rev.getCreateTime())
-                    .build());
+        try {
+            for (ContentRevisionEntity rev : page) {
+                String content = rebuildContent(postId, rev.getVersionNum());
+                versions.add(ContentHistoryVO.ContentVersionVO.builder()
+                        .versionId(rev.getVersionNum().longValue())
+                        .content(content)
+                        .time(rev.getCreateTime())
+                        .build());
+            }
+        } catch (IllegalStateException e) {
+            log.error("history rebuild failed postId={}, offset={}, err={}", postId, cursor, e.getMessage(), e);
+            return ContentHistoryVO.builder().versions(java.util.List.of()).nextCursor(null).status("REBUILD_FAILED").build();
         }
         long cost = System.currentTimeMillis() - start;
         if (cost > 1500L) {
@@ -312,9 +333,10 @@ public class ContentService implements IContentService {
     @Transactional(rollbackFor = Exception.class)
     @Override
     public OperationResultVO rollback(Long postId, Long userId, Long targetVersionId) {
+        assertTx("rollback");
         Object lock = lockFor(postId);
         synchronized (lock) {
-            ContentPostEntity post = contentRepository.findPost(postId);
+            ContentPostEntity post = contentRepository.findPostForUpdate(postId);
             if (post != null && post.getUserId() != null && userId != null && !post.getUserId().equals(userId)) {
                 return OperationResultVO.builder()
                         .success(false)
@@ -391,13 +413,13 @@ public class ContentService implements IContentService {
         int success = 0;
         for (ContentScheduleEntity task : tasks) {
             if (task.getIsCanceled() != null && task.getIsCanceled() == 1) {
-                contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_CANCELED, task.getRetryCount(), "已取消跳过", 0, null);
+                contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_CANCELED, task.getRetryCount(), "已取消跳过", 0, null, SCHEDULE_STATUS_SCHEDULED);
                 continue;
             }
             OperationResultVO res = publish(null, task.getUserId(), task.getContentData(), null, null, "PUBLIC");
             if (res.isSuccess()) {
                 success++;
-                contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null);
+                contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null, SCHEDULE_STATUS_SCHEDULED);
             } else {
                 int currentRetry = task.getRetryCount() == null ? 0 : task.getRetryCount();
                 int nextRetry = currentRetry + 1;
@@ -411,7 +433,8 @@ public class ContentService implements IContentService {
                         nextRetry,
                         err,
                         alarm,
-                        nextTime);
+                        nextTime,
+                        SCHEDULE_STATUS_SCHEDULED);
                 if (exceed) {
                     log.error("schedule task reach max retry, taskId={}, retry={}, err={}", task.getTaskId(), nextRetry, err);
                 }
@@ -438,7 +461,7 @@ public class ContentService implements IContentService {
         }
         OperationResultVO res = publish(null, task.getUserId(), task.getContentData(), null, null, "PUBLIC");
         if (res.isSuccess()) {
-            contentRepository.updateScheduleStatus(taskId, SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null);
+            contentRepository.updateScheduleStatus(taskId, SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null, SCHEDULE_STATUS_SCHEDULED);
         } else {
             int currentRetry = task.getRetryCount() == null ? 0 : task.getRetryCount();
             int nextRetry = currentRetry + 1;
@@ -446,7 +469,7 @@ public class ContentService implements IContentService {
             long delayMs = exceed ? 0L : calcNextDelayMs(nextRetry);
             Long nextTime = exceed ? null : socialIdPort.now() + delayMs;
             Integer alarm = exceed ? 1 : 0;
-            contentRepository.updateScheduleStatus(taskId, exceed ? SCHEDULE_STATUS_CANCELED : SCHEDULE_STATUS_SCHEDULED, nextRetry, res.getMessage(), alarm, nextTime);
+            contentRepository.updateScheduleStatus(taskId, exceed ? SCHEDULE_STATUS_CANCELED : SCHEDULE_STATUS_SCHEDULED, nextRetry, res.getMessage(), alarm, nextTime, SCHEDULE_STATUS_SCHEDULED);
             if (exceed) {
                 log.error("execute schedule reach max retry, taskId={}, retry={}, err={}", taskId, nextRetry, res.getMessage());
             }
@@ -643,7 +666,7 @@ public class ContentService implements IContentService {
         if (target == null) {
             log.error("rebuild target missing revision postId={}, version={}", postId, targetVersion);
             recordRebuildFailure(postId, targetVersion, "revision_missing");
-            return "";
+            throw new IllegalStateException("缺失目标版本，无法重建 postId=" + postId + ", version=" + targetVersion);
         }
         // 收集从 base 到 target 的链
         List<ContentRevisionEntity> chain = new ArrayList<>();
@@ -670,7 +693,8 @@ public class ContentService implements IContentService {
                     chain.add(0, anchorBase);
                 } else {
                     log.error("rebuild chain missing base after truncate postId={}, version={}", postId, targetVersion);
-                    return "";
+                    recordRebuildFailure(postId, targetVersion, "base_missing");
+                    throw new IllegalStateException("缺失基准版本，无法重建 postId=" + postId + ", version=" + targetVersion);
                 }
             }
             chain.sort(Comparator.comparing(ContentRevisionEntity::getVersionNum));
@@ -683,7 +707,7 @@ public class ContentService implements IContentService {
             if (chunk == null) {
                 log.error("缺失chunk数据，无法重建内容 postId={}, version={}, chunk={}", postId, targetVersion, base.getChunkHash());
                 recordRebuildFailure(postId, targetVersion, "chunk_missing");
-                return "";
+                throw new IllegalStateException("缺失基准数据，无法重建 postId=" + postId + ", version=" + targetVersion);
             }
             content = gunzipToString(chunk);
         }
@@ -703,7 +727,7 @@ public class ContentService implements IContentService {
                 if (patchBytes == null) {
                     log.error("缺失patch数据，无法重建内容 postId={}, version={}, patch={}", postId, rev.getVersionNum(), rev.getPatchHash());
                     recordRebuildFailure(postId, rev.getVersionNum(), "patch_missing");
-                    return content;
+                    throw new IllegalStateException("缺失补丁数据，无法重建 postId=" + postId + ", version=" + rev.getVersionNum());
                 }
                 String diffText = gunzipToString(patchBytes);
                 content = applyDiff(content, diffText);
@@ -830,7 +854,14 @@ public class ContentService implements IContentService {
     }
 
     private void recordRebuildFailure(Long postId, Integer version, String reason) {
-        log.warn("rebuild failure postId={}, version={}, reason={}", postId, version, reason);
+        int count = rebuildFailureCount.incrementAndGet();
+        log.warn("rebuild failure postId={}, version={}, reason={}, totalFail={}", postId, version, reason, count);
+    }
+
+    private void assertTx(String scene) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("事务未开启，禁止在非事务环境下调用 " + scene);
+        }
     }
 
     private int countPatchChain(Long postId, Integer targetVersion) {

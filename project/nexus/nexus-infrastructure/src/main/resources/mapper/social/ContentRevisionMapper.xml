@@ -14,7 +14,7 @@
     </resultMap>
 
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentRevisionPO">
-        INSERT IGNORE INTO content_revision(post_id, version_num, base_version, is_base, patch_hash, chunk_hash, request_id, create_time)
+        INSERT INTO content_revision(post_id, version_num, base_version, is_base, patch_hash, chunk_hash, request_id, create_time)
         VALUES(#{postId}, #{versionNum}, #{baseVersion}, #{isBase}, #{patchHash}, #{chunkHash}, #{requestId}, NOW())
     </insert>
 
@@ -30,6 +30,15 @@
         WHERE post_id = #{postId}
         ORDER BY version_num DESC
         LIMIT 1
+    </select>
+
+    <select id="selectLatestForUpdate" resultMap="RevisionMap">
+        SELECT post_id, version_num, base_version, is_base, patch_hash, chunk_hash, request_id, create_time
+        FROM content_revision
+        WHERE post_id = #{postId}
+        ORDER BY version_num DESC
+        LIMIT 1
+        FOR UPDATE
     </select>
 
     <select id="selectRecent" resultMap="RevisionMap">

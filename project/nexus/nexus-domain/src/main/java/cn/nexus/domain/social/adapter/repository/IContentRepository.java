@@ -19,6 +19,7 @@ public interface IContentRepository {
     ContentPostEntity savePost(ContentPostEntity post);
 
     ContentPostEntity findPost(Long postId);
+    ContentPostEntity findPostForUpdate(Long postId);
 
     boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
                                        String contentText, String mediaInfo, String locationInfo, Integer visibility);
@@ -33,7 +34,7 @@ public interface IContentRepository {
 
     ContentScheduleEntity createSchedule(ContentScheduleEntity schedule);
 
-    boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount, String lastError, Integer alarmSent, Long nextScheduleTime);
+    boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount, String lastError, Integer alarmSent, Long nextScheduleTime, Integer expectedStatus);
 
     java.util.List<ContentScheduleEntity> listPendingSchedules(Long beforeTime, Integer limit);
 
@@ -56,6 +57,7 @@ public interface IContentRepository {
     void saveRevision(Long postId, Integer versionNum, Integer baseVersion, boolean isBase, String patchHash, String chunkHash, String requestId);
 
     cn.nexus.domain.social.model.entity.ContentRevisionEntity findRevision(Long postId, Integer versionNum);
+    cn.nexus.domain.social.model.entity.ContentRevisionEntity findLatestRevisionForUpdate(Long postId);
 
     cn.nexus.domain.social.model.entity.ContentRevisionEntity findLatestRevision(Long postId);
 

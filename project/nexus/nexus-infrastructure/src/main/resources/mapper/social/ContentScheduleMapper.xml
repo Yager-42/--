@@ -32,6 +32,9 @@
             </if>
         </set>
         WHERE task_id = #{taskId}
+          <if test="expectedStatus != null">
+            AND status = #{expectedStatus}
+          </if>
     </update>
 
     <select id="selectPending" resultMap="ContentScheduleMap">

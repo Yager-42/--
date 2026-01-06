@@ -14,6 +14,7 @@ public interface IContentRevisionDao {
     ContentRevisionPO selectOne(@Param("postId") Long postId, @Param("versionNum") Integer versionNum);
 
     ContentRevisionPO selectLatest(@Param("postId") Long postId);
+    ContentRevisionPO selectLatestForUpdate(@Param("postId") Long postId);
 
     List<ContentRevisionPO> selectRecent(@Param("postId") Long postId, @Param("limit") Integer limit, @Param("offset") Integer offset);
 }

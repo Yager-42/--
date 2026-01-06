@@ -27,6 +27,13 @@
         WHERE post_id = #{postId}
     </select>
 
+    <select id="selectByIdForUpdate" resultMap="ContentPostMap">
+        SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        FROM content_post
+        WHERE post_id = #{postId}
+        FOR UPDATE
+    </select>
+
     <update id="updateStatus">
         UPDATE content_post
         SET status = #{status}

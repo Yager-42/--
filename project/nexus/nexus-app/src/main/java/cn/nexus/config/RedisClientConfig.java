@@ -5,6 +5,7 @@ import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
 import org.redisson.config.SingleServerConfig;
 import org.springframework.boot.autoconfigure.data.redis.RedisProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -17,6 +18,7 @@ import org.springframework.context.annotation.Configuration;
  * @since 2025-01-11
  */
 @Configuration
+@EnableConfigurationProperties(RedisProperties.class)
 public class RedisClientConfig {
 
     /**
@@ -28,11 +30,25 @@ public class RedisClientConfig {
     @Bean(destroyMethod = "shutdown")
     public RedissonClient redissonClient(RedisProperties redisProperties) {
         Config config = new Config();
+        String scheme = redisProperties.getSsl().isEnabled() ? "rediss://" : "redis://";
+        String address = scheme + redisProperties.getHost() + ":" + redisProperties.getPort();
+
         SingleServerConfig single = config.useSingleServer()
-                .setAddress("redis://" + redisProperties.getHost() + ":" + redisProperties.getPort())
+                .setAddress(address)
                 .setDatabase(redisProperties.getDatabase());
-        if (redisProperties.getPassword() != null && !redisProperties.getPassword().isEmpty()) {
-            single.setPassword(redisProperties.getPassword());
+
+        String username = redisProperties.getUsername();
+        if (username != null && !username.isEmpty()) {
+            single.setUsername(username);
+        }
+
+        String password = redisProperties.getPassword();
+        if (password != null && !password.isEmpty()) {
+            single.setPassword(password);
+        }
+
+        if (redisProperties.getTimeout() != null) {
+            single.setTimeout((int) redisProperties.getTimeout().toMillis());
         }
         return Redisson.create(config);
     }

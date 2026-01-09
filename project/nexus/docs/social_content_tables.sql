@@ -25,7 +25,7 @@ CREATE TABLE `content_history` (
   `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`history_id`),
   INDEX `idx_post_ver` (`post_id`, `version_num`)
-) ENGINE=InnoDB COMMENT='内容版本历史表';
+) ENGINE=InnoDB COMMENT='内容版本历史表（全量快照）';
 
 CREATE TABLE `content_draft` (
   `draft_id` BIGINT NOT NULL,
@@ -54,39 +54,6 @@ CREATE TABLE `content_schedule` (
   UNIQUE KEY `uk_idempotent_token` (`idempotent_token`),
   INDEX `idx_time_status` (`schedule_time`, `status`)
 ) ENGINE=InnoDB COMMENT='定时发布任务表';
-
--- 文本基准/补丁存储（Git风格）
-CREATE TABLE `content_chunk` (
-  `chunk_hash` VARCHAR(128) NOT NULL,
-  `chunk_data` LONGBLOB,
-  `size` BIGINT,
-  `compress_algo` VARCHAR(16) DEFAULT 'gzip',
-  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`chunk_hash`)
-) ENGINE=InnoDB COMMENT='文本基准块（gzip压缩的全文或分块）';
-
-CREATE TABLE `content_patch` (
-  `patch_hash` VARCHAR(128) NOT NULL,
-  `patch_data` LONGBLOB,
-  `size` BIGINT,
-  `compress_algo` VARCHAR(16) DEFAULT 'gzip',
-  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`patch_hash`)
-) ENGINE=InnoDB COMMENT='文本差分补丁（gzip压缩后的 unified diff）';
-
-CREATE TABLE `content_revision` (
-  `post_id` BIGINT NOT NULL,
-  `version_num` INT NOT NULL,
-  `base_version` INT NOT NULL,
-  `is_base` TINYINT DEFAULT 0 COMMENT '1=基准全文，0=补丁',
-  `patch_hash` VARCHAR(128) DEFAULT NULL,
-  `chunk_hash` VARCHAR(128) DEFAULT NULL,
-  `request_id` VARCHAR(128) DEFAULT NULL COMMENT '幂等键',
-  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`post_id`, `version_num`),
-  UNIQUE KEY `uk_post_request` (`post_id`, `request_id`),
-  KEY `idx_post_ver` (`post_id`, `version_num`)
-) ENGINE=InnoDB COMMENT='文本版本记录（指向基准或补丁）';
 
 -- 定时发布死信队列
 -- 依赖 RabbitMQ x-delayed-message 插件，DLX 配置在代码中

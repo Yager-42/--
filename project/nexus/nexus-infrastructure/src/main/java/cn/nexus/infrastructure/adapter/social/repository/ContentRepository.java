@@ -9,16 +9,10 @@ import cn.nexus.infrastructure.dao.social.IContentDraftDao;
 import cn.nexus.infrastructure.dao.social.IContentHistoryDao;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
 import cn.nexus.infrastructure.dao.social.IContentScheduleDao;
-import cn.nexus.infrastructure.dao.social.IContentChunkDao;
-import cn.nexus.infrastructure.dao.social.IContentPatchDao;
-import cn.nexus.infrastructure.dao.social.IContentRevisionDao;
-import cn.nexus.infrastructure.dao.social.po.ContentChunkPO;
 import cn.nexus.infrastructure.dao.social.po.ContentDraftPO;
 import cn.nexus.infrastructure.dao.social.po.ContentHistoryPO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.infrastructure.dao.social.po.ContentSchedulePO;
-import cn.nexus.infrastructure.dao.social.po.ContentPatchPO;
-import cn.nexus.infrastructure.dao.social.po.ContentRevisionPO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,9 +34,6 @@ public class ContentRepository implements IContentRepository {
     private final IContentPostDao contentPostDao;
     private final IContentHistoryDao contentHistoryDao;
     private final IContentScheduleDao contentScheduleDao;
-    private final IContentChunkDao contentChunkDao;
-    private final IContentPatchDao contentPatchDao;
-    private final IContentRevisionDao contentRevisionDao;
 
     @Override
     public ContentDraftEntity saveDraft(ContentDraftEntity draft) {
@@ -100,8 +91,8 @@ public class ContentRepository implements IContentRepository {
 
     @Override
     @Transactional(readOnly = true)
-    public List<ContentHistoryEntity> listHistory(Long postId, Integer limit) {
-        return contentHistoryDao.selectByPostId(postId, limit).stream()
+    public List<ContentHistoryEntity> listHistory(Long postId, Integer limit, Integer offset) {
+        return contentHistoryDao.selectByPostId(postId, limit, offset).stream()
                 .map(this::toHistoryEntity)
                 .collect(Collectors.toList());
     }
@@ -170,79 +161,6 @@ public class ContentRepository implements IContentRepository {
         return contentScheduleDao.updateSchedule(taskId, userId, scheduleTime == null ? null : new Date(scheduleTime), contentData, idempotentToken, reason) > 0;
     }
 
-    @Override
-    public void saveChunk(String chunkHash, byte[] compressedData, long size, String compressAlgo) {
-        ContentChunkPO po = new ContentChunkPO();
-        po.setChunkHash(chunkHash);
-        po.setChunkData(compressedData);
-        po.setSize(size);
-        po.setCompressAlgo(compressAlgo);
-        contentChunkDao.insertIgnore(po);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public byte[] findChunk(String chunkHash) {
-        ContentChunkPO po = contentChunkDao.selectByHash(chunkHash);
-        return po == null ? null : po.getChunkData();
-    }
-
-    @Override
-    public void savePatch(String patchHash, byte[] compressedPatch, long size, String compressAlgo) {
-        ContentPatchPO po = new ContentPatchPO();
-        po.setPatchHash(patchHash);
-        po.setPatchData(compressedPatch);
-        po.setSize(size);
-        po.setCompressAlgo(compressAlgo);
-        contentPatchDao.insertIgnore(po);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public byte[] findPatch(String patchHash) {
-        ContentPatchPO po = contentPatchDao.selectByHash(patchHash);
-        return po == null ? null : po.getPatchData();
-    }
-
-    @Override
-    public void saveRevision(Long postId, Integer versionNum, Integer baseVersion, boolean isBase, String patchHash, String chunkHash, String requestId) {
-        ContentRevisionPO po = new ContentRevisionPO();
-        po.setPostId(postId);
-        po.setVersionNum(versionNum);
-        po.setBaseVersion(baseVersion);
-        po.setIsBase(isBase ? 1 : 0);
-        po.setPatchHash(patchHash);
-        po.setChunkHash(chunkHash);
-        po.setRequestId(requestId);
-        contentRevisionDao.insert(po);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public cn.nexus.domain.social.model.entity.ContentRevisionEntity findRevision(Long postId, Integer versionNum) {
-        return toRevisionEntity(contentRevisionDao.selectOne(postId, versionNum));
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public cn.nexus.domain.social.model.entity.ContentRevisionEntity findLatestRevision(Long postId) {
-        return toRevisionEntity(contentRevisionDao.selectLatest(postId));
-    }
-
-    @Override
-    @Transactional(readOnly = false)
-    public cn.nexus.domain.social.model.entity.ContentRevisionEntity findLatestRevisionForUpdate(Long postId) {
-        return toRevisionEntity(contentRevisionDao.selectLatestForUpdate(postId));
-    }
-
-    @Override
-    public List<cn.nexus.domain.social.model.entity.ContentRevisionEntity> listRevisions(Long postId, Integer limit, Integer offset) {
-        List<ContentRevisionPO> list = contentRevisionDao.selectRecent(postId, limit, offset);
-        if (list == null) {
-            return java.util.List.of();
-        }
-        return list.stream().map(this::toRevisionEntity).collect(Collectors.toList());
-    }
 
     private ContentDraftPO toDraftPO(ContentDraftEntity entity) {
         ContentDraftPO po = new ContentDraftPO();
@@ -364,19 +282,4 @@ public class ContentRepository implements IContentRepository {
                 .build();
     }
 
-    private cn.nexus.domain.social.model.entity.ContentRevisionEntity toRevisionEntity(ContentRevisionPO po) {
-        if (po == null) {
-            return null;
-        }
-        return cn.nexus.domain.social.model.entity.ContentRevisionEntity.builder()
-                .postId(po.getPostId())
-                .versionNum(po.getVersionNum())
-                .baseVersion(po.getBaseVersion())
-                .isBase(po.getIsBase() != null && po.getIsBase() == 1)
-                .patchHash(po.getPatchHash())
-                .chunkHash(po.getChunkHash())
-                .requestId(po.getRequestId())
-                .createTime(po.getCreateTime() == null ? null : po.getCreateTime().getTime())
-                .build();
-    }
 }

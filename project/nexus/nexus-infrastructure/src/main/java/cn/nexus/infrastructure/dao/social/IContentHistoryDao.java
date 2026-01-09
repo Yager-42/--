@@ -11,7 +11,7 @@ public interface IContentHistoryDao {
 
     int insert(ContentHistoryPO po);
 
-    List<ContentHistoryPO> selectByPostId(@Param("postId") Long postId, @Param("limit") Integer limit);
+    List<ContentHistoryPO> selectByPostId(@Param("postId") Long postId, @Param("limit") Integer limit, @Param("offset") Integer offset);
 
     ContentHistoryPO selectOne(@Param("postId") Long postId, @Param("versionNum") Integer versionNum);
 }

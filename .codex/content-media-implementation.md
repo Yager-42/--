@@ -1,37 +1,36 @@
-# 内容发布与媒体接口实现链路说明（基于基准+diff，执行者：Codex / 日期：2025-XX-XX）
+# 内容发布与媒体接口实现链路说明（全量快照，执行者：Codex / 日期：2026-01-09）
 
 ## 0. 本次完善（已落地）
-- diff 精度/性能：行级 unified diff + 大文本（>512 KB 或 diff>60%）直接存基准，重建缓存 LRU（最近 50 篇或 128 MB，按篇驱逐），新增监控指标（命中/驱逐/重建耗时）。
-- 写入冲突防护：revision 持久化增加 version_num 乐观锁 + request_id 幂等键，防止并行版本。
-- 历史迁移/查询稳态：按需/批次迁移 legacy `content_history`，默认全量哈希校验；历史重建接口增加分页/限流与耗时告警，定义重建 SLO（P95<500ms，P99<1500ms，错误率<0.1% 报警）；新增历史分页游标 offset/nextCursor，重建链长超过阈值自动截断并强制包含基准。
+- 版本存储：统一写 `content_history` 全量快照，移除 diff/patch/revision 链路。
+- 历史查询：直接分页读取 `content_history`，offset/nextCursor 作为游标。
+- 回滚流程：读取目标版本快照并写入新版本快照，更新 `content_post` 当前版本号。
+- 并发控制：`content_post` 使用 version_num 乐观锁保证更新顺序。
 - 定时发布稳态：幂等 token 入库校验，取消/变更入库可审计并强制 userId ACL；消费侧分布式锁/单活校验 + 指数退避+抖动重试（超限告警标记 alarmSent）；DLQ 消费增加值班路由日志；新增审计回查接口 GET `/api/v1/content/schedule/{taskId}?userId=`。
-- 存储治理：新增重平衡入口 `ContentService.rebalanceStorage(postId)`（链路过长时生成新的基准版本，降低补丁链长度），重建链路超限时自动截断保护。
-- 分布式互斥：`publish/rollback`/定时消费读取 post 与最新 revision 使用 `FOR UPDATE`，结合 `(post_id,version_num)`/`(post_id,request_id)` 唯一键阻断并发漂移。
+- 分布式互斥：`publish/rollback` 读取 post 使用 `FOR UPDATE`，结合分布式锁阻断并发漂移。
 - 事务契约：`ContentRepository` 类级 REQUIRED 事务，读方法标注 readOnly；`ContentService.publish/rollback` 进入时校验必须处于事务内，防止非事务环境的半写。
 - 媒体上传：`createUploadSession` 接入 MinIO 预签名 PUT URL（50MB 上限，fileType 白名单自动回退 `application/octet-stream`），配置项 `minio.media.*` 控制 endpoint/凭证/bucket/basePath/expirySeconds。
 
 ## 1. 接口与领域映射（保持现有契约）
-- 分层约束（对齐 `.codex/DDD-ARCHITECTURE-SPECIFICATION.md`）：`api` 仅定义 DTO/Response 契约，`trigger` 只负责组装入参→调用 `domain` 服务；`domain` 仅依赖 `types` 并暴露 `ContentService` 领域服务；`infrastructure` 实现仓储/端口（chunk/patch 存储、MQ、定时任务/对象存储），不可上行穿透。
+- 分层约束（对齐 `.codex/DDD-ARCHITECTURE-SPECIFICATION.md`）：`api` 仅定义 DTO/Response 契约，`trigger` 只负责组装入参→调用 `domain` 服务；`domain` 仅依赖 `types` 并暴露 `ContentService` 领域服务；`infrastructure` 实现仓储/端口（内容/历史仓储、MQ、定时任务/对象存储），不可上行穿透。
 - 获取上传凭证：POST `/api/v1/media/upload/session` → `ContentService.createUploadSession` → 调用存储端口生成 MinIO 预签名上传 URL/token/sessionId。
 - 保存草稿：PUT `/api/v1/content/draft` → `ContentService.saveDraft/syncDraft` → `content_draft` upsert（clientVersion 防旧覆盖）。
-- 发布内容：POST `/api/v1/content/publish` → `ContentService.publish` → 生成版本（基准或补丁），写 `content_revision` + `content_chunk/patch`，更新 `content_post` 状态=Published，触发分发端口。
+- 发布内容：POST `/api/v1/content/publish` → `ContentService.publish` → 生成版本快照，写 `content_history`，更新 `content_post` 状态=Published，触发分发端口。
 - 删除内容：DELETE `/api/v1/content/{postId}` → 校验 userId 软删 `content_post`。
 - 定时发布：POST `/api/v1/content/schedule`（必填 userId）→ 生成 idempotent_token + 写 `content_schedule`（可取消/可变更/可审计）+ 发送 MQ 延时消息，延时到期由 Consumer 幂等执行 `executeSchedule` 直接走 publish 流程，DLQ 告警+补偿，消费前分布式锁/单活校验。
 - 取消定时：POST `/api/v1/content/schedule/cancel` → 校验 userId/状态/所有权 → 写 is_canceled=1、审计日志。
 - 变更定时：PATCH `/api/v1/content/schedule` → 校验 userId/状态/防重 token → 更新 schedule_time/内容摘要，写审计日志。
 - 定时审计：GET `/api/v1/content/schedule/{taskId}?userId=` → 回查任务状态/重试次数/告警标记/最后错误。
-- 历史列表：GET `/api/v1/content/{postId}/history?limit=&offset=` → 从 `content_revision` 还原文本，返回内容与版本+nextCursor。
-- 回滚：POST `/api/v1/content/{postId}/rollback` → 重建目标版本文本 → 按策略写入新版本（基准或补丁）并更新 `content_post`。
+- 历史列表：GET `/api/v1/content/{postId}/history?limit=&offset=` → 读取 `content_history` 快照，返回内容与版本+nextCursor。
+- 回滚：POST `/api/v1/content/{postId}/rollback` → 读取目标快照 → 写入新版本快照并更新 `content_post`。
 
 ## 2. 状态机与数据流
 - 状态：Draft(0) → Pending_Review(1) → Published(2) / Rejected(3) → Deleted(6)；定时：Scheduled(0) → 到点进入发布流 → Published(2)/Canceled(3)。
-- 数据流：上传→发布请求→写 revision（基准/patch）→风控→转码→Published→分发事件端口。
+- 数据流：上传→发布请求→写 content_history 快照→风控→转码→Published→分发事件端口。
 
-## 3. 版本存储策略（类似 Git）
-- 表：`content_chunk`(基准全文 gzip+hash 去重)，`content_patch`(gzip 行级 unified diff)，`content_revision`(post_id, version_num, base_version, is_base, patch_hash, chunk_hash)。
-- 基准间隔：每 20 版或 patch 体积 > 50% 切换为基准；大文本（>512 KB 或 diff 超 60%）直接落基准，避免补丁过大。
-- 幂等/并发：chunk/patch 以 SHA-256 哈希唯一；revision 以 (post_id, version_num) 唯一并使用 version_num 乐观锁；写入带 request_id 幂等键防重复提交。
-- 重建：找到 base → 解压 chunk → 顺序应用 patch 至目标版本；重建缓存使用 LRU（容量=最近 50 篇或 128 MB，按篇驱逐），命中则跳过重新解压/打补丁；监控指标：命中率、驱逐次数、重建耗时。
+## 3. 版本存储策略（全量快照）
+- 表：`content_history` 保存每个版本完整文本/媒体快照，`content_post` 维护当前版本号。
+- 版本生成：发布/回滚都会写入新快照，`version_num` 递增。
+- 并发控制：`content_post` 通过 version_num 乐观锁保证更新顺序。
 
 ## 4. 接口流程图（按方法链路）
 
@@ -67,20 +66,16 @@ graph TD
 **发布内容 `/content/publish`**
 ```mermaid
 graph TD
-    P[发布请求] --> P0[查最新 revision]
-    P0 --> P1[重建 prevContent]
-    P1 --> P2{风控通过?}
-    P2 -- 否 --> P3[写基准 revision=Rejected]
-    P3 --> P4[更新 post 状态 REJECTED]
-    P2 -- 是 --> P5{转码完成?}
-    P5 -- 否 --> P6[写基准 revision=Processing]
-    P6 --> P7[post=Pending_Review]
-    P5 -- 是 --> P8{基准 or 补丁}
-    P8 -- 基准 --> PB[chunk gzip+hash -> saveChunk + saveRevision(is_base=1)]
-    P8 -- 补丁 --> PP[diff prev->curr gzip -> savePatch + saveRevision(base_version)]
-    PB --> P9[post=Published]
-    PP --> P9
-    P9 --> P10[分发事件端口]
+    P[发布请求] --> P0[读取 post/version]
+    P0 --> P1{风控通过?}
+    P1 -- 否 --> P2[写 history 快照=Rejected]
+    P2 --> P3[更新 post 状态 REJECTED]
+    P1 -- 是 --> P4{转码完成?}
+    P4 -- 否 --> P5[写 history 快照=Processing]
+    P5 --> P6[post=Pending_Review]
+    P4 -- 是 --> P7[写 history 快照=Published]
+    P7 --> P8[post=Published]
+    P8 --> P9[分发事件端口]
 ```
 
 **删除内容 `/content/{postId}`**
@@ -113,76 +108,45 @@ graph TD
     CA --> CA1[写 is_canceled/新schedule_time，写变更日志/审计]
 ```
 
-**历史查询 `/content/{postId}/history`（分页+限流+耗时告警+链长截断）**
+**历史查询 `/content/{postId}/history`（分页+限流+耗时告警）**
 ```mermaid
 graph TD
     H[查询历史] --> H0[分页/限流校验(页大小上限，QPS限流)]
-    H0 --> H1[读取 revisions 列表(按页，limit+offset，返回 nextCursor)]
-    H1 --> H2[按版本升序重建: 基准chunk -> 依次apply patch]
-    H2 --> H2b{链长>阈值?}
-    H2b -- 是 --> H2c[截断链路并强制包含最近基准]
-    H2 --> H3{重建耗时>SLO? (P95<500ms, P99<1500ms)}
-    H3 -- 否 --> H4[组装 ContentHistoryVO 返回内容+版本]
-    H3 -- 是 --> H5[返回结果+记录告警指标(P99耗时/失败率)]
+    H0 --> H1[读取 content_history 列表(按页，limit+offset，返回 nextCursor)]
+    H1 --> H2[按版本升序组装 ContentHistoryVO]
+    H2 --> H3[返回内容+版本]
 ```
 
 **回滚 `/content/{postId}/rollback`**
 ```mermaid
 graph TD
-    R[回滚请求] --> R1[查目标 revision]
+    R[回滚请求] --> R1[查目标 history 快照]
     R1 --> R2{存在?}
     R2 -- 否 --> R3[返回 VERSION_NOT_FOUND]
-    R2 -- 是 --> R4[重建目标文本]
+    R2 -- 是 --> R4[读取目标快照内容]
     R4 --> R5[确定新版本号]
-    R5 --> R6{基准或补丁?}
-    R6 -- 基准 --> RB[saveChunk + saveRevision(is_base=1)]
-    R6 -- 补丁 --> RP[diff prev->target gzip + savePatch + saveRevision(base_version)]
-    RB --> R7[更新 post=Published 新版本]
-    RP --> R7
-```
-
-**历史迁移 + 校验（默认全量哈希）**
-```mermaid
-graph TD
-    M0[迁移任务触发（按需/批次）] --> M1[拉取 legacy content_history]
-    M1 --> M2[按 post_id/version 转换为 chunk/patch+revision]
-    M2 --> M3{校验模式}
-    M3 --> M3a[默认：全量重建+哈希比对]
-    M3 --> M3b[资源受限：抽检 5%-10%]
-    M3a --> M4{校验通过?}
-    M3b --> M4
-    M4 -- 是 --> M5[标记迁移完成，记录批次/校验率]
-    M4 -- 否 --> M6[记录失败明细 -> 告警 + 回退切换 legacy 读取开关]
+    R5 --> R6[写入新快照 + 更新 post=Published]
 ```
 
 ## 5. 数据表映射（补充）
-- `content_chunk`：chunk_hash, chunk_data(gzip), size, compress_algo。
-- `content_patch`：patch_hash, patch_data(gzip unified diff), size, compress_algo。
-- `content_revision`：post_id, version_num, base_version, is_base, patch_hash, chunk_hash。
+- `content_history`：history_id, post_id, version_num, snapshot_content, snapshot_media（全量版本快照）。
 - `content_schedule`（见 docs/social_content_tables.sql）：task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent（支撑取消/幂等/告警/补偿）。
 - 兼容旧表：`content_post/content_draft/content_schedule` 保持。
 
 ## 6. 有效性
-- 去重：相同文本基准/补丁按哈希唯一存储。
-- 历史/回滚：通过基准+补丁重建，接口契约不变。
+- 版本：发布/回滚均写入 `content_history` 全量快照。
+- 历史/回滚：直接读取快照，接口契约不变。
 - 状态机：发布/删除/定时/草稿同步均落库。
 - 定时：idempotent_token、取消/变更、重试、DLQ 告警与补偿均入库可追溯；延迟消费幂等校验；分布式锁/单活保障消费。
-- 并发与幂等：revision 写入使用 version_num 乐观锁 + request_id 幂等键；历史重建分页/限流并按 SLO 告警；定时发布消费前获取分布式锁/单活保障。
+- 并发与幂等：`content_post` 使用 version_num 乐观锁；定时发布消费前获取分布式锁/单活保障。
 
 ## 7. 剩余不足
 - 风控/转码/分发为占位实现（已落地端口，未接真实外部服务）。
-- 删除/回滚 userId 鉴权仍依赖上层透传，领域层未显式校验。
 - 告警/工单通道仅通过日志占位，需接入统一监控/值班平台并落库告警时间。
-- 基准/补丁重平衡仅提供入口（rebuild 基准版）未接调度器；补丁/基准清理、冷数据归档策略待补全。
 - 观测性与测试缺口：缺少端到端发布/回滚/定时链路的指标与自动化冒烟。
-- 重建缓存/LRU 未暴露命中率、驱逐、容量水位监控，也未做持久化或预热策略，遇到冷启动重建仍可能慢。
 - 定时重试/退避未持久化 next_retry_at 字段，依赖 schedule_time 复用，仍需上线后校验扫描窗口；自动补偿工单仍为占位。
 
 ## 8. 后续改进方向
-- diff：引入分块/语义 diff 与 Bloom 预筛，进一步降低大文本补丁体积。
-- 迁移：在资源受限抽检模式下，增加自动补偿与审计报表。
-- 安全：在领域层补充 userId 校验契约描述，上层/trigger 强制传递；接入真实风控/转码/分发。
-- 存储治理：定义基准重平衡/冷数据清理任务（按版本跨度/时间），结合监控阈值自动触发，补丁/基准孤儿清理。
 - 观测性/测试：补充链路级指标（成功率/耗时/重试次数/缓存命中），落地发布/回滚/定时的自动化冒烟与回归用例。
 - 定时发布：接入统一监控/告警平台，完善自动补偿流转到运维工单。 
 
@@ -200,4 +164,4 @@ minio:
 ```
 - 接口：POST `/api/v1/media/upload/session`，body `{fileType,fileSize,crc32}`，返回 `uploadUrl/token/sessionId`；`fileSize` 超过 50MB 拒绝；非白名单 `fileType` 自动降级为 `application/octet-stream`。
 - 上传方式：前端直接对 `uploadUrl` 发起 `PUT` 二进制（可附带 `Content-Type=fileType`），无需额外鉴权；上传完成后将媒体摘要写入 `mediaInfo` 字段参与发布。
-.codex\DDD-ARCHITECTURE-SPECIFICATION.md
+

@@ -24,6 +24,9 @@
         <if test="limit != null">
             LIMIT #{limit}
         </if>
+        <if test="offset != null">
+            OFFSET #{offset}
+        </if>
     </select>
 
     <select id="selectOne" resultMap="ContentHistoryMap">

@@ -110,22 +110,22 @@ graph TD
 **定时发布 `/content/schedule` + MQ 延时队列（含幂等/分布式锁/告警/补偿/退避抖动）**
 ```mermaid
 graph TD
-    S[创建定时] --> S0[生成 idempotent_token=hash(userId+content+time)]
-    S0 --> S1[content_schedule upsert(Pending, token)]
-    S1 --> S2[发送 MQ 延时消息(taskId, delay)]
-    C[MQ延时到期] --> L0[获取分布式锁/单活校验]
-    L0 --> C0[Consumer 幂等校验 token/状态]
+    S["创建定时"] --> S0["生成 idempotent_token = hash(userId + content + time)"]
+    S0 --> S1["content_schedule upsert(Pending, token)"]
+    S1 --> S2["发送 MQ 延时消息(taskId, delay)"]
+    C["MQ 延时到期"] --> L0["获取分布式锁/单活校验"]
+    L0 --> C0["Consumer 幂等校验 token/状态"]
     C0 --> C1{已取消/已完成?}
-    C1 -- 是 --> C1e[跳过/记录]
-    C1 -- 否 --> C2[executeSchedule -> publish]
+    C1 -- 是 --> C1e["跳过/记录"]
+    C1 -- 否 --> C2["executeSchedule -> publish"]
     C2 --> C3{publish成功?}
-    C3 -- 是 --> C4[任务=完成, 写完成时间, 触发发布事件]
-    C3 -- 否 --> C5[retry+1 写 last_error + 重试次数]
+    C3 -- 是 --> C4["任务=完成, 写完成时间, 触发发布事件"]
+    C3 -- 否 --> C5["retry+1 写 last_error + 重试次数"]
     C5 --> C6{重试超限?}
-    C6 -- 否 --> C7[计算指数退避+抖动 -> 更新 schedule_time=nextRetry]
-    C6 -- 是 --> DLQ[DLQ 触发告警通知→自动补偿工单（含人工审核），推送运维平台/值班群]
-    Cancel[取消/变更请求] --> CA[contentService.cancelSchedule/updateSchedule -> 状态=取消/更新时间]
-    CA --> CA1[写 is_canceled/新schedule_time，写变更日志/审计]
+    C6 -- 否 --> C7["计算指数退避+抖动 -> 更新 schedule_time=nextRetry"]
+    C6 -- 是 --> DLQ["DLQ 触发告警通知→自动补偿工单（含人工审核），推送运维平台/值班群"]
+    Cancel["取消/变更请求"] --> CA["contentService.cancelSchedule/updateSchedule -> 状态=取消/更新时间"]
+    CA --> CA1["写 is_canceled/新schedule_time，写变更日志/审计"]
 ```
 
 **历史查询 `/content/{postId}/history`（分页+限流+耗时告警）**

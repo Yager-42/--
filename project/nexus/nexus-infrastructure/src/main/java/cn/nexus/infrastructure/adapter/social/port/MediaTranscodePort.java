@@ -1,6 +1,7 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IMediaTranscodePort;
+import cn.nexus.domain.social.model.valobj.MediaTranscodeSubmitVO;
 import org.springframework.stereotype.Component;
 
 /**
@@ -9,7 +10,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class MediaTranscodePort implements IMediaTranscodePort {
     @Override
-    public boolean transcode(String mediaInfo) {
-        return true;
+    public MediaTranscodeSubmitVO submit(String mediaInfo) {
+        return MediaTranscodeSubmitVO.builder().ready(true).jobId(null).build();
     }
 }

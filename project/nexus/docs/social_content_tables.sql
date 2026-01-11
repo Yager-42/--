@@ -24,8 +24,33 @@ CREATE TABLE `content_history` (
   `snapshot_media` JSON COMMENT '媒体快照',
   `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`history_id`),
-  INDEX `idx_post_ver` (`post_id`, `version_num`)
+  UNIQUE KEY `uk_post_ver` (`post_id`, `version_num`)
 ) ENGINE=InnoDB COMMENT='内容版本历史表（全量快照）';
+
+CREATE TABLE `content_publish_attempt` (
+  `attempt_id` BIGINT NOT NULL COMMENT '尝试ID',
+  `post_id` BIGINT NOT NULL COMMENT '目标内容ID',
+  `user_id` BIGINT NOT NULL COMMENT '发起用户',
+  `idempotent_token` VARCHAR(128) NOT NULL COMMENT '幂等键',
+  `transcode_job_id` VARCHAR(128) DEFAULT NULL COMMENT '转码任务ID',
+  `attempt_status` TINYINT NOT NULL COMMENT '0创建,1风控拒绝,2转码中,3可发布,4已发布,5失败,6取消',
+  `risk_status` TINYINT DEFAULT 0 COMMENT '0未评估,1通过,2拒绝',
+  `transcode_status` TINYINT DEFAULT 0 COMMENT '0未开始,1处理中,2完成,3失败',
+  `snapshot_content` TEXT COMMENT '文本快照',
+  `snapshot_media` JSON COMMENT '媒体快照',
+  `location_info` JSON COMMENT '位置快照',
+  `visibility` TINYINT DEFAULT 0 COMMENT '0公开,1好友,2仅自己',
+  `published_version_num` INT DEFAULT NULL COMMENT '成功发布的可见版本号',
+  `error_code` VARCHAR(64) DEFAULT NULL,
+  `error_message` TEXT DEFAULT NULL,
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`attempt_id`),
+  UNIQUE KEY `uk_idempotent_token` (`idempotent_token`),
+  INDEX `idx_post_time` (`post_id`, `create_time`),
+  INDEX `idx_user_time` (`user_id`, `create_time`),
+  INDEX `idx_transcode_job` (`transcode_job_id`)
+) ENGINE=InnoDB COMMENT='内容发布尝试过程表';
 
 CREATE TABLE `content_draft` (
   `draft_id` BIGINT NOT NULL,

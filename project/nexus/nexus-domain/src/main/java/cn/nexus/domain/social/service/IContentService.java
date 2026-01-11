@@ -1,6 +1,7 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
+import cn.nexus.domain.social.model.entity.ContentPublishAttemptEntity;
 import cn.nexus.domain.social.model.valobj.*;
 
 /**
@@ -48,6 +49,11 @@ public interface IContentService {
      * 获取定时任务审计信息。
      */
     ContentScheduleEntity getScheduleAudit(Long taskId, Long userId);
+
+    /**
+     * 获取发布尝试审计信息（仅发起人可见）。
+     */
+    ContentPublishAttemptEntity getPublishAttemptAudit(Long attemptId, Long userId);
 
     /**
      * 触发内容版本存储重平衡（按需重建新的基准版本）。

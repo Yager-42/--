@@ -6,8 +6,10 @@ import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
 import cn.nexus.domain.social.adapter.port.IMediaTranscodePort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
+import cn.nexus.domain.social.adapter.repository.IContentPublishAttemptRepository;
 import cn.nexus.domain.social.model.entity.ContentDraftEntity;
 import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
+import cn.nexus.domain.social.model.entity.ContentPublishAttemptEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.*;
@@ -39,6 +41,7 @@ public class ContentService implements IContentService {
 
     private final ISocialIdPort socialIdPort;
     private final IContentRepository contentRepository;
+    private final IContentPublishAttemptRepository contentPublishAttemptRepository;
     private final IContentRiskPort contentRiskPort;
     private final IMediaStoragePort mediaStoragePort;
     private final IMediaTranscodePort mediaTranscodePort;
@@ -103,11 +106,11 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 内容发布主流程：
-     * 1) 获取锁并校验作者权限，确定新版本号；
-     * 2) 风控扫描、媒体转码失败时落 REJECTED/PROCESSING 状态并记录全量快照；
-     * 3) 以全量快照写入版本历史（content_history），不再使用差分/补丁链；
-     * 4) upsert post 状态为已发布并通知分发；全过程要求在事务内，避免版本冲突。
+     * 内容发布主流程（Attempt 化：失败/处理中不影响当前可见版本）：
+     * 1) 获取锁并校验作者权限；
+     * 2) 创建发布 Attempt（含幂等 token 与输入快照）；
+     * 3) 风控失败/转码未就绪：仅更新 Attempt，不更新 content_post，也不写 content_history；
+     * 4) 仅当成功发布：写入 content_history + 更新 content_post + 分发事件，同时 Attempt -> PUBLISHED。
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -121,41 +124,97 @@ public class ContentService implements IContentService {
             if (existedPost != null && userId != null && existedPost.getUserId() != null && !existedPost.getUserId().equals(userId)) {
                 return OperationResultVO.builder().success(false).id(targetPostId).status("NO_PERMISSION").message("无权限").build();
             }
-            // 确定新版本号
+
+            String token = hash("publish:" + (userId == null ? "0" : userId) + ":" + targetPostId + ":" +
+                    (text == null ? "" : text) + ":" + (mediaInfo == null ? "" : mediaInfo) + ":" +
+                    (location == null ? "" : location) + ":" + (visibility == null ? "" : visibility));
+
+            ContentPublishAttemptEntity attempt = ContentPublishAttemptEntity.builder()
+                    .attemptId(socialIdPort.nextId())
+                    .postId(targetPostId)
+                    .userId(userId)
+                    .idempotentToken(token)
+                    .transcodeJobId(null)
+                    .attemptStatus(ContentPublishAttemptStatusEnumVO.CREATED.getCode())
+                    .riskStatus(ContentPublishAttemptRiskStatusEnumVO.NOT_EVALUATED.getCode())
+                    .transcodeStatus(ContentPublishAttemptTranscodeStatusEnumVO.NOT_STARTED.getCode())
+                    .snapshotContent(text)
+                    .snapshotMedia(mediaInfo)
+                    .locationInfo(location)
+                    .visibility(parseVisibility(visibility))
+                    .publishedVersionNum(null)
+                    .errorCode(null)
+                    .errorMessage(null)
+                    .createTime(socialIdPort.now())
+                    .updateTime(socialIdPort.now())
+                    .build();
+
+            try {
+                contentPublishAttemptRepository.create(attempt);
+            } catch (DuplicateKeyException e) {
+                ContentPublishAttemptEntity existAttempt = contentPublishAttemptRepository.findByToken(token);
+                if (existAttempt != null) {
+                    return toPublishResultFromAttempt(existAttempt);
+                }
+                throw e;
+            }
+
+            // 风控
+            boolean passRisk = contentRiskPort.scanText(text) && contentRiskPort.scanMedia(mediaInfo);
+            if (!passRisk) {
+                boolean ok = contentPublishAttemptRepository.updateAttemptStatus(
+                        attempt.getAttemptId(),
+                        ContentPublishAttemptStatusEnumVO.RISK_REJECTED.getCode(),
+                        ContentPublishAttemptRiskStatusEnumVO.REJECTED.getCode(),
+                        ContentPublishAttemptTranscodeStatusEnumVO.NOT_STARTED.getCode(),
+                        null,
+                        null,
+                        "RISK_REJECTED",
+                        "风控拦截",
+                        ContentPublishAttemptStatusEnumVO.CREATED.getCode());
+                if (!ok) {
+                    throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attempt.getAttemptId());
+                }
+                attempt.setAttemptStatus(ContentPublishAttemptStatusEnumVO.RISK_REJECTED.getCode());
+                attempt.setRiskStatus(ContentPublishAttemptRiskStatusEnumVO.REJECTED.getCode());
+                attempt.setErrorCode("RISK_REJECTED");
+                attempt.setErrorMessage("风控拦截");
+                return toPublishResultFromAttempt(attempt);
+            }
+
+            // 转码（占位实现：可同步 ready，也可返回 jobId 供异步推进）
+            MediaTranscodeSubmitVO transcode = mediaTranscodePort.submit(mediaInfo);
+            if (transcode == null) {
+                transcode = MediaTranscodeSubmitVO.builder().ready(true).jobId(null).build();
+            }
+            if (!transcode.isReady()) {
+                boolean ok = contentPublishAttemptRepository.updateAttemptStatus(
+                        attempt.getAttemptId(),
+                        ContentPublishAttemptStatusEnumVO.TRANSCODING.getCode(),
+                        ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode(),
+                        ContentPublishAttemptTranscodeStatusEnumVO.PROCESSING.getCode(),
+                        transcode.getJobId(),
+                        null,
+                        null,
+                        "媒体处理中",
+                        ContentPublishAttemptStatusEnumVO.CREATED.getCode());
+                if (!ok) {
+                    throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attempt.getAttemptId());
+                }
+                attempt.setAttemptStatus(ContentPublishAttemptStatusEnumVO.TRANSCODING.getCode());
+                attempt.setRiskStatus(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode());
+                attempt.setTranscodeStatus(ContentPublishAttemptTranscodeStatusEnumVO.PROCESSING.getCode());
+                attempt.setTranscodeJobId(transcode.getJobId());
+                attempt.setErrorMessage("媒体处理中");
+                return toPublishResultFromAttempt(attempt);
+            }
+
+            // 仅成功发布才会推进可见版本
             int currentVersion = existedPost == null || existedPost.getVersionNum() == null ? 0 : existedPost.getVersionNum();
             int newVersion = currentVersion + 1;
 
-            // 风控与转码
-            boolean passRisk = contentRiskPort.scanText(text) && contentRiskPort.scanMedia(mediaInfo);
-            if (!passRisk) {
-                upsertPost(targetPostId, userId, text, mediaInfo, location, visibility, STATUS_REJECTED, newVersion, false);
-                // 兼容双写旧历史
-                contentRepository.saveHistory(cn.nexus.domain.social.model.entity.ContentHistoryEntity.builder()
-                        .historyId(socialIdPort.nextId())
-                        .postId(targetPostId)
-                        .versionNum(newVersion)
-                        .snapshotContent(text)
-                        .snapshotMedia(mediaInfo)
-                        .createTime(socialIdPort.now())
-                        .build());
-                return OperationResultVO.builder().success(false).id(targetPostId).status("REJECTED").message("风控拦截").build();
-            }
-            boolean mediaReady = mediaTranscodePort.transcode(mediaInfo);
-            if (!mediaReady) {
-                upsertPost(targetPostId, userId, text, mediaInfo, location, visibility, STATUS_PENDING_REVIEW, newVersion, false);
-                contentRepository.saveHistory(cn.nexus.domain.social.model.entity.ContentHistoryEntity.builder()
-                        .historyId(socialIdPort.nextId())
-                        .postId(targetPostId)
-                        .versionNum(newVersion)
-                        .snapshotContent(text)
-                        .snapshotMedia(mediaInfo)
-                        .createTime(socialIdPort.now())
-                        .build());
-                return OperationResultVO.builder().success(false).id(targetPostId).status("PROCESSING").message("媒体处理中").build();
-            }
-
             upsertPost(targetPostId, userId, text, mediaInfo, location, visibility, STATUS_PUBLISHED, newVersion, false);
-            contentRepository.saveHistory(cn.nexus.domain.social.model.entity.ContentHistoryEntity.builder()
+            contentRepository.saveHistory(ContentHistoryEntity.builder()
                     .historyId(socialIdPort.nextId())
                     .postId(targetPostId)
                     .versionNum(newVersion)
@@ -163,8 +222,30 @@ public class ContentService implements IContentService {
                     .snapshotMedia(mediaInfo)
                     .createTime(socialIdPort.now())
                     .build());
+
+            boolean ok = contentPublishAttemptRepository.updateAttemptStatus(
+                    attempt.getAttemptId(),
+                    ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode(),
+                    ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode(),
+                    ContentPublishAttemptTranscodeStatusEnumVO.DONE.getCode(),
+                    transcode.getJobId(),
+                    newVersion,
+                    null,
+                    null,
+                    ContentPublishAttemptStatusEnumVO.CREATED.getCode());
+            if (!ok) {
+                throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attempt.getAttemptId());
+            }
+
             contentDispatchPort.onPublished(targetPostId, userId);
-            return OperationResultVO.builder().success(true).id(targetPostId).status("PUBLISHED").message("发布成功").build();
+            return OperationResultVO.builder()
+                    .success(true)
+                    .id(targetPostId)
+                    .attemptId(attempt.getAttemptId())
+                    .versionNum(newVersion)
+                    .status("PUBLISHED")
+                    .message("发布成功")
+                    .build();
         } finally {
             lock.unlock();
         }
@@ -517,6 +598,21 @@ public class ContentService implements IContentService {
         return task;
     }
 
+    @Override
+    public ContentPublishAttemptEntity getPublishAttemptAudit(Long attemptId, Long userId) {
+        if (attemptId == null) {
+            return null;
+        }
+        ContentPublishAttemptEntity attempt = contentPublishAttemptRepository.findByAttemptId(attemptId);
+        if (attempt == null) {
+            return null;
+        }
+        if (userId != null && attempt.getUserId() != null && !attempt.getUserId().equals(userId)) {
+            return null;
+        }
+        return attempt;
+    }
+
     /**
      * 存储重平衡：全量快照模式下无需重平衡，保留接口以兼容调用方。
      */
@@ -623,6 +719,57 @@ public class ContentService implements IContentService {
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("事务未开启，禁止在非事务环境下调用 " + scene);
         }
+    }
+
+    private OperationResultVO toPublishResultFromAttempt(ContentPublishAttemptEntity attempt) {
+        if (attempt == null) {
+            return OperationResultVO.builder().success(false).status("ATTEMPT_NOT_FOUND").message("发布尝试不存在").build();
+        }
+        Integer attemptStatus = attempt.getAttemptStatus();
+        if (attemptStatus != null && attemptStatus == ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode()) {
+            return OperationResultVO.builder()
+                    .success(true)
+                    .id(attempt.getPostId())
+                    .attemptId(attempt.getAttemptId())
+                    .versionNum(attempt.getPublishedVersionNum())
+                    .status("PUBLISHED")
+                    .message("发布成功")
+                    .build();
+        }
+        if (attemptStatus != null && attemptStatus == ContentPublishAttemptStatusEnumVO.RISK_REJECTED.getCode()) {
+            return OperationResultVO.builder()
+                    .success(false)
+                    .id(attempt.getPostId())
+                    .attemptId(attempt.getAttemptId())
+                    .status("REJECTED")
+                    .message(attempt.getErrorMessage() == null ? "风控拦截" : attempt.getErrorMessage())
+                    .build();
+        }
+        if (attemptStatus != null && attemptStatus == ContentPublishAttemptStatusEnumVO.TRANSCODING.getCode()) {
+            return OperationResultVO.builder()
+                    .success(false)
+                    .id(attempt.getPostId())
+                    .attemptId(attempt.getAttemptId())
+                    .status("PROCESSING")
+                    .message(attempt.getErrorMessage() == null ? "媒体处理中" : attempt.getErrorMessage())
+                    .build();
+        }
+        if (attemptStatus != null && attemptStatus == ContentPublishAttemptStatusEnumVO.FAILED.getCode()) {
+            return OperationResultVO.builder()
+                    .success(false)
+                    .id(attempt.getPostId())
+                    .attemptId(attempt.getAttemptId())
+                    .status("FAILED")
+                    .message(attempt.getErrorMessage() == null ? "系统失败" : attempt.getErrorMessage())
+                    .build();
+        }
+        return OperationResultVO.builder()
+                .success(false)
+                .id(attempt.getPostId())
+                .attemptId(attempt.getAttemptId())
+                .status("CREATED")
+                .message("处理中")
+                .build();
     }
 
     private long calcNextDelayMs(int retryCount) {

@@ -4,6 +4,7 @@ import cn.nexus.api.response.Response;
 import cn.nexus.api.social.IContentApi;
 import cn.nexus.api.social.common.OperationResultDTO;
 import cn.nexus.api.social.content.dto.*;
+import cn.nexus.domain.social.model.entity.ContentPublishAttemptEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.*;
 import cn.nexus.domain.social.service.IContentService;
@@ -55,7 +56,35 @@ public class ContentController implements IContentApi {
                 requestDTO.getLocation(), requestDTO.getVisibility());
         PublishContentResponseDTO dto = PublishContentResponseDTO.builder()
                 .postId(vo.getId())
+                .attemptId(vo.getAttemptId())
+                .versionNum(vo.getVersionNum())
                 .status(vo.getStatus())
+                .build();
+        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
+    }
+
+    @GetMapping("/content/publish/attempt/{attemptId}")
+    @Override
+    public Response<PublishAttemptResponseDTO> publishAttempt(@PathVariable("attemptId") Long attemptId,
+                                                              @RequestParam("userId") Long userId) {
+        ContentPublishAttemptEntity attempt = contentService.getPublishAttemptAudit(attemptId, userId);
+        if (attempt == null) {
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), null);
+        }
+        PublishAttemptResponseDTO dto = PublishAttemptResponseDTO.builder()
+                .attemptId(attempt.getAttemptId())
+                .postId(attempt.getPostId())
+                .userId(attempt.getUserId())
+                .idempotentToken(attempt.getIdempotentToken())
+                .transcodeJobId(attempt.getTranscodeJobId())
+                .attemptStatus(attempt.getAttemptStatus())
+                .riskStatus(attempt.getRiskStatus())
+                .transcodeStatus(attempt.getTranscodeStatus())
+                .publishedVersionNum(attempt.getPublishedVersionNum())
+                .errorCode(attempt.getErrorCode())
+                .errorMessage(attempt.getErrorMessage())
+                .createTime(attempt.getCreateTime())
+                .updateTime(attempt.getUpdateTime())
                 .build();
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
     }

@@ -15,6 +15,8 @@ import lombok.NoArgsConstructor;
 public class OperationResultVO {
     private boolean success;
     private Long id;
+    private Long attemptId;
+    private Integer versionNum;
     private String status;
     private String message;
 }

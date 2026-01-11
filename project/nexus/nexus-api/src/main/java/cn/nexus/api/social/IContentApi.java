@@ -15,6 +15,8 @@ public interface IContentApi {
 
     Response<PublishContentResponseDTO> publish(PublishContentRequestDTO requestDTO);
 
+    Response<PublishAttemptResponseDTO> publishAttempt(Long attemptId, Long userId);
+
     Response<OperationResultDTO> delete(Long postId, DeleteContentRequestDTO requestDTO);
 
     Response<ScheduleContentResponseDTO> schedule(ScheduleContentRequestDTO requestDTO);

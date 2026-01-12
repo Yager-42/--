@@ -4,6 +4,7 @@ import cn.nexus.domain.social.model.entity.ContentDraftEntity;
 import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
+import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
 
 import java.util.List;
 
@@ -20,6 +21,24 @@ public interface IContentRepository {
 
     ContentPostEntity findPost(Long postId);
     ContentPostEntity findPostForUpdate(Long postId);
+
+    /**
+     * 批量查询已发布内容（用于 timeline 批量回表）。
+     *
+     * @param postIds 内容 ID 列表
+     * @return 内容列表（按入参 postIds 的顺序输出）
+     */
+    List<ContentPostEntity> listPostsByIds(List<Long> postIds);
+
+    /**
+     * 个人页分页查询已发布内容（按 createTime DESC, postId DESC）。
+     *
+     * @param userId 用户 ID
+     * @param cursor 游标："{lastCreateTimeMs}:{lastPostId}"；为空表示从最新开始
+     * @param limit  单页数量
+     * @return 分页结果
+     */
+    ContentPostPageVO listUserPosts(Long userId, String cursor, int limit);
 
     boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
                                        String contentText, String mediaInfo, String locationInfo, Integer visibility);

@@ -5,6 +5,7 @@ import cn.nexus.domain.social.model.entity.ContentDraftEntity;
 import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
+import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
 import cn.nexus.infrastructure.dao.social.IContentDraftDao;
 import cn.nexus.infrastructure.dao.social.IContentHistoryDao;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
@@ -18,7 +19,9 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -65,6 +68,54 @@ public class ContentRepository implements IContentRepository {
     @Transactional(readOnly = false)
     public ContentPostEntity findPostForUpdate(Long postId) {
         return toPostEntity(contentPostDao.selectByIdForUpdate(postId));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ContentPostEntity> listPostsByIds(List<Long> postIds) {
+        if (postIds == null || postIds.isEmpty()) {
+            return List.of();
+        }
+        List<ContentPostPO> list = contentPostDao.selectByIds(postIds);
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, ContentPostEntity> map = new HashMap<>();
+        for (ContentPostPO po : list) {
+            ContentPostEntity entity = toPostEntity(po);
+            if (entity == null || entity.getPostId() == null) {
+                continue;
+            }
+            map.put(entity.getPostId(), entity);
+        }
+        List<ContentPostEntity> ordered = new java.util.ArrayList<>(postIds.size());
+        for (Long id : postIds) {
+            ContentPostEntity entity = map.get(id);
+            if (entity != null) {
+                ordered.add(entity);
+            }
+        }
+        return ordered;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ContentPostPageVO listUserPosts(Long userId, String cursor, int limit) {
+        if (userId == null) {
+            return ContentPostPageVO.builder().posts(List.of()).nextCursor(null).build();
+        }
+        int normalizedLimit = Math.max(1, limit);
+        Cursor parsed = Cursor.parse(cursor);
+        List<ContentPostPO> list = contentPostDao.selectByUserPage(userId, parsed.cursorTime, parsed.cursorPostId, normalizedLimit);
+        if (list == null || list.isEmpty()) {
+            return ContentPostPageVO.builder().posts(List.of()).nextCursor(null).build();
+        }
+        List<ContentPostEntity> posts = list.stream().map(this::toPostEntity).filter(Objects::nonNull).collect(Collectors.toList());
+        ContentPostEntity last = posts.get(posts.size() - 1);
+        String nextCursor = last.getCreateTime() == null || last.getPostId() == null
+                ? null
+                : last.getCreateTime() + ":" + last.getPostId();
+        return ContentPostPageVO.builder().posts(posts).nextCursor(nextCursor).build();
     }
 
     @Override
@@ -222,6 +273,33 @@ public class ContentRepository implements IContentRepository {
                 .edited(Objects.equals(po.getIsEdited(), 1))
                 .createTime(po.getCreateTime() == null ? null : po.getCreateTime().getTime())
                 .build();
+    }
+
+    private static final class Cursor {
+        private final Date cursorTime;
+        private final Long cursorPostId;
+
+        private Cursor(Date cursorTime, Long cursorPostId) {
+            this.cursorTime = cursorTime;
+            this.cursorPostId = cursorPostId;
+        }
+
+        private static Cursor parse(String cursor) {
+            if (cursor == null || cursor.isBlank()) {
+                return new Cursor(null, null);
+            }
+            String[] parts = cursor.split(":", 2);
+            if (parts.length != 2) {
+                return new Cursor(null, null);
+            }
+            try {
+                long timeMs = Long.parseLong(parts[0]);
+                long postId = Long.parseLong(parts[1]);
+                return new Cursor(new Date(timeMs), postId);
+            } catch (NumberFormatException e) {
+                return new Cursor(null, null);
+            }
+        }
     }
 
     private ContentHistoryPO toHistoryPO(ContentHistoryEntity entity) {

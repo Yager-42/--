@@ -11,4 +11,12 @@
     <delete id="delete">
         DELETE FROM user_follower WHERE user_id = #{userId} AND follower_id = #{followerId}
     </delete>
+
+    <select id="selectFollowerIds" resultType="java.lang.Long">
+        SELECT follower_id
+        FROM user_follower
+        WHERE user_id = #{userId}
+        ORDER BY id ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
 </mapper>

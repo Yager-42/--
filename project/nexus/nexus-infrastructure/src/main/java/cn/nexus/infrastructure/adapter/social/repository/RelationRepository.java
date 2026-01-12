@@ -91,6 +91,11 @@ public class RelationRepository implements IRelationRepository {
     }
 
     @Override
+    public java.util.List<Long> listFollowerIds(Long userId, Integer offset, Integer limit) {
+        return followerDao.selectFollowerIds(userId, offset, limit);
+    }
+
+    @Override
     public FriendRequestEntity saveFriendRequest(FriendRequestEntity request) {
         FriendRequestPO po = new FriendRequestPO();
         po.setRequestId(request.getRequestId());

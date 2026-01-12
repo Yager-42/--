@@ -60,4 +60,27 @@
           AND version_num = #{expectedVersion}
     </update>
 
+    <select id="selectByIds" resultMap="ContentPostMap">
+        SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        FROM content_post
+        WHERE status = 2
+          AND post_id IN
+        <foreach collection="postIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+    <select id="selectByUserPage" resultMap="ContentPostMap">
+        SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        FROM content_post
+        WHERE user_id = #{userId}
+          AND status = 2
+        <if test="cursorTime != null and cursorPostId != null">
+            AND (create_time &lt; #{cursorTime}
+                 OR (create_time = #{cursorTime} AND post_id &lt; #{cursorPostId}))
+        </if>
+        ORDER BY create_time DESC, post_id DESC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

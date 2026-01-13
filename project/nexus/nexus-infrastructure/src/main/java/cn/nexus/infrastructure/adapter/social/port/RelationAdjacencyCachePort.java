@@ -3,6 +3,7 @@ package cn.nexus.infrastructure.adapter.social.port;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
+import cn.nexus.infrastructure.dao.social.IFollowerDao;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SetOperations;
@@ -22,6 +23,7 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
 
     private final RedisTemplate<String, String> redisTemplate;
     private final IRelationRepository relationRepository;
+    private final IFollowerDao followerDao;
 
     private static final String KEY_FOLLOWING = "social:adj:following:"; // source -> targets
     private static final String KEY_FOLLOWERS = "social:adj:followers:"; // target -> sources（普通用户）
@@ -57,11 +59,13 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
     @Override
     public List<Long> listFollowing(Long sourceId, int limit) {
         if (sourceId == null) return List.of();
-        Set<String> members = redisTemplate.opsForSet().members(KEY_FOLLOWING + sourceId);
+        String key = KEY_FOLLOWING + sourceId;
+        Boolean keyExists = redisTemplate.hasKey(key);
+        Set<String> members = redisTemplate.opsForSet().members(key);
         int dbCount = relationRepository.countRelationsBySource(sourceId, RELATION_FOLLOW);
-        if (members == null || members.size() < dbCount) {
+        if (!Boolean.TRUE.equals(keyExists) || members == null || members.size() < dbCount) {
             rebuildFollowing(sourceId);
-            members = redisTemplate.opsForSet().members(KEY_FOLLOWING + sourceId);
+            members = redisTemplate.opsForSet().members(key);
         }
         return toLimitedList(members, limit);
     }
@@ -105,10 +109,11 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
         }
         evictFollowing(sourceId);
         List<RelationEntity> relations = relationRepository.listRelationsBySource(sourceId, RELATION_FOLLOW);
-        if (relations == null || relations.isEmpty()) {
+        if (relations != null && !relations.isEmpty()) {
+            relations.forEach(rel -> addFollow(rel.getSourceId(), rel.getTargetId()));
             return;
         }
-        relations.forEach(rel -> addFollow(rel.getSourceId(), rel.getTargetId()));
+        rebuildFollowingFromFollowerTable(sourceId);
     }
 
     @Override
@@ -178,6 +183,27 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
             return;
         }
         redisTemplate.delete(KEY_FOLLOWING + userId);
+    }
+
+    private void rebuildFollowingFromFollowerTable(Long followerId) {
+        if (followerId == null) {
+            return;
+        }
+        int offset = 0;
+        int limit = 1000;
+        while (true) {
+            List<Long> followings = followerDao.selectFollowingIds(followerId, offset, limit);
+            if (followings == null || followings.isEmpty()) {
+                break;
+            }
+            for (Long targetId : followings) {
+                addFollow(followerId, targetId);
+            }
+            offset += followings.size();
+            if (followings.size() < limit) {
+                break;
+            }
+        }
     }
 
     private void evictFollowers(Long userId) {

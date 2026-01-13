@@ -12,7 +12,7 @@ import java.util.List;
 /**
  * Feed 分发服务实现：处理内容发布后的写扩散（fanout）。
  *
- * <p>Phase 1 规则：对发布者与其全部粉丝写 InboxTimeline（分页拉粉丝）。</p>
+ * <p>Phase 2 规则：作者自己无条件写入；粉丝仅对 inbox key 存在的用户写入（在线推）。</p>
  *
  * @author codex
  * @since 2026-01-12
@@ -30,6 +30,13 @@ public class FeedDistributionService implements IFeedDistributionService {
     @Value("${feed.fanout.batchSize:200}")
     private int batchSize;
 
+    /**
+     * 执行 fanout：将发布内容写入在线用户的 InboxTimeline。
+     *
+     * <p>在线定义：{@link IFeedTimelineRepository#inboxExists(Long)} 为 true。</p>
+     *
+     * @param event 内容发布事件 {@link PostPublishedEvent}
+     */
     @Override
     public void fanout(PostPublishedEvent event) {
         if (event == null) {
@@ -55,6 +62,9 @@ public class FeedDistributionService implements IFeedDistributionService {
                 if (followerId == null || followerId.equals(authorId)) {
                     continue;
                 }
+                if (!feedTimelineRepository.inboxExists(followerId)) {
+                    continue;
+                }
                 feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
             }
             offset += followerIds.size();
@@ -64,4 +74,3 @@ public class FeedDistributionService implements IFeedDistributionService {
         }
     }
 }
-

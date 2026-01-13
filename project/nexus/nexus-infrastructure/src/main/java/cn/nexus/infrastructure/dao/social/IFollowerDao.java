@@ -22,4 +22,16 @@ public interface IFollowerDao {
     java.util.List<Long> selectFollowerIds(@Param("userId") Long userId,
                                            @Param("offset") Integer offset,
                                            @Param("limit") Integer limit);
+
+    /**
+     * 分页查询某个用户关注的对象 ID 列表（反向表：我关注了谁）。
+     *
+     * @param followerId 关注者 ID
+     * @param offset     偏移量（从 0 开始）
+     * @param limit      单页数量
+     * @return 关注对象 ID 列表
+     */
+    java.util.List<Long> selectFollowingIds(@Param("followerId") Long followerId,
+                                            @Param("offset") Integer offset,
+                                            @Param("limit") Integer limit);
 }

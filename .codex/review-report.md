@@ -19,3 +19,22 @@
 
 - 明确统一的 key 命名与 TTL/容量配置位置（配置中心 / application.yml）。
 - 事件去重命名：现有 `RelationEventInboxPort` 更像 outbox/去重表；Feed 侧实现时建议命名准确，避免概念污染。
+
+## 2026-01-13（点赞链路方案文档）
+
+综合评分：90 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：已把“Redis 秒回 + 延迟落库 + 实时监控 + 离线分析”拆成可实现的契约（Key/表/Topic/时序/验收点）。
+- 数据结构优先：按 user 侧集合做幂等、按 target 侧计数做展示、用 sync/dirty/touched 收敛窗口 flush，特殊情况被压到 Lua 原子脚本里。
+- 复用优先：延迟队列明确复用本仓库 `x-delayed-message` 模式（`ContentScheduleDelayConfig/Producer`），避免自研 scheduler。
+
+### 致命问题（实现前必须先拍板）
+
+- `ReactionRequestDTO` 缺 `userId`：没有 userId 不能判定“是否已点赞”，这会直接破坏幂等与计数正确性（用户可见 bug）。
+
+### 改进方向（不阻塞交付，但能让实现更干净）
+
+- 明确目标范围：`targetType` 只支持 `POST/COMMENT` 还是还包括其它实体，避免 key/schema 未来被迫迁移。
+- 明确窗口参数：windowSeconds/delayBufferSeconds/阈值必须配置化，别硬编码在服务里。

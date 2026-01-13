@@ -27,3 +27,15 @@ mybatis:
   mapper-locations: classpath*:mapper/social/*.xml
   configuration:
     map-underscore-to-camel-case: true
+
+feed:
+  inbox:
+    maxSize: 1000
+    ttlDays: 30
+  fanout:
+    batchSize: 200
+  rebuild:
+    perFollowingLimit: 20
+    inboxSize: 200
+    maxFollowings: 2000
+    lockSeconds: 30

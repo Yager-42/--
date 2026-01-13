@@ -1,5 +1,5 @@
 {
-  "date": "2026-01-12",
+  "date": "2026-01-13",
   "executor": "Codex (Linus mode)",
   "cwd": "C:/Users/Administrator/Desktop/文档",
   "projectRoot": "C:/Users/Administrator/Desktop/文档/project/nexus",
@@ -15,6 +15,7 @@
   "keyDocs": [
     ".codex/DDD-ARCHITECTURE-SPECIFICATION.md",
     ".codex/distribution-feed-implementation.md",
+    ".codex/interaction-like-pipeline-implementation.md",
     "社交接口.md",
     "社交领域.md",
     "社交领域数据库.md",
@@ -22,6 +23,7 @@
   ],
   "currentState": {
     "feed": "FeedController + IFeedService/FeedService 已落地 Phase 1：timeline 读 Redis inbox(ZSET) + MySQL 批量查内容 + 负反馈过滤；profile 读 MySQL；negative feedback 写 Redis SET。",
+    "interaction": "InteractionController + /api/v1/interact/reaction 已存在，但 InteractionService.react 仍为占位；已新增 .codex/interaction-like-pipeline-implementation.md 定义“点赞计数 + 延迟落库 + 实时监控 + 离线分析”的实现契约。",
     "content": "content_post/content_history/content_schedule 等仓储与 DAO 已存在（MyBatis）",
     "relation": "RelationRepository/DAO 已存在；Follower 反向表支持分页拉粉丝 ID；RabbitMQ 已新增 Feed fanout 事件链路。",
     "timelineStorage": "已实现：FeedTimelineRepository（Redis ZSET：feed:inbox:{userId}）+ FeedNegativeFeedbackRepository（Redis SET：feed:neg:{userId}）。Phase 2 在线推/离线拉在 .codex/distribution-feed-implementation.md 中规划。"
@@ -47,10 +49,12 @@
   "observations": [
     "接口文档明确要求分发/Feed 支持写扩散、读扩散与混合排序；目前已落地 Phase 1（写扩散 + FOLLOW timeline + 最小负反馈），Phase 2/3 按文档继续推进。",
     "数据库文档明确建议：Feed Timeline 不存 MySQL，应使用 Redis(List/ZSet) 或 NoSQL。",
-    "现有 RabbitMQ 事件发布模式可复用到 Post_Published -> fanout -> Timeline 写入链路。"
+    "现有 RabbitMQ 事件发布模式可复用到 Post_Published -> fanout -> Timeline 写入链路。",
+    "互动点赞链路仍为占位；若要按“点赞/取消点赞”实现幂等，必须能在服务端拿到 userId（当前 ReactionRequestDTO 未包含）。"
   ],
   "openQuestionsForImplementation": [
     "RabbitMQ 消息序列化/MessageConverter 是否统一为 JSON（当前未发现显式 Jackson2JsonMessageConverter 配置）",
+    "ReactionRequestDTO 未包含 userId：点赞幂等与用户态判断从哪里取 userId（DTO 字段 / 网关注入 / 鉴权上下文）？",
     "Phase 2 的离线重建（断流/无 key）触发方式与参数（K/M）是否需要产品/运维对齐",
     "Phase 3 推荐/排序与更多 feedType 的扩展边界（FOLLOW 之外何时做）",
     "feed.* 配置项默认值（maxSize/ttlDays/batchSize）是否需要与实际容量/性能目标对齐"

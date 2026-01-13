@@ -19,4 +19,12 @@
         ORDER BY id ASC
         LIMIT #{limit} OFFSET #{offset}
     </select>
+
+    <select id="selectFollowingIds" resultType="java.lang.Long">
+        SELECT user_id
+        FROM user_follower
+        WHERE follower_id = #{followerId}
+        ORDER BY id ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
 </mapper>

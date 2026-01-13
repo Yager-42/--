@@ -34,5 +34,28 @@ public interface IFeedNegativeFeedbackRepository {
      * @return true=存在负反馈，false=不存在
      */
     boolean contains(Long userId, Long targetId);
-}
 
+    /**
+     * 记录负反馈的内容类型（Phase 2：以 content_post.media_type 作为“内容类型”维度）。
+     *
+     * @param userId    用户 ID {@link Long}
+     * @param mediaType 内容媒体类型 {@link Integer}
+     */
+    void addContentType(Long userId, Integer mediaType);
+
+    /**
+     * 撤销负反馈的内容类型。
+     *
+     * @param userId    用户 ID {@link Long}
+     * @param mediaType 内容媒体类型 {@link Integer}
+     */
+    void removeContentType(Long userId, Integer mediaType);
+
+    /**
+     * 查询用户负反馈的内容类型集合（用于读侧过滤）。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @return 内容媒体类型集合 {@link java.util.Set} {@link Integer}
+     */
+    java.util.Set<Integer> listContentTypes(Long userId);
+}

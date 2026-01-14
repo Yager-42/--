@@ -51,4 +51,25 @@ public interface IFeedTimelineRepository {
      * @return 分页结果（postIds + nextCursor） {@link FeedIdPageVO}
      */
     FeedIdPageVO pageInbox(Long userId, String cursor, int limit);
+
+    /**
+     * 分页读取用户 InboxTimeline 的索引条目列表（带 publishTimeMs score，用于 Max_ID 多源合并）。
+     *
+     * <p>Max_ID 语义：publishTimeMs DESC + postId DESC。</p>
+     *
+     * @param userId       用户 ID {@link Long}
+     * @param cursorTimeMs 游标时间（首页传 null 表示从最新开始） {@link Long}
+     * @param cursorPostId 游标 postId（首页传 null 表示从最新开始） {@link Long}
+     * @param limit        单页数量 {@code int}
+     * @return 索引条目列表 {@link List} {@link FeedInboxEntryVO}
+     */
+    List<FeedInboxEntryVO> pageInboxEntries(Long userId, Long cursorTimeMs, Long cursorPostId, int limit);
+
+    /**
+     * 从 InboxTimeline 删除一条索引（幂等）。用于读时修复后的懒清理。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @param postId 内容 ID {@link Long}
+     */
+    void removeFromInbox(Long userId, Long postId);
 }

@@ -79,3 +79,25 @@
 
 - Redis pipeline：worker 内 `inboxExists` 与 `ZADD` 可对一个 batch pipeline，减少 1:1 往返（10.6.*）。
 - 触发器薄度：dispatcher 目前直接依赖仓储接口（而非领域服务），是可接受的折中，但后续若要统一编排可考虑下沉为 domain 的“拆片计算器”（返回任务列表给 trigger 发送）。
+
+## 2026-01-14（Feed 10.5.2 ~ 10.5.7 落地）
+
+综合评分：89 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：按 `.codex/distribution-feed-implementation.md` 落地 10.5.2~10.5.7（follow 补偿 / Outbox+大V / 铁粉推 / 聚合池 / Max_ID / 读时懒清理），保持 `/api/v1/feed/*` 契约与 DTO 字段不变。
+- 数据结构优先：Outbox/Pool/Inbox 都使用 Redis ZSET（member=postId，score=publishTimeMs）；铁粉集合使用 Redis SET（`feed:corefans:{authorId}`）。
+- 特殊情况收敛：timeline 不再依赖 `ZREVRANK` 的“cursor member 必须存在”前提；内部统一用 Max_ID（time+postId）做稳定翻页与多源合并。
+- 零破坏性：对外 timeline `nextCursor` 仍返回 `postId` 字符串（兼容旧行为）；服务端通过 `ContentRepository.findPost(postId)` 反查时间戳。
+- 读时修复：不做写扩散回撤；读侧发现 `status!=2` 的缺失 postId 时进行索引懒清理，避免反复 miss。
+
+### 致命问题（需要记住，但本次不扩范围）
+
+- 大 V 判定的读侧成本：当用户关注对象很多且聚合池关闭时，可能触发多次 `countFollowerIds`（MySQL COUNT）；当前通过 `feed.bigv.pull.maxBigvFollowings` 与 `feed.bigv.pool.triggerFollowings` 做兜底，但后续可考虑缓存/离线标记进一步降本。
+- 聚合池模式的回表规模：`feed.bigv.pool.fetchFactor` 过大可能导致一次请求回表过多 postIds；建议保持默认并在压测后再调大。
+
+### 改进方向（不阻塞交付）
+
+- 把 `FeedService.timeline` 的“候选合并/游标解析/懒清理”抽成更小的组件，避免 Service 文件过长。
+- 负反馈过滤可升级为批量化（`SMEMBERS` 或 pipeline），减少 N 次 `SISMEMBER`（对应 10.6.2）。

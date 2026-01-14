@@ -38,3 +38,19 @@
 - 代码入口唯一性：确认 `feed.post.published.queue` 只由 `FeedFanoutDispatcherConsumer` 监听
 - consumer 链路完整：确认 `feed.fanout.task.queue` 由 `FeedFanoutTaskConsumer` 监听
 - 文档同步：`.codex/distribution-feed-implementation*.md` 已将 10.5.1 标记为已落地并给出落点文件清单
+
+### Feed 10.5.2 ~ 10.5.7（已落地）
+
+本次交付落地了关注流“生产级演进”的 10.5.2 ~ 10.5.7：follow 在线补偿、Outbox+大V隔离、铁粉推、聚合池、Max_ID（内部）分页与读时懒清理。
+
+按用户要求，未执行 Maven 编译/测试，仅做静态自检：
+- 写侧链路：确认 `FeedFanoutDispatcherConsumer` 永远写 Outbox，且大 V 分支不投递全量 fanout task（只推铁粉 + 可选入池）
+- 读侧链路：确认 `FeedService.timeline` 不再依赖 `ZREVRANK`，改为 `pageInboxEntries(WITHSCORES)` 并合并 Outbox/Pool
+- 接口契约：`/api/v1/feed/*` 路由与 DTO 字段未变；timeline 的 `nextCursor` 仍返回字符串形式的 `postId`
+- 懒清理：确认 `IFeedTimelineRepository.removeFromInbox` / `IFeedOutboxRepository.removeFromOutbox` / `IFeedBigVPoolRepository.removeFromPool` 已提供并在 timeline 读侧触发
+
+建议后续人工验收（需要 MySQL + Redis + RabbitMQ）：
+- 10.5.2：A 关注 B（status=ACTIVE），若 A 在线（inbox key 存在）则 A timeline 立刻出现 B 最近内容
+- 10.5.3/10.5.6：将 `feed.bigv.followerThreshold` 临时调小（便于造数），验证“大 V 发布不推全量 fanout”但 timeline 仍能通过 Outbox 合并读到
+- 10.5.5：开启 `feed.bigv.pool.enabled=true` 并让关注数超过 `feed.bigv.pool.triggerFollowings`，验证读侧走聚合池分桶读取
+- 10.5.7：将某些 `content_post.status` 改为非 2，验证 timeline 读侧不返回该内容，且后续 Redis 索引不会反复 miss（索引被懒清理）

@@ -3,8 +3,8 @@
 ## 本次交付内容
 
 - `.codex/context-scan.json`：项目结构/技术栈/现状扫描结果。
-- `.codex/distribution-feed-implementation.md`：分发与 Feed 服务实现方案（MVP → 优化 → 排序推荐，已落地 10.5.1 fanout 大任务切片）。
-- `.codex/distribution-feed-implementation-ezRead.md`：当前代码实现快照说明（Phase 1 + Phase 2 + 10.5.1 切片链路快照）。
+- `.codex/distribution-feed-implementation.md`：分发与 Feed 服务实现方案（MVP → 优化 → 排序推荐，已落地 10.5.1 ~ 10.5.7）。
+- `.codex/distribution-feed-implementation-ezRead.md`：当前代码实现快照说明（Phase 1 + Phase 2 + 10.5.2~10.5.7 快照）。
 - `.codex/interaction-like-pipeline-implementation.md`：点赞/取消点赞计数方案（Redis 秒回 + 延迟落库 + 实时监控 + 离线分析，已补齐读链路、收敛 Redis 数据结构，并补充“热点探测 + L1 Caffeine + 可选 TaiShan KV”章节）。
 - `.codex/operations-log.md`：关键决策记录。
 - `.codex/review-report.md`：自检审查报告。
@@ -18,6 +18,11 @@
 补充（10.5.1）：打开 `.codex/distribution-feed-implementation.md` 的 `10.5.1`，只看两件事：
 1) 是否明确“拆片（dispatcher）”与“执行片（worker）”的职责边界？（不允许一个 consumer 做完全部 fanout）
 2) 是否明确“失败只重试切片”的粒度与幂等点？（ZSET member 幂等）
+
+补充（10.5.2~10.5.7）：打开 `.codex/distribution-feed-implementation-ezRead.md`，只看三件事：
+1) follow 补偿：关注成功后（ACTIVE）在线用户是否立刻看到新关注者最近内容？
+2) 大 V 隔离：大 V 发布是否“只写 outbox/铁粉”，读侧是否能合并读取到？
+3) Max_ID + 懒清理：翻页是否稳定推进；读时发现无效内容是否会顺手清掉索引，避免反复 miss？
 
 补充（点赞链路）：打开 `.codex/interaction-like-pipeline-implementation.md`，只看两件事：
 1) 你是否接受“先写 Redis 秒回，几分钟后再批量落库”的一致性策略？

@@ -1,5 +1,8 @@
 package cn.nexus.domain.social.service;
 
+import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedCoreFansRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.types.event.PostPublishedEvent;
@@ -23,12 +26,29 @@ public class FeedDistributionService implements IFeedDistributionService {
 
     private final IRelationRepository relationRepository;
     private final IFeedTimelineRepository feedTimelineRepository;
+    private final IFeedOutboxRepository feedOutboxRepository;
+    private final IFeedCoreFansRepository feedCoreFansRepository;
+    private final IFeedBigVPoolRepository feedBigVPoolRepository;
 
     /**
      * fanout 粉丝批量大小，默认 200。
      */
     @Value("${feed.fanout.batchSize:200}")
     private int batchSize;
+
+    /**
+     * 大 V 判定阈值：粉丝数 >= 阈值则默认不做“全量写扩散”，改为读侧拉 Outbox（默认 500000）。
+     *
+     * <p>阈值 <= 0 表示禁用大 V 逻辑（始终走普通 fanout）。</p>
+     */
+    @Value("${feed.bigv.followerThreshold:500000}")
+    private int bigvFollowerThreshold;
+
+    /**
+     * 大 V 发布时最多推送的铁粉数量（默认 2000）。
+     */
+    @Value("${feed.bigv.coreFanMaxPush:2000}")
+    private int coreFanMaxPush;
 
     /**
      * 执行 fanout：将发布内容写入在线用户的 InboxTimeline。
@@ -49,7 +69,15 @@ public class FeedDistributionService implements IFeedDistributionService {
             return;
         }
 
+        feedOutboxRepository.addToOutbox(authorId, postId, publishTimeMs);
         feedTimelineRepository.addToInbox(authorId, postId, publishTimeMs);
+
+        int followerCount = relationRepository.countFollowerIds(authorId);
+        if (followerCount > 0 && bigvFollowerThreshold > 0 && followerCount >= bigvFollowerThreshold) {
+            feedBigVPoolRepository.addToPool(authorId, postId, publishTimeMs);
+            pushToCoreFans(authorId, postId, publishTimeMs);
+            return;
+        }
 
         int offset = 0;
         int limit = Math.max(1, batchSize);
@@ -87,6 +115,26 @@ public class FeedDistributionService implements IFeedDistributionService {
             return;
         }
         for (Long followerId : followerIds) {
+            if (followerId == null || followerId.equals(authorId)) {
+                continue;
+            }
+            if (!feedTimelineRepository.inboxExists(followerId)) {
+                continue;
+            }
+            feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
+        }
+    }
+
+    private void pushToCoreFans(Long authorId, Long postId, Long publishTimeMs) {
+        int limit = Math.max(0, coreFanMaxPush);
+        if (limit == 0) {
+            return;
+        }
+        List<Long> coreFans = feedCoreFansRepository.listCoreFans(authorId, limit);
+        if (coreFans == null || coreFans.isEmpty()) {
+            return;
+        }
+        for (Long followerId : coreFans) {
             if (followerId == null || followerId.equals(authorId)) {
                 continue;
             }

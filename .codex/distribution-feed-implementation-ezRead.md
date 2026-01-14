@@ -5,14 +5,20 @@
 
 ## 0. 本次完善（已落地）
 - 写扩散链路：`ContentService.publish` 成功分支 → `IContentDispatchPort.onPublished` → RabbitMQ → `FeedFanoutDispatcherConsumer`（拆片）→ `FeedFanoutTaskConsumer`（执行片）→ `FeedDistributionService.fanoutSlice` → Redis InboxTimeline 写入（作者 inbox 由 dispatcher 保底写入）。
+- 10.5.2 follow 补偿：`relation.follow.queue` → `RelationEventListener.handleFollow(status=ACTIVE)` → `FeedFollowCompensationService.onFollow` → 在线用户回填“新关注的人”的最近 K 条到 inbox。
+- 10.5.3 Outbox + 大 V：dispatcher 永远写 `feed:outbox:{authorId}`；大 V（粉丝数≥阈值）不投递全量 fanout task，读侧合并读取 Outbox。
+- 10.5.4 铁粉推：大 V 发布只推送 `feed:corefans:{authorId}`（SET）中的铁粉，数量受 `feed.bigv.coreFanMaxPush` 限制。
+- 10.5.5 大 V 聚合池（可选）：开启 `feed.bigv.pool.enabled` 后，大 V 发布写入 `feed:bigv:pool:{bucket}`；读侧在关注数较大时用聚合池替代逐个 outbox 拉取。
+- 10.5.6 Max_ID（内部）：timeline 读侧基于 `WITHSCORES` 做稳定分页与多源合并；对外 `nextCursor` 仍返回 `postId`（兼容）。
+- 10.5.7 读时懒清理：回表发现 `status!=2` 导致的缺失 postId 时，清理 inbox/outbox/pool 索引，避免反复 miss。
 - 消息模型：新增 `PostPublishedEvent`（`nexus-types`），承载 `postId/authorId/publishTimeMs`。
 - MQ 拓扑：`FeedFanoutConfig` 声明 `social.feed`（DirectExchange）+ `feed.post.published.queue`（`post.published`）+ `feed.fanout.task.queue`（`feed.fanout.task`）。
 - fanout 切片：新增 `FeedFanoutTask`（`nexus-types`）承载 `offset/limit`，将“大 fanout”拆成多个可并行消费的小任务，失败只重试切片。
 - 粉丝分页：补齐 `IFollowerDao.selectFollowerIds` + `IRelationRepository.listFollowerIds`，fanout 分页拉粉丝避免一次性全量。
-- InboxTimeline：新增 `IFeedTimelineRepository` + Redis 实现（ZSET：member=postId，score=publishTimeMs），支持 cursor 分页、NoMore 哨兵、读侧刷新 TTL 与原子化重建。
+- InboxTimeline：新增 `IFeedTimelineRepository` + Redis 实现（ZSET：member=postId，score=publishTimeMs），支持 cursor 分页（兼容）+ Max_ID 条目分页（WITHSCORES）+ NoMore 哨兵 + 读侧刷新 TTL + 原子化重建 + `removeFromInbox` 懒清理入口。
 - 负反馈：扩展 `IFeedNegativeFeedbackRepository`，同时支持 **postId** 维度与 **内容类型（content_post.media_type）** 维度过滤（Redis SET）。
 - 读侧回表：扩展 `IContentPostDao`/`ContentPostMapper.xml` 支持 `selectByIds`（timeline 批量回表）与 `selectByUserPage`（个人页 cursor 分页）。
-- FeedService：替换占位实现为真实实现（timeline/profile/负反馈），保持 `/api/v1/feed/*` 契约与 DTO 不变。
+- FeedService：替换占位实现为真实实现（timeline/profile/负反馈），timeline 已升级为“合并 Inbox + Outbox/Pool + 内部 Max_ID + 懒清理”，保持 `/api/v1/feed/*` 契约与 DTO 不变。
 - Phase 2：在线推 / 离线拉（方案 A）：以 inbox key 是否存在定义在线；fanout 仅写入在线用户；timeline 首页 inbox miss 自动重建（原子 replaceInbox + NoMore）。
 - 修复：离线重建关注列表回源 —— `RelationAdjacencyCachePort.listFollowing` 在缓存 key miss 或 relation 表缺失时，从 `user_follower` 回源“我关注了谁”，避免重建空 inbox。
 
@@ -37,9 +43,11 @@
 ## 2. 数据流与幂等性
 ### 2.1 写链路（fanout）
 - 输入：`PostPublishedEvent(postId, authorId, publishTimeMs)`
-- fanout 规则（Phase 2）：
-  - 作者无条件写入 inbox；粉丝仅写入 inbox key 存在的用户（在线推）
-  - 分页拉取粉丝列表（来自 `user_follower` 反向表）并对在线粉丝写入 inbox
+- fanout 规则（Phase 2 + 10.5.3+）：
+  - 永远写 Outbox：`feed:outbox:{authorId}`（ZSET）
+  - 作者无条件写入 inbox（发布者体验保底）
+  - 普通作者：分页拉取粉丝列表（`user_follower` 反向表）并仅对在线粉丝写入 inbox（在线推）
+  - 大 V（粉丝数≥阈值）：默认不投递全量 fanout task，仅推送铁粉集合；其余粉丝通过读侧拉 Outbox（可选启用聚合池）
 - 幂等性：
   - MQ 至少一次投递可能重复消费
   - Redis ZSET 的 `ZADD` 对同一 member（postId）天然幂等（重复写不会产生重复条目）
@@ -50,12 +58,17 @@
 ### 2.2 读链路（timeline/profile）
 - timeline：
   - 首页（cursor 为空）且 inbox key miss：触发 `FeedInboxRebuildService.rebuildIfNeeded(userId)` 离线重建
-  - Redis inbox 分页得到 `postIds`（cursor=上一页最后一个 postId）
+  - cursor（兼容）：对外仍返回 `postId`；服务端用 `ContentRepository.findPost(postId)` 取 `createTime`，内部按 Max_ID（`publishTimeMs+postId`）分页与合并
+  - Redis inbox 分页得到索引条目（`WITHSCORES`，拿到 `publishTimeMs`）
+  - 大 V 候选来源：
+    - 默认：对关注列表做大 V 判定，合并读取对应作者 Outbox
+    - 可选：开启聚合池且关注数超过阈值时，改为读聚合池（再按“我关注的作者”过滤）
+  - 合并：Inbox + Outbox/Pool → 去重 → 排序截断（按 `publishTimeMs DESC, postId DESC`）
   - 负反馈过滤（两层）：
     - postId 维度：对每个 postId 执行 `SISMEMBER feed:neg:{userId} postId`
     - 内容类型维度：读取 `feed:neg:type:{userId}`，回表后按 `content_post.media_type` 过滤
-  - MySQL 批量回表：`content_post` 按 `postIds` 顺序组装，映射为 `FeedItemVO`
-  - `nextCursor` 取 Redis page 的 lastPostId（不因过滤而改变）
+  - MySQL 批量回表：`content_post` 按候选 `postIds` 顺序组装，映射为 `FeedItemVO`（并在回表后对“缺失 postId”做索引懒清理）
+  - `nextCursor` 取“本次扫描候选列表”的 lastPostId（不因负反馈过滤而改变，避免卡住）
 - profile：
   - MySQL cursor 分页：`selectByUserPage(userId, cursorTime, cursorPostId, limit)`（`ORDER BY create_time DESC, post_id DESC`）
   - `nextCursor` 生成规则：`{lastCreateTimeMs}:{lastPostId}`
@@ -166,20 +179,23 @@ graph TD
 4) A 对某 postId 提交负反馈后再次拉取（验证过滤生效）再撤销验证恢复
 
 ## 7. 剩余不足（Phase 1 之外 / 非阻塞）
-- 对标关注流“生产级演进”的改进方案已写成可落地实现说明：详见 `.codex/distribution-feed-implementation.md` 的 `10.5.1` ~ `10.5.7`；性能/可运维改进详见 `10.6`。
+- 对标关注流“生产级演进”的关键方案（`10.5.1` ~ `10.5.7`）已按实现文档落地；性能/可运维改进仍建议按 `10.6` 逐步补齐。
 - Phase 3 未实现：推荐与排序（关注 + 推荐召回、排序演进），但实现级方案已补齐，详见 `.codex/distribution-feed-implementation.md` 的 `11`。
-- follow 的即时回填未做：`RelationEventListener.handleFollow` 目前仍是占位触达，最小补偿方案详见 `.codex/distribution-feed-implementation.md` 的 `10.5.2`。
-- cursor 断流修复未做：当 cursor 对应 member 被裁剪导致 `ZREVRANK` 找不到时，目前返回空页（可选：升级为 Max_ID + `ZREVRANGEBYSCORE`，详见 `.codex/distribution-feed-implementation.md` 的 `10.5.6`）。
-- fanout 大任务切片已落地：`PostPublishedEvent` → `FeedFanoutTask(offset,limit)` 并行消费，失败重试只重试这一片（详见 `.codex/distribution-feed-implementation.md` 的 `10.5.1`）。
+- unfollow 仍无接口/事件：`.codex/distribution-feed-implementation.md` 的 `10.5.2.2` 仅保留实现级说明（当前不做回收历史或 evict inbox）。
+- 铁粉集合生成未实现：当前只提供 `IFeedCoreFansRepository` 查询契约与写侧推送入口；铁粉集合建议复用互动计数/亲密度产出（见 `.codex/interaction-like-pipeline-implementation.md`）。
+- 聚合池默认关闭：开启 `feed.bigv.pool.enabled` 前，建议确认确实存在“关注很多大 V 导致 N 次 outbox 读”的规模问题。
 - MQ 序列化未显式统一为 JSON（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.1`）。
 - timeline 负反馈过滤是逐条 `SISMEMBER`（N 次 Redis 调用），高 QPS 场景可考虑批量化策略（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.2`）。
-- 大 V 隔离/聚合池/读时修复异步清理等仍未落地（详见 `.codex/distribution-feed-implementation.md` 的 `10.5.3` ~ `10.5.7`）。
+- 异步清理未落地：当前为读时懒清理；若不想在读接口里做写操作，可按 `10.5.7.3` 补齐 `feed.index.cleanup` MQ 异步清理。
 - 内容负反馈已升级为“内容类型（media_type）”维度；若要更细粒度“业务类目/标签”，详见 `.codex/distribution-feed-implementation.md` 的 `10.6.6`。
 
 ## 8. 配置示例（application-dev.yml）
 ```yml
 feed:
   inbox:
+    maxSize: 1000
+    ttlDays: 30
+  outbox:
     maxSize: 1000
     ttlDays: 30
   fanout:
@@ -189,6 +205,22 @@ feed:
     inboxSize: 200
     maxFollowings: 2000
     lockSeconds: 30
+  follow:
+    compensate:
+      recentPosts: 20
+  bigv:
+    followerThreshold: 500000
+    coreFanMaxPush: 2000
+    pull:
+      maxBigvFollowings: 200
+      perBigvLimit: 50
+    pool:
+      enabled: false
+      buckets: 4
+      maxSizePerBucket: 500000
+      ttlDays: 7
+      fetchFactor: 30
+      triggerFollowings: 200
 ```
 
 ## 9. 关键文件清单（便于 CR）
@@ -207,3 +239,7 @@ feed:
 - Redis 负反馈：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedNegativeFeedbackRepository.java`
 - FeedService：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java`
 - Content 回表 SQL：`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/ContentPostMapper.xml`
+- follow 补偿：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedFollowCompensationService.java` + `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedFollowCompensationService.java` + `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationEventListener.java`
+- Outbox：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedOutboxRepository.java` + `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedOutboxRepository.java` + `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/config/FeedOutboxProperties.java`
+- 铁粉集合：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedCoreFansRepository.java` + `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedCoreFansRepository.java`
+- 大 V 聚合池：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedBigVPoolRepository.java` + `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedBigVPoolRepository.java` + `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/config/FeedBigVPoolProperties.java`

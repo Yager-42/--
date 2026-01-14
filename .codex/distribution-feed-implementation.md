@@ -80,12 +80,12 @@
 
 - [ ] Phase 3：推荐与排序(当前不要实现)
 - [x] 10.5.1 fanout 大任务切片（规模化）
-- [ ] 10.5.2 follow/unfollow 最小补偿（体验补偿）
-- [ ] 10.5.3 Outbox + 大 V 隔离（推拉结合）
-- [ ] 10.5.4 粉丝分层（铁粉推 / 路人拉；铁粉集合生成也未实现）
-- [ ] 10.5.5 大 V 聚合池（关注大 V 过多的拉取兜底）
-- [ ] 10.5.6 Max_ID（瀑布流）分页
-- [ ] 10.5.7 读时修复后的索引清理（懒清理/异步清理）
+- [x] 10.5.2 follow/unfollow 最小补偿（体验补偿）
+- [x] 10.5.3 Outbox + 大 V 隔离（推拉结合）
+- [x] 10.5.4 粉丝分层（铁粉推 / 路人拉；铁粉集合生成也未实现）
+- [x] 10.5.5 大 V 聚合池（关注大 V 过多的拉取兜底）
+- [x] 10.5.6 Max_ID（瀑布流）分页
+- [x] 10.5.7 读时修复后的索引清理（懒清理/异步清理）
 
 #### 可改进点（不影响 Phase 2 正确性）
 
@@ -1129,6 +1129,12 @@ consume(FeedFanoutTask t):
 
 来源标注：《从小白到架构师(4): Feed 流系统实战》
 
+> ✅ 已落地（2026-01-14）：follow 的在线补偿已实现；unfollow 仍保持“文档预留”。  
+> 落点文件：  
+> - domain：`IFeedFollowCompensationService` / `FeedFollowCompensationService`  
+> - trigger：`RelationEventListener.handleFollow`（status=ACTIVE 时触发补偿）  
+> 配置：`feed.follow.compensate.recentPosts`（默认 20）
+
 当前仓库现状：只有 follow 接口（`/api/v1/relation/follow`），**没有 unfollow**。
 因此这里给出两件事：
 1) follow 的体验补偿（可直接实现）
@@ -1206,6 +1212,11 @@ feed:
 #### 10.5.3 大 V 隔离：Outbox + 混合读取（推拉结合）
 
 来源标注：《字节三面挂了！问 “抖音关注流怎么设计”，我答 “推模式”，面试官：顶流大V发一条视频，你打算写 1 亿次 Redis？》
+
+> ✅ 已落地（2026-01-14）：Outbox + 大 V 判定 + 读侧合并读取已实现。  
+> 写侧落点：`IFeedOutboxRepository` / `FeedOutboxRepository` / `FeedFanoutDispatcherConsumer` / `FeedDistributionService`  
+> 读侧落点：`FeedService.timeline`（合并 Inbox + Outbox/Pool，并使用 Max_ID 内部游标）  
+> 关键配置：`feed.outbox.*`、`feed.bigv.followerThreshold`、`feed.bigv.pull.*`、`feed.bigv.pool.*`
 
 我们当前 Phase 2 的混合点是“用户是否在线（inbox key 是否存在）”，它解决的是资源回收与离线回归，但对“顶流大 V 写放大”没有根治：如果某作者有大量在线粉丝，依然可能写很多次 Redis。
 
@@ -1366,6 +1377,10 @@ timeline(userId, cursor, limit):
 
 来源标注：同上
 
+> ✅ 已落地（2026-01-14）：铁粉集合仓储 + 写侧“只推铁粉”已落地。  
+> 落点文件：`IFeedCoreFansRepository` / `FeedCoreFansRepository` / `FeedFanoutDispatcherConsumer` / `FeedDistributionService`  
+> 关键配置：`feed.bigv.coreFanMaxPush`（默认 2000）
+
 在 10.5.3 的基础上进一步分层：
 - 铁粉（高频互动/高活跃）：即使是大 V 也推送到 Inbox（体验优先）
 - 普通粉/僵尸粉：拉模式（成本优先）
@@ -1417,6 +1432,10 @@ if isBigV(authorId):
 
 来源标注：同上（Q2）
 
+> ✅ 已落地（2026-01-14）：聚合池仓储 + 写侧入池 + 读侧按需读池已实现（默认开关关闭）。  
+> 落点文件：`IFeedBigVPoolRepository` / `FeedBigVPoolRepository` / `FeedBigVPoolProperties` / `FeedService.timeline`  
+> 关键配置：`feed.bigv.pool.*`（`enabled/buckets/maxSizePerBucket/ttlDays/fetchFactor/triggerFollowings`）
+
 当用户关注的大 V 很多时，即使有 Outbox，逐个拉 Outbox 也会慢（N 个 Outbox → N 次 Redis 读）。
 
 本节提供一个“只用 Redis 就能落地”的兜底：把多次读变成一次读。
@@ -1441,6 +1460,7 @@ feed:
       maxSizePerBucket: 500000
       ttlDays: 7
       fetchFactor: 30
+      triggerFollowings: 200
 ```
 
 字段解释：
@@ -1504,6 +1524,12 @@ mergeCandidates = inboxEntries + toEntries(onlyFollowedBigV)
 #### 10.5.6 Max_ID（瀑布流）分页（替换/增强 ZREVRANK）
 
 来源标注：同上（Q1）
+
+> ✅ 已落地（2026-01-14）：对外 cursor 仍保持 `postId`（兼容），服务端内部升级为 Max_ID 游标并支持多源合并。  
+> 关键落点：  
+> - domain：`IFeedTimelineRepository.pageInboxEntries/removeFromInbox`、`FeedService.timeline`  
+> - infrastructure：`FeedTimelineRepository.pageInboxEntries`（`ZREVRANGEBYSCORE ... WITHSCORES` + Max_ID 过滤 + NoMore 过滤）  
+> - outbox/pool：`pageOutbox/pagePool` 统一使用同一套 Max_ID 语义
 
 当前 timeline cursor=postId + `ZREVRANK`，当 cursor 被裁剪/过期会断流返回空页；并且在 10.5.3/10.5.5 “多源合并”场景下很难做稳定分页。
 
@@ -1572,6 +1598,9 @@ void removeFromInbox(Long userId, Long postId);
 #### 10.5.7 读时修复（删除/下架不做“回撤 fanout”）
 
 来源标注：同上（Q3）
+
+> ✅ 已落地（2026-01-14）：timeline 回表后发现“无效 postId”会进行懒清理（写时不回撤 fanout）。  
+> 落点：`FeedService.timeline` 在回表后对缺失 postId 执行 `removeFromInbox/removeFromOutbox/removeFromPool`（找不到 authorId 时至少清 inbox）。
 
 写扩散回撤太贵，所以删除/下架只改元数据（本项目体现为 `content_post.status != 2`）。
 读侧回表时天然会过滤掉无效内容（`selectByIds`/`selectByUserPage` 都限定 `status=2`），这就是“读时修复”。

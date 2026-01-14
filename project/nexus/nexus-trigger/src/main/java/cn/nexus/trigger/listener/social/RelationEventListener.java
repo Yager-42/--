@@ -2,6 +2,7 @@ package cn.nexus.trigger.listener.social;
 
 import cn.nexus.domain.social.model.valobj.NotificationListVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
+import cn.nexus.domain.social.service.IFeedFollowCompensationService;
 import cn.nexus.domain.social.service.IFeedService;
 import cn.nexus.domain.social.service.IInteractionService;
 import cn.nexus.domain.social.service.IRiskService;
@@ -24,6 +25,7 @@ import org.springframework.stereotype.Component;
 public class RelationEventListener {
 
     private final IFeedService feedService;
+    private final IFeedFollowCompensationService feedFollowCompensationService;
     private final IInteractionService interactionService;
     private final IRiskService riskService;
     private final IRelationEventInboxPort relationEventInboxPort;
@@ -65,7 +67,9 @@ public class RelationEventListener {
             log.debug("Skip duplicate follow event {}", fp);
             return;
         }
-        feedService.timeline(event.targetId(), null, 1, "FOLLOW_EVENT");
+        if ("ACTIVE".equalsIgnoreCase(event.status())) {
+            feedFollowCompensationService.onFollow(event.sourceId(), event.targetId());
+        }
         NotificationListVO list = interactionService.notifications(event.targetId(), null);
         riskService.userStatus(event.sourceId());
         relationEventInboxPort.markDone(fp);

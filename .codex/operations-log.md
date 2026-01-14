@@ -42,3 +42,10 @@
 - 交付：落地 `10.5.1` fanout 大任务切片（规模化）—— `PostPublishedEvent` 由 dispatcher 拆片为多个 `FeedFanoutTask(offset,limit)` 并行消费，失败只重试切片。
 - 交付：新增 `FeedFanoutTask`（types），新增 `feed.fanout.task.queue`（trigger），扩展 `IFeedDistributionService.fanoutSlice`（domain），补齐 follower count（`IFollowerDao.countFollowers` + `IRelationRepository.countFollowerIds`）。
 - 迭代：更新 `.codex/distribution-feed-implementation.md` / `.codex/distribution-feed-implementation-ezRead.md`，将 10.5.1 标记为已落地并同步关键落点文件清单。
+- 交付：落地 `10.5.2` follow 最小补偿 —— 新增 `FeedFollowCompensationService`，`RelationEventListener.handleFollow` 在 status=ACTIVE 时为在线用户回填 followee 最近 K 条内容到 inbox。
+- 交付：落地 `10.5.3` Outbox + 大 V 判定 —— 新增 `IFeedOutboxRepository` + Redis 实现；dispatcher 永远写 outbox；大 V 默认不投递全量 fanout task，改由读侧拉取合并。
+- 交付：落地 `10.5.4` 铁粉推 —— 新增 `IFeedCoreFansRepository` + Redis 实现；大 V 发布时只对铁粉集合（在线者）推送，数量受 `feed.bigv.coreFanMaxPush` 限制。
+- 交付：落地 `10.5.5` 大 V 聚合池 —— 新增 `IFeedBigVPoolRepository` + Redis 分桶 ZSET 实现（默认开关关闭）；写侧入池，读侧在关注数较大时用聚合池降级替代逐个 outbox 拉取。
+- 交付：落地 `10.5.6` Max_ID（内部）分页 —— `IFeedTimelineRepository` 增加 `pageInboxEntries/removeFromInbox`；Redis 侧用 `WITHSCORES + Max_ID 过滤` 做稳定分页；FeedService timeline 合并 Inbox + Outbox/Pool。
+- 交付：落地 `10.5.7` 读时懒清理 —— timeline 回表后对缺失 postId 执行 inbox/outbox/pool 索引清理，减少反复 miss。
+- 同步：更新 `.codex/distribution-feed-implementation.md` / `.codex/distribution-feed-implementation-ezRead.md` 将 10.5.2~10.5.7 标记为已落地，并补齐关键配置与文件清单。

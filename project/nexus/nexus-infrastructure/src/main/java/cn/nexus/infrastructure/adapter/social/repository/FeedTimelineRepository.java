@@ -7,6 +7,7 @@ import cn.nexus.infrastructure.config.FeedInboxProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Repository;
 
 import java.time.Duration;
@@ -117,6 +118,78 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
                 .postIds(postIds)
                 .nextCursor(nextCursor)
                 .build();
+    }
+
+    @Override
+    public List<FeedInboxEntryVO> pageInboxEntries(Long userId, Long cursorTimeMs, Long cursorPostId, int limit) {
+        if (userId == null) {
+            return List.of();
+        }
+        int normalizedLimit = Math.max(1, limit);
+        String key = inboxKey(userId);
+        stringRedisTemplate.expire(key, ttl());
+
+        long safeCursorTime = cursorTimeMs == null ? Long.MAX_VALUE : cursorTimeMs;
+        long safeCursorPostId = cursorPostId == null ? Long.MAX_VALUE : cursorPostId;
+        int fetchCount = normalizedLimit + 20;
+
+        Set<ZSetOperations.TypedTuple<String>> tuples = stringRedisTemplate.opsForZSet()
+                .reverseRangeByScoreWithScores(key, 0D, safeCursorTime, 0, fetchCount);
+        if (tuples == null || tuples.isEmpty()) {
+            return List.of();
+        }
+
+        List<FeedInboxEntryVO> result = new ArrayList<>(normalizedLimit);
+        for (ZSetOperations.TypedTuple<String> tuple : tuples) {
+            if (tuple == null || tuple.getValue() == null || tuple.getValue().isBlank() || tuple.getScore() == null) {
+                continue;
+            }
+            if (INBOX_NO_MORE_MEMBER.equals(tuple.getValue())) {
+                continue;
+            }
+            Long postId = parseLong(tuple.getValue());
+            if (postId == null) {
+                continue;
+            }
+            long publishTimeMs = tuple.getScore().longValue();
+            if (!passCursor(publishTimeMs, postId, safeCursorTime, safeCursorPostId)) {
+                continue;
+            }
+            result.add(FeedInboxEntryVO.builder().postId(postId).publishTimeMs(publishTimeMs).build());
+            if (result.size() >= normalizedLimit) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public void removeFromInbox(Long userId, Long postId) {
+        if (userId == null || postId == null) {
+            return;
+        }
+        stringRedisTemplate.opsForZSet().remove(inboxKey(userId), postId.toString());
+    }
+
+    private boolean passCursor(long publishTimeMs, long postId, long cursorTimeMs, long cursorPostId) {
+        if (cursorTimeMs == Long.MAX_VALUE && cursorPostId == Long.MAX_VALUE) {
+            return true;
+        }
+        if (publishTimeMs < cursorTimeMs) {
+            return true;
+        }
+        return publishTimeMs == cursorTimeMs && postId < cursorPostId;
+    }
+
+    private Long parseLong(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private String inboxKey(Long userId) {

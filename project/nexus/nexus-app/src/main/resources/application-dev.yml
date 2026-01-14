@@ -32,6 +32,9 @@ feed:
   inbox:
     maxSize: 1000
     ttlDays: 30
+  outbox:
+    maxSize: 1000
+    ttlDays: 30
   fanout:
     batchSize: 200
   rebuild:
@@ -39,3 +42,19 @@ feed:
     inboxSize: 200
     maxFollowings: 2000
     lockSeconds: 30
+  follow:
+    compensate:
+      recentPosts: 20
+  bigv:
+    followerThreshold: 500000
+    coreFanMaxPush: 2000
+    pull:
+      maxBigvFollowings: 200
+      perBigvLimit: 50
+    pool:
+      enabled: false
+      buckets: 4
+      maxSizePerBucket: 500000
+      ttlDays: 7
+      fetchFactor: 30
+      triggerFollowings: 200

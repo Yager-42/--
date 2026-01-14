@@ -24,6 +24,8 @@
 - 负反馈：POST `/api/v1/feed/feedback/negative` → `IFeedService.negativeFeedback(userId, targetId, type, reasonCode, extraTags)`
 - 撤销负反馈：DELETE `/api/v1/feed/feedback/negative/{targetId}` → `IFeedService.cancelNegativeFeedback(userId, targetId)`
 
+补充（已拍板）：`userId/visitorId` 从登录态/网关上下文注入（Header：`X-User-Id`），不要信客户端自己报的 userId。为了不改既有 DTO 字段，Controller 应忽略 DTO 里的 userId/visitorId，统一从 `UserContext.requireUserId()` 获取后再调用 domain。
+
 ### 1.2 内容发布 → Feed 写扩散（系统内触发）
 - 发布成功分支：`ContentService.publish` → `IContentDispatchPort.onPublished(postId, userId)`
 - 基础设施实现：`ContentDispatchPort.onPublished` 构造 `PostPublishedEvent` 并 `convertAndSend("social.feed","post.published", event)`
@@ -122,9 +124,13 @@ graph TD
 ```mermaid
 graph TD
   NF[POST /api/v1/feed/feedback/negative] --> A[FeedService.negativeFeedback]
-  A --> SADD["Redis SADD feed:neg:<userId> targetId"]
+  A --> SADD_POST["Redis SADD feed:neg:<userId> targetId"]
+  A --> FIND["ContentRepository.findPost(targetId)"]
+  FIND --> SADD_TYPE["Redis SADD feed:neg:type:<userId> mediaType"]
   CNF["DELETE /api/v1/feed/feedback/negative/<targetId>"] --> Rm[FeedService.cancelNegativeFeedback]
-  Rm --> SREM["Redis SREM feed:neg:<userId> targetId"]
+  Rm --> SREM_POST["Redis SREM feed:neg:<userId> targetId"]
+  Rm --> FIND2["ContentRepository.findPost(targetId)"]
+  FIND2 --> SREM_TYPE["Redis SREM feed:neg:type:<userId> mediaType"]
 ```
 
 ## 5. 表/队列/缓存映射（补充）
@@ -140,6 +146,7 @@ graph TD
 ### 5.3 Redis
 - `feed:inbox:{userId}`：关注页 InboxTimeline（ZSET）
 - `feed:neg:{userId}`：负反馈集合（SET）
+- `feed:neg:type:{userId}`：负反馈内容类型集合（SET，`content_post.media_type`）
 
 ## 6. 有效性（当前已满足/可验证）
 - 契约：`/api/v1/feed/*` 路由与 DTO 字段保持不变，只替换占位实现为真实实现。
@@ -154,12 +161,15 @@ graph TD
 4) A 对某 postId 提交负反馈后再次拉取（验证过滤生效）再撤销验证恢复
 
 ## 7. 剩余不足（Phase 1 之外 / 非阻塞）
-- Phase 3 未实现：推荐与排序（关注 + 推荐召回、排序演进）。
-- cursor 断流修复未做：当 cursor 对应 member 被裁剪导致 `ZREVRANK` 找不到时，目前返回空页（可选：触发重建或降级策略）。
-- fanout 大任务切片未做：在线粉丝超大时可拆 `FeedFanoutTask` 并行消费，失败重试只重试这一片。
-- MQ 序列化未显式统一为 JSON（当前依赖默认消息转换策略；后续可统一 converter，降低跨服务/跨语言摩擦）。
-- timeline 负反馈过滤是逐条 `SISMEMBER`（N 次 Redis 调用），高 QPS 场景可考虑批量化策略（后续优化）。
-- 内容负反馈已升级为“内容类型”维度：提交/撤销会同步记录 `content_post.media_type`；若要更细粒度的“业务类目/标签”仍需新增表并在发布链路写入类型信息。
+- 对标关注流“生产级演进”的改进方案已写成可落地实现说明：详见 `.codex/distribution-feed-implementation.md` 的 `10.5.1` ~ `10.5.7`；性能/可运维改进详见 `10.6`。
+- Phase 3 未实现：推荐与排序（关注 + 推荐召回、排序演进），但实现级方案已补齐，详见 `.codex/distribution-feed-implementation.md` 的 `11`。
+- follow 的即时回填未做：`RelationEventListener.handleFollow` 目前仍是占位触达，最小补偿方案详见 `.codex/distribution-feed-implementation.md` 的 `10.5.2`。
+- cursor 断流修复未做：当 cursor 对应 member 被裁剪导致 `ZREVRANK` 找不到时，目前返回空页（可选：升级为 Max_ID + `ZREVRANGEBYSCORE`，详见 `.codex/distribution-feed-implementation.md` 的 `10.5.6`）。
+- fanout 大任务切片未做：在线粉丝超大时可拆 `FeedFanoutTask` 并行消费，失败重试只重试这一片（详见 `.codex/distribution-feed-implementation.md` 的 `10.5.1`）。
+- MQ 序列化未显式统一为 JSON（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.1`）。
+- timeline 负反馈过滤是逐条 `SISMEMBER`（N 次 Redis 调用），高 QPS 场景可考虑批量化策略（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.2`）。
+- 大 V 隔离/聚合池/读时修复异步清理等仍未落地（详见 `.codex/distribution-feed-implementation.md` 的 `10.5.3` ~ `10.5.7`）。
+- 内容负反馈已升级为“内容类型（media_type）”维度；若要更细粒度“业务类目/标签”，详见 `.codex/distribution-feed-implementation.md` 的 `10.6.6`。
 
 ## 8. 配置示例（application-dev.yml）
 ```yml
@@ -186,6 +196,7 @@ feed:
 - inbox 重建接口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxRebuildService.java`
 - inbox 条目 VO：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/FeedInboxEntryVO.java`
 - 粉丝分页：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/IFollowerDao.java` + `project/nexus/nexus-infrastructure/src/main/resources/mapper/social/FollowerMapper.xml`
+- 关注邻接缓存/回源兜底：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationAdjacencyCachePort.java`
 - Redis inbox：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepository.java`
 - Redis 负反馈：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedNegativeFeedbackRepository.java`
 - FeedService：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java`

@@ -32,9 +32,30 @@
 
 ### 致命问题（实现前必须先拍板）
 
-- `ReactionRequestDTO` 缺 `userId`：没有 userId 不能判定“是否已点赞”，这会直接破坏幂等与计数正确性（用户可见 bug）。
+- `userId` 来源必须固定：没有 userId 不能判定“是否已点赞”，这会直接破坏幂等与计数正确性（用户可见 bug）。✅ 已拍板：从登录态/网关上下文注入（Header：`X-User-Id`），trigger 层提供 `UserContext.requireUserId()`。
 
 ### 改进方向（不阻塞交付，但能让实现更干净）
 
 - 明确目标范围：`targetType` 只支持 `POST/COMMENT` 还是还包括其它实体，避免 key/schema 未来被迫迁移。
 - 明确窗口参数：windowSeconds/delayBufferSeconds/阈值必须配置化，别硬编码在服务里。
+
+## 2026-01-14（点赞链路方案文档迭代）
+
+综合评分：91 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：在保持“Redis 秒回 + 延迟落库 + 实时/离线分析”不变的前提下，补齐了读链路契约（单条/批量 likeCount + likedByMe）与 Redis miss 回源/回填策略。
+- 数据结构优先：用 `like:win:*` 合并旧的 sync+dirty，减少 key 与 if 分支；用 `like:touch:*`（HASH）记录窗口内最终状态，flush 不再逐 user `SISMEMBER`。
+- 特殊情况消除：flush 通过 `RENAMENX` 把 `like:touch:*` 原子快照到独立 key，避免 flush 期间新写入被误删（这类竞态本来就不该存在）。
+- 原文对齐：补充“解法 3（三级存储）”的可落地映射 —— 只吸收 L1 Caffeine 抗热点；L3 不引入 TaiShan/TiCDC，仍以 MySQL 做最终真值。
+- 实用主义：热点探测对 L1 是“必选搭档”（否则就是盲目缓存）；实现优先复用 `JD HotKey` 这类成熟组件，而不是自研探测；对主链路不是硬依赖，避免过度设计。
+
+### 致命问题（实现前仍必须先拍板）
+
+- `userId` 来源必须固定：没有 userId 就无法判定 likedByMe，更无法保证写链路幂等（用户可见 bug）。✅ 已拍板：从登录态/网关上下文注入（Header：`X-User-Id`），不允许客户端通过 DTO/Query 传入。
+
+### 改进方向（不阻塞交付，但需要确认）
+
+- Redis 版本：是否 >= 6.2（决定读侧能否直接用 `SMISMEMBER` 做批量 likedByMe）。
+- 接口归属：`state/batchState` 是单独的 Interaction API，还是由 Feed/Content 聚合接口内联返回（影响调用方与缓存命中方式，但不影响底层数据结构）。

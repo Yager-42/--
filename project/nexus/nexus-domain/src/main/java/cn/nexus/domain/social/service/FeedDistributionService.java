@@ -58,19 +58,42 @@ public class FeedDistributionService implements IFeedDistributionService {
             if (followerIds == null || followerIds.isEmpty()) {
                 break;
             }
-            for (Long followerId : followerIds) {
-                if (followerId == null || followerId.equals(authorId)) {
-                    continue;
-                }
-                if (!feedTimelineRepository.inboxExists(followerId)) {
-                    continue;
-                }
-                feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
-            }
+            fanoutFollowerIds(authorId, postId, publishTimeMs, followerIds);
             offset += followerIds.size();
             if (followerIds.size() < limit) {
                 break;
             }
+        }
+    }
+
+    /**
+     * 执行 fanout 的一个切片：只处理 authorId 粉丝列表的某一段（offset+limit）。
+     *
+     * <p>该方法不会写入作者自身 inbox（由上游 dispatcher 保底写入），只处理粉丝这一片。</p>
+     */
+    @Override
+    public void fanoutSlice(Long postId, Long authorId, Long publishTimeMs, Integer offset, Integer limit) {
+        if (postId == null || authorId == null || publishTimeMs == null) {
+            return;
+        }
+        int safeOffset = offset == null ? 0 : Math.max(0, offset);
+        int safeLimit = limit == null ? Math.max(1, batchSize) : Math.max(1, limit);
+        List<Long> followerIds = relationRepository.listFollowerIds(authorId, safeOffset, safeLimit);
+        fanoutFollowerIds(authorId, postId, publishTimeMs, followerIds);
+    }
+
+    private void fanoutFollowerIds(Long authorId, Long postId, Long publishTimeMs, List<Long> followerIds) {
+        if (followerIds == null || followerIds.isEmpty()) {
+            return;
+        }
+        for (Long followerId : followerIds) {
+            if (followerId == null || followerId.equals(authorId)) {
+                continue;
+            }
+            if (!feedTimelineRepository.inboxExists(followerId)) {
+                continue;
+            }
+            feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
         }
     }
 }

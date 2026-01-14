@@ -22,10 +22,10 @@
     ".codex/social-implementation.md"
   ],
   "currentState": {
-    "feed": "FeedController + IFeedService/FeedService 已落地 Phase 1：timeline 读 Redis inbox(ZSET) + MySQL 批量查内容 + 负反馈过滤；profile 读 MySQL；negative feedback 写 Redis SET。",
+    "feed": "FeedController + IFeedService/FeedService 已落地 Phase 1：timeline 读 Redis inbox(ZSET) + MySQL 批量查内容 + 负反馈过滤；profile 读 MySQL；negative feedback 写 Redis SET。fanout 已升级为任务切片（dispatcher+worker），domain 新增 fanoutSlice 执行单片写扩散。",
     "interaction": "InteractionController + /api/v1/interact/reaction 已存在，但 InteractionService.react 仍为占位；点赞方案文档已迭代：补齐读链路（单条/批量 likeCount+likedByMe + miss 回源/回填），收敛 Redis 方案（like:win 合并 sync+dirty，like:touch 记录窗口内最终状态，flush 用 RENAMENX 快照避免误删），并补充原文“解法3”落地映射（热点探测 + L1 Caffeine 可选；热点探测实现优先复用 JD HotKey；L3 TaiShan KV 仅作为远期可选项）。",
     "content": "content_post/content_history/content_schedule 等仓储与 DAO 已存在（MyBatis）",
-    "relation": "RelationRepository/DAO 已存在；Follower 反向表支持分页拉粉丝 ID；RabbitMQ 已新增 Feed fanout 事件链路。",
+    "relation": "RelationRepository/DAO 已存在；Follower 反向表支持分页拉粉丝 ID + count；RabbitMQ 已新增 Feed fanout 事件链路（PostPublishedEvent -> dispatcher 拆片 -> FeedFanoutTask 并行消费）。",
     "timelineStorage": "已实现：FeedTimelineRepository（Redis ZSET：feed:inbox:{userId}）+ FeedNegativeFeedbackRepository（Redis SET：feed:neg:{userId}）。Phase 2 在线推/离线拉在 .codex/distribution-feed-implementation.md 中规划。"
   },
   "techStackObserved": {
@@ -41,15 +41,18 @@
     "project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedService.java",
     "project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java",
     "project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedDistributionService.java",
-    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutConsumer.java",
+    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java",
+    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskConsumer.java",
     "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFanoutConfig.java",
     "project/nexus/nexus-types/src/main/java/cn/nexus/types/event/PostPublishedEvent.java",
+    "project/nexus/nexus-types/src/main/java/cn/nexus/types/event/FeedFanoutTask.java",
     "project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java"
   ],
   "observations": [
     "接口文档明确要求分发/Feed 支持写扩散、读扩散与混合排序；目前已落地 Phase 1（写扩散 + FOLLOW timeline + 最小负反馈），Phase 2/3 按文档继续推进。",
     "数据库文档明确建议：Feed Timeline 不存 MySQL，应使用 Redis(List/ZSet) 或 NoSQL。",
     "现有 RabbitMQ 事件发布模式可复用到 Post_Published -> fanout -> Timeline 写入链路。",
+    "已落地 10.5.1 fanout 大任务切片：PostPublishedEvent 由 dispatcher 拆为多个 FeedFanoutTask(offset,limit) 并行消费，失败只重试切片；写入幂等性依赖 Redis ZSET 的 member 幂等。",
     "互动点赞链路仍为占位；若要按“点赞/取消点赞”实现幂等，必须能在服务端拿到 userId（已拍板：网关注入 Header `X-User-Id`，trigger 层提供 UserContext 读取）。",
     "点赞方案文档在不改用户可见行为的前提下做了结构性收敛：补齐读链路与批量查询契约，并用 like:win + like:touch 消除旧版 sync/dirty/touched 的分支与 flush 往返成本。"
   ],

@@ -95,6 +95,20 @@ public class RelationRepository implements IRelationRepository {
         return followerDao.selectFollowerIds(userId, offset, limit);
     }
 
+    /**
+     * 查询某个用户的粉丝数量（反向表计数：谁关注了我）。
+     *
+     * @param userId 被关注者 ID
+     * @return 粉丝数量（>=0）
+     */
+    @Override
+    public int countFollowerIds(Long userId) {
+        if (userId == null) {
+            return 0;
+        }
+        return followerDao.countFollowers(userId);
+    }
+
     @Override
     public FriendRequestEntity saveFriendRequest(FriendRequestEntity request) {
         FriendRequestPO po = new FriendRequestPO();

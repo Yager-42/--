@@ -20,6 +20,12 @@
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
+    <select id="countFollowers" resultType="int">
+        SELECT COUNT(1)
+        FROM user_follower
+        WHERE user_id = #{userId}
+    </select>
+
     <select id="selectFollowingIds" resultType="java.lang.Long">
         SELECT user_id
         FROM user_follower

@@ -39,6 +39,16 @@ public interface IRelationRepository {
      */
     List<Long> listFollowerIds(Long userId, Integer offset, Integer limit);
 
+    /**
+     * 查询某个用户的粉丝数量（反向表计数：谁关注了我）。
+     *
+     * <p>用于 fanout 大任务切片：dispatcher 需要用粉丝总数计算切片数量。</p>
+     *
+     * @param userId 被关注者 ID
+     * @return 粉丝数量（>=0）
+     */
+    int countFollowerIds(Long userId);
+
     FriendRequestEntity saveFriendRequest(FriendRequestEntity request);
 
     FriendRequestEntity findFriendRequest(Long requestId);

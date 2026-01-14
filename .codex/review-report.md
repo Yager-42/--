@@ -59,3 +59,23 @@
 
 - Redis 版本：是否 >= 6.2（决定读侧能否直接用 `SMISMEMBER` 做批量 likedByMe）。
 - 接口归属：`state/batchState` 是单独的 Interaction API，还是由 Feed/Content 聚合接口内联返回（影响调用方与缓存命中方式，但不影响底层数据结构）。
+
+## 2026-01-14（Feed 10.5.1 fanout 大任务切片落地）
+
+综合评分：90 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：按 `.codex/distribution-feed-implementation.md` 的 10.5.1 落地 dispatcher+worker，避免单条发布事件做完整 fanout。
+- 数据结构优先：切片粒度只用 `offset/limit`，不引入额外表；粉丝总数用 `user_follower` 反向表 `COUNT` 作为真值来源。
+- 特殊情况控制：失败重试粒度收敛为 `FeedFanoutTask(offset,limit)`；重复消费依赖 Redis ZSET member 幂等，不新增去重表。
+- 零破坏性：不改既有 HTTP 契约与读侧逻辑；发布侧仍只发 `PostPublishedEvent`，内部链路升级为拆片并行。
+
+### 致命问题（要记住，但本次不扩范围）
+
+- DLQ/重试/监控：10.5.1 只解决“拆片与重试粒度”，具体 DLQ/重试策略应统一落到 10.6.4，别在 consumer 里各写一套。
+
+### 改进方向（不阻塞交付）
+
+- Redis pipeline：worker 内 `inboxExists` 与 `ZADD` 可对一个 batch pipeline，减少 1:1 往返（10.6.*）。
+- 触发器薄度：dispatcher 目前直接依赖仓储接口（而非领域服务），是可接受的折中，但后续若要统一编排可考虑下沉为 domain 的“拆片计算器”（返回任务列表给 trigger 发送）。

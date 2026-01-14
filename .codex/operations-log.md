@@ -39,3 +39,6 @@
 - 核对：对照代码 double check Phase 2 已完成项，并将“关注回源兜底/内容类型负反馈”从代码回写到 `.codex/distribution-feed-implementation.md`（避免文档与实现不一致）。
 - 迭代：补齐 `.codex/distribution-feed-implementation.md` 的实现级缺口（除“验收/验证”外）：`10.5.1` fanout 切片、`10.5.2` follow/unfollow 最小补偿、`10.6` 可改进点落地方案、`11` Phase 3（推荐与排序）实现级方案。
 - 同步：更新 `.codex/distribution-feed-implementation-ezRead.md`（负反馈流程图补充类型维度写入；“剩余不足”指向新增的实现级章节）；按用户要求未做本地验证。
+- 交付：落地 `10.5.1` fanout 大任务切片（规模化）—— `PostPublishedEvent` 由 dispatcher 拆片为多个 `FeedFanoutTask(offset,limit)` 并行消费，失败只重试切片。
+- 交付：新增 `FeedFanoutTask`（types），新增 `feed.fanout.task.queue`（trigger），扩展 `IFeedDistributionService.fanoutSlice`（domain），补齐 follower count（`IFollowerDao.countFollowers` + `IRelationRepository.countFollowerIds`）。
+- 迭代：更新 `.codex/distribution-feed-implementation.md` / `.codex/distribution-feed-implementation-ezRead.md`，将 10.5.1 标记为已落地并同步关键落点文件清单。

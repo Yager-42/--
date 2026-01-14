@@ -1,12 +1,13 @@
-# 分发与 Feed 服务实现链路说明（Phase 1 + Phase 2，执行者：Codex / 日期：2026-01-13）
+# 分发与 Feed 服务实现链路说明（Phase 1 + Phase 2，执行者：Codex / 日期：2026-01-14）
 
 > 本文档是 **“当前代码实现的快照说明”**，用于 Code Review/交接/验收。  
 > 详细设计与 Phase 2/3 方案请看：`.codex/distribution-feed-implementation.md`（方案文档）。
 
 ## 0. 本次完善（已落地）
-- 写扩散链路：`ContentService.publish` 成功分支 → `IContentDispatchPort.onPublished` → RabbitMQ → `FeedFanoutConsumer` → `FeedDistributionService.fanout` → Redis InboxTimeline 写入。
+- 写扩散链路：`ContentService.publish` 成功分支 → `IContentDispatchPort.onPublished` → RabbitMQ → `FeedFanoutDispatcherConsumer`（拆片）→ `FeedFanoutTaskConsumer`（执行片）→ `FeedDistributionService.fanoutSlice` → Redis InboxTimeline 写入（作者 inbox 由 dispatcher 保底写入）。
 - 消息模型：新增 `PostPublishedEvent`（`nexus-types`），承载 `postId/authorId/publishTimeMs`。
-- MQ 拓扑：新增 `FeedFanoutConfig` 声明 `social.feed`（DirectExchange）+ `feed.post.published.queue` + `post.published` 绑定。
+- MQ 拓扑：`FeedFanoutConfig` 声明 `social.feed`（DirectExchange）+ `feed.post.published.queue`（`post.published`）+ `feed.fanout.task.queue`（`feed.fanout.task`）。
+- fanout 切片：新增 `FeedFanoutTask`（`nexus-types`）承载 `offset/limit`，将“大 fanout”拆成多个可并行消费的小任务，失败只重试切片。
 - 粉丝分页：补齐 `IFollowerDao.selectFollowerIds` + `IRelationRepository.listFollowerIds`，fanout 分页拉粉丝避免一次性全量。
 - InboxTimeline：新增 `IFeedTimelineRepository` + Redis 实现（ZSET：member=postId，score=publishTimeMs），支持 cursor 分页、NoMore 哨兵、读侧刷新 TTL 与原子化重建。
 - 负反馈：扩展 `IFeedNegativeFeedbackRepository`，同时支持 **postId** 维度与 **内容类型（content_post.media_type）** 维度过滤（Redis SET）。
@@ -29,7 +30,9 @@
 ### 1.2 内容发布 → Feed 写扩散（系统内触发）
 - 发布成功分支：`ContentService.publish` → `IContentDispatchPort.onPublished(postId, userId)`
 - 基础设施实现：`ContentDispatchPort.onPublished` 构造 `PostPublishedEvent` 并 `convertAndSend("social.feed","post.published", event)`
-- 消费入口：`FeedFanoutConsumer`（`@RabbitListener(queues = FeedFanoutConfig.QUEUE)`）→ `IFeedDistributionService.fanout(event)`
+- 消费入口：
+  - `FeedFanoutDispatcherConsumer`（`@RabbitListener(queues = FeedFanoutConfig.QUEUE)`）消费 `PostPublishedEvent`，写作者 inbox 并拆分为多个 `FeedFanoutTask(offset,limit)` 投递到 `feed.fanout.task.queue`
+  - `FeedFanoutTaskConsumer`（`@RabbitListener(queues = FeedFanoutConfig.TASK_QUEUE)`）消费 `FeedFanoutTask`，调用 `IFeedDistributionService.fanoutSlice(...)` 执行单片 fanout
 
 ## 2. 数据流与幂等性
 ### 2.1 写链路（fanout）
@@ -90,10 +93,12 @@ graph TD
   P[内容发布成功] --> D[ContentService.publish]
   D --> DP[IContentDispatchPort.onPublished]
   DP --> MQ[RabbitMQ social.feed/post.published]
-  MQ --> C[FeedFanoutConsumer]
-  C --> F[FeedDistributionService.fanout]
-  F --> ZA[写入作者 inbox]
+  MQ --> DSP[FeedFanoutDispatcherConsumer]
+  DSP --> ZA[写入作者 inbox]
   ZA --> Z[FeedTimelineRepository.addToInbox写ZSET]
+  DSP --> TQ[投递 FeedFanoutTask(offset,limit)]
+  TQ --> W[FeedFanoutTaskConsumer]
+  W --> F[FeedDistributionService.fanoutSlice]
   F --> R[RelationRepository.listFollowerIds分页]
   R --> E[FeedTimelineRepository.inboxExists过滤在线]
   E --> Z
@@ -152,7 +157,7 @@ graph TD
 - 契约：`/api/v1/feed/*` 路由与 DTO 字段保持不变，只替换占位实现为真实实现。
 - 幂等：fanout 重复消费不会产生重复 timeline 条目（ZSET member 幂等）。
 - 顺序：timeline 回表按 `postIds` 入参顺序重排，避免 IN 查询导致顺序漂移。
-- 编译/测试：未执行（按用户要求跳过本地验证）。
+- 编译/测试：未执行（按用户要求不做 Maven 验证）。
 
 建议本地验收（需要 MySQL+Redis+RabbitMQ）：
 1) A 关注 B（写入 `user_follower`）
@@ -165,7 +170,7 @@ graph TD
 - Phase 3 未实现：推荐与排序（关注 + 推荐召回、排序演进），但实现级方案已补齐，详见 `.codex/distribution-feed-implementation.md` 的 `11`。
 - follow 的即时回填未做：`RelationEventListener.handleFollow` 目前仍是占位触达，最小补偿方案详见 `.codex/distribution-feed-implementation.md` 的 `10.5.2`。
 - cursor 断流修复未做：当 cursor 对应 member 被裁剪导致 `ZREVRANK` 找不到时，目前返回空页（可选：升级为 Max_ID + `ZREVRANGEBYSCORE`，详见 `.codex/distribution-feed-implementation.md` 的 `10.5.6`）。
-- fanout 大任务切片未做：在线粉丝超大时可拆 `FeedFanoutTask` 并行消费，失败重试只重试这一片（详见 `.codex/distribution-feed-implementation.md` 的 `10.5.1`）。
+- fanout 大任务切片已落地：`PostPublishedEvent` → `FeedFanoutTask(offset,limit)` 并行消费，失败重试只重试这一片（详见 `.codex/distribution-feed-implementation.md` 的 `10.5.1`）。
 - MQ 序列化未显式统一为 JSON（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.1`）。
 - timeline 负反馈过滤是逐条 `SISMEMBER`（N 次 Redis 调用），高 QPS 场景可考虑批量化策略（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.2`）。
 - 大 V 隔离/聚合池/读时修复异步清理等仍未落地（详见 `.codex/distribution-feed-implementation.md` 的 `10.5.3` ~ `10.5.7`）。
@@ -190,7 +195,8 @@ feed:
 - 发布→分发入口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java`
 - 分发端口实现：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java`
 - MQ 拓扑：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFanoutConfig.java`
-- MQ 消费者：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutConsumer.java`
+- MQ 消费者：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java` + `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskConsumer.java`
+- 切片消息体：`project/nexus/nexus-types/src/main/java/cn/nexus/types/event/FeedFanoutTask.java`
 - fanout 服务：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedDistributionService.java`
 - inbox 重建服务：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedInboxRebuildService.java`
 - inbox 重建接口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxRebuildService.java`

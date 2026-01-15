@@ -58,3 +58,10 @@ feed:
       ttlDays: 7
       fetchFactor: 30
       triggerFollowings: 200
+
+interaction:
+  like:
+    windowSeconds: 60
+    delayBufferSeconds: 10
+    syncTtlSeconds: 180
+    flushLockSeconds: 30

@@ -27,9 +27,10 @@
 2) 大 V 隔离：大 V 发布是否“只写 outbox/铁粉”，读侧是否能合并读取到？
 3) Max_ID + 懒清理：翻页是否稳定推进；读时发现无效内容是否会顺手清掉索引，避免反复 miss？
 
-补充（点赞链路）：打开 `.codex/interaction-like-pipeline-implementation.md`，只看两件事：
+补充（点赞链路）：打开 `.codex/interaction-like-pipeline-implementation.md`，只看三件事：
 1) 你是否接受“先写 Redis 秒回，几分钟后再批量落库”的一致性策略？
 2) 你能否回答文末“开放问题”里关于 `targetType` 范围 / 窗口长度 / Redis 版本 的选择？（不回答会卡实现）
+3) 你是否认可“分步拆分（10.4）”的推进顺序：先把写/flush/读跑通，再做点赞通知 MVP（异步，不阻塞点赞接口），最后再做通知聚合（可选）？
 
 再补充一眼（你不需要懂代码）：
 - 读链路是否满足你的产品体验：列表页需要一次性批量拿到 `likeCount + likedByMe`（见文档 5.3/5.4）

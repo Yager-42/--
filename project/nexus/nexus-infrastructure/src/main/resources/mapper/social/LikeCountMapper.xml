@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.ILikeCountDao">
+
+    <resultMap id="LikeCountMap" type="cn.nexus.infrastructure.dao.social.po.LikeCountPO">
+        <id property="targetType" column="target_type"/>
+        <id property="targetId" column="target_id"/>
+        <result property="likeCount" column="like_count"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <select id="selectOne" resultMap="LikeCountMap">
+        SELECT target_type, target_id, like_count, update_time
+        FROM like_counts
+        WHERE target_type = #{targetType} AND target_id = #{targetId}
+    </select>
+
+    <select id="selectByTargets" resultMap="LikeCountMap">
+        SELECT target_type, target_id, like_count, update_time
+        FROM like_counts
+        <choose>
+            <when test="targets != null and targets.size() > 0">
+                WHERE
+                <foreach collection="targets" item="t" separator=" OR ">
+                    (target_type = #{t.targetType} AND target_id = #{t.targetId})
+                </foreach>
+            </when>
+            <otherwise>
+                WHERE 1 = 0
+            </otherwise>
+        </choose>
+    </select>
+
+    <insert id="upsert">
+        INSERT INTO like_counts(target_type, target_id, like_count, update_time)
+        VALUES(#{po.targetType}, #{po.targetId}, #{po.likeCount}, NOW())
+        ON DUPLICATE KEY UPDATE
+        like_count = VALUES(like_count),
+        update_time = NOW()
+    </insert>
+</mapper>
+

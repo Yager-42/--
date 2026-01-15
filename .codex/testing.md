@@ -92,3 +92,19 @@
 建议后续人工验收（需要 MySQL + Redis + RabbitMQ）：
 - MQ：发布一条内容，观察 `PostPublishedEvent`/`FeedFanoutTask` 能以 JSON 正常投递与消费；故意让 consumer 抛异常，消息应进入对应 DLQ 队列。
 - fanout：造一批 followerId，其中部分 inbox key 不存在，验证写入日志里的 `skippedOffline` 与实际一致。
+
+## 2026-01-15（点赞业务 Step 1~3 代码落地：写 + flush + 读）
+
+本次交付已落地《社交接口.md》的点赞相关三接口（react/state/batchState）与“Redis 秒回 + 延迟 flush 落库”链路；按用户要求，未执行 Maven 编译/测试，仅做静态自检。
+
+静态自检要点：
+- HTTP：`/api/v1/interact/reaction`、`/api/v1/interact/reaction/state`、`/api/v1/interact/reaction/batchState` 已有入口；`userId` 固定从 Header `X-User-Id` 注入（`UserContextInterceptor`）。
+- 写链路：Redis Lua 原子收敛（幂等 + count + touch + win 状态机），仅在窗口首次创建时投递一次延迟 flush。
+- flush：分布式锁保护；`like_counts` 写绝对值；`like:touch:*` 用 `RENAMENX` 固定快照 key 并分批 upsert `likes(status)`；finalize Lua 原子推进 win 状态机并按需重排队。
+- 读链路：count MGET + likedByMe pipeline；Redis miss 时批量回源 MySQL（`like_counts`/`likes(status=1)`）并回填。
+
+建议后续人工验收（需要 MySQL + Redis + RabbitMQ）：
+- 幂等：同一用户重复 ADD/REMOVE，不应重复计数；count 不为负。
+- flush 竞态：flush 期间发生新点赞，不丢“最后一次写入”（应触发下一轮 flush）。
+- 批量读：batchState 对 20~50 个 targets 不产生 N+1；miss 能按批次回源并回填。
+- Redis 非预期丢 key：如果 `like:count:*` 被清空/逐出，需明确“回源重建/定期对账”的运维策略（否则可能出现用户可见的计数错误）。

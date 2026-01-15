@@ -9,6 +9,10 @@ public interface IInteractionService {
 
     ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action);
 
+    ReactionStateVO reactionState(Long userId, Long targetId, String targetType);
+
+    ReactionBatchStateVO batchState(Long userId, java.util.List<ReactionTargetVO> targets);
+
     CommentResultVO comment(Long userId, Long postId, Long parentId, String content, java.util.List<Long> mentions);
 
     OperationResultVO pinComment(Long commentId, Long postId);

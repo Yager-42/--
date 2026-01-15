@@ -62,3 +62,10 @@
 - 同步：更新 `.codex/distribution-feed-implementation*.md`、`社交领域数据库.md`、`verification.md` 等文档，确保与代码一致。
 - 交付：按 `.codex/distribution-feed-implementation.md` 的 `10.6` 补齐可改进点（不影响 Phase 2 正确性）—— MQ 消息统一 JSON（`Jackson2JsonMessageConverter`）、timeline 负反馈 postId 批量过滤（`SMEMBERS`）、fanout DLQ（死信）与最小指标日志、fanout 在线判定改为 Redis pipeline（批量 `EXISTS`）。
 - 同步：更新 `.codex/distribution-feed-implementation.md` 与 `.codex/distribution-feed-implementation-ezRead.md`，将 `10.6.1/10.6.2/10.6.4/10.6.5` 标记为已落地；按用户要求跳过“热点探测 + L1 本地缓存（10.6.3）”。
+- 迭代：按用户要求对“点赞业务（互动域 + 通知域）”做分步拆分，并同步更新实现契约与外部文档：`.codex/interaction-like-pipeline-implementation.md`（新增分步拆分与通知 MVP）、`社交接口.md`（补齐 state/batchState 与 userId 注入约定）、`社交领域数据库.md`（补齐 likes/like_counts/notification_inbox）。
+- 交付：落地点赞写链路（Step 1）—— `InteractionService.react` 从占位改为真实实现；`ReactionRepository` 使用 Redis Lua 原子完成幂等集合 + 计数器 + touch + win 状态机；Controller 仅在 `needSchedule=true` 时投递延迟 flush。
+- 交付：落地点赞读链路（Step 3）—— 新增 `GET /api/v1/interact/reaction/state` 与 `POST /api/v1/interact/reaction/batchState`；读侧优先 Redis（count MGET + set pipeline），miss 批量回源 MySQL（`like_counts`/`likes(status=1)`）并回填。
+- 交付：落地点赞延迟 flush（Step 2）—— 新增 RabbitMQ `x-delayed-message` 拓扑（LikeSyncDelayConfig/Producer/Consumer/DLQ）；实现 `LikeSyncService` + `ReactionRepository.flush`：`RENAMENX` touch 快照 + 批量 upsert likes + finalize Lua 推进 win 状态机并按需重排队。
+- 交付：新增 likes/like_counts 建表脚本 `project/nexus/docs/interaction_like_tables.sql`，并在 `application-dev.yml` 增加 `interaction.like.*` 配置项（windowSeconds/delayBufferSeconds/syncTtlSeconds/flushLockSeconds）。
+- 决策：按用户要求跳过 Maven 编译与测试，仅做静态 CR（幂等/竞态/批量查询/NPE 风险）并同步实现文档。
+- 修复：flush 关键正确性补强 —— `setIfAbsent` 非 true 即视为未持锁；解锁改为 Lua compare-and-delete；touch 快照 key 改为固定 key（避免 flush 失败后产生“孤儿快照”丢落库）；延迟队列补齐 DLX/DLQ 配置并统一用 `AmqpRejectAndDontRequeueException` 进入 DLQ。

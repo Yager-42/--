@@ -215,7 +215,7 @@ CREATE TABLE `like_counts` (
 
 ---
 
-## 4. 端到端流程（对应你图里的链路）
+## 4. 端到端流程（对应你图里的链路）.codex\interaction-like-pipeline-implementation.md
 
 ### 4.1 时序图（Mermaid）
 
@@ -374,8 +374,8 @@ Redis key miss 怎么办（别硬扛 DB N 次查询）：
 
 建议配置化：
 
-- `interaction.like.windowSeconds`：窗口长度（例如 300 秒 = 5 分钟）
-- `interaction.like.delayBufferSeconds`：buffer（例如 30 秒，防止边界抖动）
+- `interaction.like.windowSeconds`：窗口长度（✅ 你已拍板：60 秒 = 1 分钟）
+- `interaction.like.delayBufferSeconds`：buffer（建议 5~10 秒，用于吸收边界抖动；保持配置化）
 - `delayMs = (windowSeconds + bufferSeconds) * 1000`
 
 ---
@@ -498,40 +498,65 @@ score 你可以先用最土的：
 
 ## 10. 在本仓库如何落地（文件清单/复用点）
 
-> 这是给“另一个 Codex agent”用的：照着建文件就能开工。
+> 这是给“另一个 Codex agent”用的：照着文件清单就能复刻实现。本仓库已在 2026-01-15 落地 Step 1~3（写 + 延迟 flush + 读）。
 
-### 10.1 现有入口（已存在）
+### 10.1 已落地入口（2026-01-15）
 
 - HTTP 入口：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
-- DTO：`project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionRequestDTO.java`
-- Domain 服务（当前是占位）：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
+  - `POST /api/v1/interact/reaction`：写 Redis + needSchedule 时投递延迟 flush
+  - `GET /api/v1/interact/reaction/state`：读单条 likeCount + likedByMe
+  - `POST /api/v1/interact/reaction/batchState`：批量读 likeCount + likedByMe
+- API 接口定义：`project/nexus/nexus-api/src/main/java/cn/nexus/api/social/IInteractionApi.java`
+- DTO：
+  - `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionRequestDTO.java`
+  - `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateRequestDTO.java`
+  - `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateResponseDTO.java`
+  - `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionBatchStateRequestDTO.java`
+  - `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionBatchStateResponseDTO.java`
+  - `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionTargetDTO.java`
+  - `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateItemDTO.java`
+- Domain 服务：
+  - `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
+  - `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/LikeSyncService.java`
+- Domain 仓储接口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IReactionRepository.java`
+- Infrastructure 实现：
+  - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java`
+  - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/ILikeDao.java`
+  - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/ILikeCountDao.java`
+  - `project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeMapper.xml`
+  - `project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeCountMapper.xml`
+- Trigger（MQ 延迟队列）：
+  - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/LikeSyncDelayConfig.java`
+  - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/LikeSyncProducer.java`
+  - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/LikeSyncConsumer.java`
+  - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/LikeSyncDLQConsumer.java`
+- 消息体：`project/nexus/nexus-types/src/main/java/cn/nexus/types/event/interaction/LikeFlushTaskEvent.java`
+- SQL：`project/nexus/docs/interaction_like_tables.sql`
+- 配置：`project/nexus/nexus-app/src/main/resources/application-dev.yml`（`interaction.like.*`）
 
-### 10.2 可直接复用的延迟队列模式（已存在）
+### 10.2 延迟队列模式（已复用）
 
 项目已用 RabbitMQ `x-delayed-message` 插件实现延迟队列：
 
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/ContentScheduleDelayConfig.java`
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/ContentScheduleProducer.java`
 
-点赞 flush 直接复制这套模式，改 exchange/queue/routingKey 即可（不要自研定时器）。
+点赞 flush 已复用并落地为：
 
-推荐命名（照抄即可）：
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/LikeSyncDelayConfig.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/LikeSyncProducer.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/LikeSyncConsumer.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/LikeSyncDLQConsumer.java`
+- `project/nexus/nexus-types/src/main/java/cn/nexus/types/event/interaction/LikeFlushTaskEvent.java`
 
-- Config：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/LikeSyncDelayConfig.java`
-  - `EXCHANGE = "interaction.like.exchange"`（`x-delayed-message`）
-  - `QUEUE = "interaction.like.delay.queue"`
-  - `ROUTING_KEY = "interaction.like.delay"`
-  - `DLX_EXCHANGE = "interaction.like.dlx.exchange"`
-  - `DLX_QUEUE = "interaction.like.dlx.queue"`
-  - `DLX_ROUTING_KEY = "interaction.like.dlx"`
-- Message：建议用 `nexus-types` 事件类（继承 `BaseEvent`），例如 `LikeFlushTaskEvent { targetType, targetId }`，避免在 Consumer 里做字符串解析。
-
-### 10.3 建议新增的模块接口（按 DDD 分层）
+### 10.3 已落地的模块接口（按 DDD 分层）
 
 domain（接口）：
 
-- `IReactionRepository`：toggle + finalizeWindow + getCount + snapshotTouch
-- `ILikeSyncService`：flush(targetType,targetId)
+- `IReactionRepository`：toggle + getState/getBatchState + flush
+- `ILikeSyncService`：flush(targetType,targetId) -> reschedule
+- `ILikeEventPort`：当 `delta=+1` 时发布 `LikeCreatedEvent`（异步，不阻塞点赞接口；本次未做）
+- `INotificationRepository`：通知入库 + 分页读取（支撑 `/notification/list`；本次未做）
 
 infrastructure（实现）：
 
@@ -541,6 +566,56 @@ infrastructure（实现）：
 trigger（MQ）：
 
 - LikeSyncDelayConfig / Producer / Consumer（延迟消息驱动 flush）
+- LikeCreatedEventConsumer：本次未做（Step 4 以后）
+
+### 10.4 分步拆分（互动域 + 通知域，按可交付推进）
+
+> 目标：每一步做完都能“看到一个可验收的结果”，而不是写一堆代码最后一起爆炸。
+
+**Step 0：文档对齐（本次交付）**
+
+- 输入：`.codex/interaction-like-pipeline-implementation.md`（本实现契约）
+- 输出：接口文档/数据库文档与本契约一致（避免互相打架）
+- 验收：你不需要猜 `userId` 从哪来、表叫什么、接口叫什么
+
+**Step 1：互动域写链路（秒回）**
+
+- 输入：`POST /api/v1/interact/reaction`（`userId = UserContext.requireUserId()`）
+- 输出：Redis Lua 原子更新（幂等 + 计数 + touch + win）；只在 `win` key miss 时投递一次延迟 flush
+- 验收：重复 ADD/REMOVE 不乱跳；count 不会被减成负数；热点下不写一堆 if/else
+
+**Step 2：互动域延迟 flush（最终一致）**
+
+- 输入：RabbitMQ 延迟消息 `LikeFlushTaskEvent(targetType,targetId)`
+- 输出：MySQL `like_counts`（绝对值）+ `likes(status)`（最终态）追上 Redis；flush 幂等且不丢“最后一次写入”
+- 关键点：`like:touch:*` 必须 `RENAMENX` 快照；`like:win:*` finalize 必须 Lua 原子
+- 验收：窗口后 DB 与 Redis 一致；flush 期间发生的新点赞不会丢（会触发下一轮 flush）
+
+**Step 3：互动域读链路（批量，不要 N 次 DB）**
+
+- 输入：targets 列表（Timeline/列表页一次几十个）
+- 输出：新增 `state/batchState`：一次返回 `likeCount + likedByMe`（Redis -> DB -> Redis 回填）
+- 验收：批量查询不会触发 N+1；Redis miss 会按批次回源并回填
+
+**Step 4：通知域 MVP（点赞通知可见，但不阻塞点赞接口）**
+
+- 输入：仅当 `delta=+1` 才发布 `LikeCreatedEvent(fromUserId,targetType,targetId,ts)`
+- 输出：通知 consumer 异步入库 `notification_inbox`；`GET /api/v1/notification/list` 返回真实通知
+- 关键点：**toUserId（被通知的人）在通知侧解析**（避免点赞接口回表拖慢）：\n  - `POST`：读 `content_post.author_id`\n  - `COMMENT`：读 `interaction_comment.user_id`
+- 验收：点赞后目标用户能在通知列表看到；重复点赞（delta=0）不产生重复通知
+
+**Step 5：通知聚合（可选迭代，避免通知轰炸）**
+
+- 输入：LikeCreatedEvent 流
+- 输出：窗口内同 target 的点赞合并为 1 条通知（例如 “A、B 等 10 人点赞了你的帖子”）
+- 验收：10 人点赞同一贴，在窗口内最终只出 1 条聚合通知
+
+**依赖关系（别乱）**
+
+- Step 2 依赖 Step 1
+- Step 3 依赖 Step 1
+- Step 4 依赖 Step 1
+- Step 5 依赖 Step 4
 
 ---
 
@@ -552,13 +627,72 @@ trigger（MQ）：
 4. 热点内容在 5 分钟内暴涨会触发告警（阈值可配）  
 5. 每日能产出 TOPN 热点榜单（离线）
 6. 列表页能一次性批量拿到 `likeCount + likedByMe`（不出现 N 次 DB 查询）
+7. 点赞成功会产生通知（异步），目标用户在通知列表可见；重复点赞不重复通知
+8. （可选）聚合通知能在窗口内合并同类事件，避免通知轰炸
 
 ---
 
 ## 12. 开放问题（不回答会卡实现）
 
 1. `userId` 从哪里来？✅ 已拍板：从登录态/网关上下文注入（Header：`X-User-Id`）。  
-2. 点赞对象范围：只做 `POST/COMMENT` 还是还包括 `MEDIA/REPLY`？（影响 key 设计）  
-3. 窗口长度要多长？5 分钟是图里的示例，是否符合产品预期？  
-4. Redis 版本是否 >= 6.2？（决定读侧能否用 `SMISMEMBER` 做批量 likedByMe）  
-5. 读接口怎么挂：新增 `state/batchState`，还是由 Feed/Content 聚合接口内联返回？  
+2. 点赞对象范围：✅ 已拍板：先只做 `POST/COMMENT`；但 `targetType` 保持可扩展（未来可加其它类型，不强绑死）。  
+3. 窗口长度要多长？✅ 已拍板：1 分钟（`interaction.like.windowSeconds=60`）。  
+4. Redis 版本是否 >= 6.2？✅ 已拍板：是（读侧可以优先用 `SMISMEMBER`；同时保留 pipeline `SISMEMBER` 作为退化路径）。  
+5. 读接口怎么挂：✅ 已落地：新增 `state/batchState`。  
+6. 点赞通知范围：✅ 已拍板：\n   - 点赞 `POST`：通知 post 作者\n   - 点赞 `COMMENT`：通知 comment 作者\n   - 其它对象（例如 @）先不做\n7. 通知聚合：先不做（先把通知 MVP 跑通）；后续再决定聚合窗口长度与 fingerprint 去重粒度。
+
+---
+
+## 13. 当前代码落地状态（已完成 / 未完成 / 改进点）
+
+截至：2026-01-15（以代码为准）
+
+### 13.1 已完成（对应 Step 0~3）
+
+- Step 0（文档/契约）：本文档 + 表结构 SQL 已齐备：`project/nexus/docs/interaction_like_tables.sql`
+- Step 1（写链路秒回）：HTTP 已落地（写 Redis + needSchedule 时投递延迟 flush）：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
+- Step 1（Redis 原子写）：Lua 收敛 “幂等 + 计数 + touch + win 状态机”：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java`
+- Step 2（延迟 flush）：RabbitMQ `x-delayed-message` 延迟队列 + DLQ 已落地：
+  - Config：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/LikeSyncDelayConfig.java`
+  - Producer：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/LikeSyncProducer.java`
+  - Consumer：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/LikeSyncConsumer.java`
+  - DLQ Consumer：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/LikeSyncDLQConsumer.java`
+- Step 2（落库闭环）：flush 会把 `like_counts`（绝对值）与 `likes(status)`（最终态）同步到 MySQL：
+  - 计数表：`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeCountMapper.xml`
+  - 明细表：`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeMapper.xml`
+- Step 3（读链路）：已落地 `state` 与 `batchState`（Redis -> DB -> 回填 Redis）：
+  - HTTP：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
+  - Repository：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java`
+
+### 13.2 未完成（对应 Step 4~5 + 监控/离线）
+
+- Step 4（通知 MVP）：
+  - `LikeCreatedEvent`、`ILikeEventPort`、LikeCreatedEventConsumer、`notification_inbox` 表与通知仓储：未落地
+  - 当前 `/notification/list` 仅返回占位数据（看起来“能用”，实际没做通知链路）
+- Step 5（通知聚合）：未落地（窗口内合并同 target 的点赞通知）
+- 实时监控（Kafka/Flink）与离线分析（Hive/Spark）：本仓库当前没有点赞相关作业/链路落地
+- 可选热点治理（HotKeyDetector + Caffeine L1）：未落地（且需要先做热点探测，否则就是盲目缓存）
+
+### 13.3 改进点（按优先级，先做 P0）
+
+P0（不改会出“用户可见问题”）
+
+1. Redis 计数真值假设：当前 flush 直接以 `like:count:*` 作为绝对值写回 `like_counts`。
+   - 风险：Redis 逐出/清空会把计数打回 0，甚至被 flush 写回 DB（错数是用户可见 bug）
+   - 建议：`countKey` miss 时先从 `like_counts` 回源初始化，再进入 Lua 更新；并明确 Redis 运维前提（持久化/不随意清空/逐出策略）
+2. flush 读取 touch 快照用 `HGETALL`：热点目标在窗口内积累大量用户时，会一次性拉爆内存/超时。
+   - 建议：按方案改成 `HSCAN` 流式读取 + 分批 upsert（Redis 侧不要一次性拉全量）
+
+P1（规模上来会慢/会抖）
+
+3. 批量回源 SQL 用 `OR` 拼接：targets 很多时 SQL 会退化。
+   - 建议：限制 `batchState` 一次最多 N（例如 50）；或改为更友好的批量条件（避免超长 OR）
+4. reschedule 延迟偏保守：flush 期间有新写入会再等一轮 `window+buffer`，DB 追平上界变长。
+   - 建议：重排队可以只用 buffer（或更短延迟），让 DB 更快追平
+
+P2（可运维性/可观察性）
+
+5. DLQ 目前只打日志：建议接入告警（至少把 dead-letter 变成“有人会看到”的告警）
+6. 统一输入参数约束：`type`/`action`/`targetType` 的校验要在 DTO/校验层说死，别靠“空值默认”制造半兼容行为
+
+> 细节 CR 参考：`.codex/review-report.md` 的 “2026-01-15（点赞链路 Step 1~3 代码落地 CR）”。

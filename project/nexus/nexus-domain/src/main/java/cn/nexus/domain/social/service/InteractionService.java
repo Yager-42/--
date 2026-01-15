@@ -1,11 +1,14 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
+import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -16,11 +19,73 @@ import java.util.List;
 public class InteractionService implements IInteractionService {
 
     private final ISocialIdPort socialIdPort;
+    private final IReactionRepository reactionRepository;
+
+    /**
+     * like:win / like:touch TTL（秒）。必须 >= delaySeconds * 2，避免 flush 执行期间 key 过期导致窗口丢失。
+     */
+    @Value("${interaction.like.syncTtlSeconds:180}")
+    private long syncTtlSeconds;
 
     @Override
     public ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action) {
-        long count = "ADD".equalsIgnoreCase(action) ? 1L : 0L;
-        return ReactionResultVO.builder().currentCount(count).success(true).build();
+        if (userId == null || targetId == null || targetId <= 0) {
+            return ReactionResultVO.builder().currentCount(0L).success(false).delta(0L).needSchedule(false).build();
+        }
+
+        // 当前版本只落地 LIKE（点赞）。其它态势（LOVE/ANGRY 等）后续再扩展到独立计数与状态。
+        String normalizedType = normalizeUpper(type);
+        if (normalizedType != null && !normalizedType.isBlank() && !"LIKE".equals(normalizedType)) {
+            return ReactionResultVO.builder().currentCount(0L).success(false).delta(0L).needSchedule(false).build();
+        }
+
+        String normalizedTargetType = normalizeUpper(targetType);
+        if (!isSupportedTargetType(normalizedTargetType)) {
+            return ReactionResultVO.builder().currentCount(0L).success(false).delta(0L).needSchedule(false).build();
+        }
+
+        String normalizedAction = normalizeUpper(action);
+        if (!isSupportedAction(normalizedAction)) {
+            return ReactionResultVO.builder().currentCount(0L).success(false).delta(0L).needSchedule(false).build();
+        }
+
+        long ttlSeconds = Math.max(1L, syncTtlSeconds);
+        ReactionToggleResultVO res = reactionRepository.toggle(userId, normalizedTargetType, targetId, normalizedAction, ttlSeconds);
+        if (res == null) {
+            return ReactionResultVO.builder().currentCount(0L).success(false).delta(0L).needSchedule(false).build();
+        }
+        return ReactionResultVO.builder()
+                .currentCount(res.getCurrentCount() == null ? 0L : res.getCurrentCount())
+                .success(true)
+                .delta(res.getDelta() == null ? 0L : res.getDelta())
+                .needSchedule(res.isNeedSchedule())
+                .build();
+    }
+
+    @Override
+    public ReactionStateVO reactionState(Long userId, Long targetId, String targetType) {
+        if (userId == null || targetId == null || targetId <= 0) {
+            return ReactionStateVO.builder().likeCount(0L).likedByMe(false).build();
+        }
+        String normalizedTargetType = normalizeUpper(targetType);
+        if (!isSupportedTargetType(normalizedTargetType)) {
+            return ReactionStateVO.builder().likeCount(0L).likedByMe(false).build();
+        }
+        return reactionRepository.getState(userId, normalizedTargetType, targetId);
+    }
+
+    @Override
+    public ReactionBatchStateVO batchState(Long userId, List<ReactionTargetVO> targets) {
+        if (userId == null || targets == null || targets.isEmpty()) {
+            return ReactionBatchStateVO.builder().items(Collections.emptyList()).build();
+        }
+        List<ReactionTargetVO> normalized = targets.stream()
+                .map(t -> ReactionTargetVO.builder()
+                        .targetId(t == null ? null : t.getTargetId())
+                        .targetType(normalizeUpper(t == null ? null : t.getTargetType()))
+                        .build())
+                .toList();
+        return reactionRepository.getBatchState(userId, normalized);
     }
 
     @Override
@@ -79,5 +144,17 @@ public class InteractionService implements IInteractionService {
                 .amount("100.00")
                 .frozenAmount("0.00")
                 .build();
+    }
+
+    private static boolean isSupportedTargetType(String targetType) {
+        return "POST".equals(targetType) || "COMMENT".equals(targetType);
+    }
+
+    private static boolean isSupportedAction(String action) {
+        return "ADD".equals(action) || "REMOVE".equals(action);
+    }
+
+    private static String normalizeUpper(String s) {
+        return s == null ? null : s.trim().toUpperCase();
     }
 }

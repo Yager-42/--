@@ -154,3 +154,43 @@
 ### 改进方向（不阻塞交付）
 
 - 指标进一步结构化：如果后续接入 Micrometer/Actuator，再把 wrote/skippedOffline/costMs 从日志升级为 counter/timer（本次按最小实现只打日志）。 
+
+## 2026-01-15（点赞业务：互动域 + 通知域分步拆分与文档对齐）
+
+综合评分：90 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：按用户要求把点赞业务从“实现契约”拆成可交付步骤（写/flush/读/通知 MVP/通知聚合），并同步到外部文档（接口/数据库），避免三份文档互相打架。
+- 数据结构优先：点赞真值落库明确为 `likes(status)` + `like_counts(绝对值)`；通知最小落库明确为 `notification_inbox`（fingerprint 去重），并强调 toUserId 解析放在通知侧，避免点赞写接口回表拖慢。
+- 特殊情况收敛：依旧坚持“Lua 原子 + win 状态机 + touch 快照”的核心收敛点；通知链路只在 `delta=+1` 发事件，避免重复点赞刷屏。
+
+### 致命问题（实现前必须拍板）
+
+- 通知聚合口径：聚合窗口长度与 fingerprint 去重粒度必须明确，否则会出现“重复通知/丢通知”的用户可见问题。
+
+### 改进方向（不阻塞交付）
+
+- 事件 inbox/outbox 抽象：当前仓库只有 relation 事件 inbox，实现点赞/通知事件时建议复用模式但不要复用命名（避免概念污染），后续可抽象为通用 EventInboxPort。
+
+## 2026-01-15（点赞链路 Step 1~3 代码落地 CR）
+
+综合评分：89 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：已实现《社交接口.md》的点赞三接口（react/state/batchState），并落地“Redis 秒回 + 延迟 flush 落库”闭环：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`。
+- 数据结构优先：写链路用 Redis Lua 原子收敛（幂等集合 + 计数 + touch + win 状态机），flush 用快照 + finalize 状态机避免竞态：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java:182`。
+- 特殊情况收敛：flush 解锁用 Lua compare-and-delete，避免 GET+DEL 误删他人锁；touch 快照 key 采用固定 key，避免 flush 失败产生“孤儿快照”丢落库：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java:162`。
+- 复用优先：延迟队列复用 `x-delayed-message` 插件模式，并补齐 DLX/DLQ；消费失败用 `AmqpRejectAndDontRequeueException` 进入 DLQ：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/LikeSyncDelayConfig.java:35`、`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/LikeSyncConsumer.java:54`。
+
+### 致命问题（必须把“前置假设”说死，否则线上会炸）
+
+- Redis 计数真值假设：当前实现把 `like:count:*` 当作最终一致的聚合态来源（flush 写 `like_counts` 绝对值）。如果 Redis 发生逐出/清空，计数会回退（甚至被 flush 写回 DB），造成用户可见的错数。需要明确运维前提（noeviction/持久化/重建策略），或在 `countKey miss` 时先从 `like_counts` 回源初始化再进入 Lua 更新。
+- flush 读取 touch 快照使用 `HGETALL` 语义（`opsForHash().entries`），热点目标在窗口内积累大量用户时可能造成 OOM/超时：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java:190`。建议后续改为 `HSCAN` 流式读取 + 分批 upsert（目前已做 DB 分批，但 Redis 侧仍一次性拉全量）。
+
+### 改进方向（不阻塞交付，但会让行为更干净）
+
+- 参数更严谨：`type` 目前允许为空/空白时默认走 LIKE，会让契约变“半兼容”，建议明确要求 `type=LIKE`（或在 DTO 校验层强制）：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java:38`。
+- 批量 SQL 规模：`batchState` 回源 SQL 通过 `OR` 拼接 where 条件，targets 很多时会退化：`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeMapper.xml:27`、`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeCountMapper.xml:24`。建议限制 targets 最大长度（例如 50）或改为临时表/UNION ALL。
+- reschedule 延迟：flush 期间发生新写入时，当前仍按 `window+buffer` 延迟再跑一轮，DB 最终一致上界可能到 2 个窗口；若你在意“更快追平”，可把 reschedule 的 delay 调小（例如仅 buffer）。

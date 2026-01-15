@@ -10,6 +10,7 @@ import cn.nexus.domain.social.model.valobj.*;
 import cn.nexus.domain.social.service.IContentService;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.trigger.http.social.dto.ScheduleCancelRequestDTO;
+import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -43,7 +44,8 @@ public class ContentController implements IContentApi {
     @PutMapping("/content/draft")
     @Override
     public Response<SaveDraftResponseDTO> saveDraft(@RequestBody SaveDraftRequestDTO requestDTO) {
-        DraftVO vo = contentService.saveDraft(requestDTO.getUserId(), requestDTO.getContentText(), requestDTO.getMediaIds());
+        Long userId = UserContext.requireUserId();
+        DraftVO vo = contentService.saveDraft(userId, requestDTO.getContentText(), requestDTO.getMediaIds());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                 SaveDraftResponseDTO.builder().draftId(vo.getDraftId()).build());
     }
@@ -51,8 +53,9 @@ public class ContentController implements IContentApi {
     @PostMapping("/content/publish")
     @Override
     public Response<PublishContentResponseDTO> publish(@RequestBody PublishContentRequestDTO requestDTO) {
+        Long userId = UserContext.requireUserId();
         OperationResultVO vo = contentService.publish(
-                requestDTO.getPostId(), requestDTO.getUserId(), requestDTO.getText(), requestDTO.getMediaInfo(),
+                requestDTO.getPostId(), userId, requestDTO.getText(), requestDTO.getMediaInfo(),
                 requestDTO.getLocation(), requestDTO.getVisibility(), requestDTO.getPostTypes());
         PublishContentResponseDTO dto = PublishContentResponseDTO.builder()
                 .postId(vo.getId())
@@ -66,7 +69,8 @@ public class ContentController implements IContentApi {
     @GetMapping("/content/publish/attempt/{attemptId}")
     @Override
     public Response<PublishAttemptResponseDTO> publishAttempt(@PathVariable("attemptId") Long attemptId,
-                                                              @RequestParam("userId") Long userId) {
+                                                              @RequestParam("userId") Long ignoredUserId) {
+        Long userId = UserContext.requireUserId();
         ContentPublishAttemptEntity attempt = contentService.getPublishAttemptAudit(attemptId, userId);
         if (attempt == null) {
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), null);
@@ -91,15 +95,17 @@ public class ContentController implements IContentApi {
 
     @DeleteMapping("/content/{postId}")
     @Override
-    public Response<OperationResultDTO> delete(@PathVariable("postId") Long postId, @RequestBody DeleteContentRequestDTO requestDTO) {
-        OperationResultVO vo = contentService.delete(requestDTO.getUserId(), postId);
+    public Response<OperationResultDTO> delete(@PathVariable("postId") Long postId, @RequestBody DeleteContentRequestDTO ignoredRequestDTO) {
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = contentService.delete(userId, postId);
         return toOperationResult(vo);
     }
 
     @PostMapping("/content/schedule")
     @Override
     public Response<ScheduleContentResponseDTO> schedule(@RequestBody ScheduleContentRequestDTO requestDTO) {
-        OperationResultVO vo = contentService.schedule(requestDTO.getUserId(), requestDTO.getContentData(), requestDTO.getPublishTime(), requestDTO.getTimezone());
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = contentService.schedule(userId, requestDTO.getContentData(), requestDTO.getPublishTime(), requestDTO.getTimezone());
         long delayMs = requestDTO.getPublishTime() == null ? 0 : requestDTO.getPublishTime() - System.currentTimeMillis();
         contentScheduleProducer.sendDelay(vo.getId(), delayMs);
         ScheduleContentResponseDTO dto = ScheduleContentResponseDTO.builder()
@@ -111,14 +117,16 @@ public class ContentController implements IContentApi {
 
     @PostMapping("/content/schedule/cancel")
     public Response<OperationResultDTO> cancelSchedule(@RequestBody ScheduleCancelRequestDTO requestDTO) {
-        OperationResultVO vo = contentService.cancelSchedule(requestDTO.getTaskId(), requestDTO.getUserId(), requestDTO.getReason());
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = contentService.cancelSchedule(requestDTO.getTaskId(), userId, requestDTO.getReason());
         return toOperationResult(vo);
     }
 
     @PatchMapping("/content/schedule")
     @Override
     public Response<OperationResultDTO> updateSchedule(@RequestBody cn.nexus.api.social.content.dto.ScheduleUpdateRequestDTO requestDTO) {
-        OperationResultVO vo = contentService.updateSchedule(requestDTO.getTaskId(), requestDTO.getUserId(), requestDTO.getPublishTime(), requestDTO.getContentData(), requestDTO.getReason());
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = contentService.updateSchedule(requestDTO.getTaskId(), userId, requestDTO.getPublishTime(), requestDTO.getContentData(), requestDTO.getReason());
         return toOperationResult(vo);
     }
 
@@ -136,9 +144,10 @@ public class ContentController implements IContentApi {
     @GetMapping("/content/{postId}/history")
     @Override
     public Response<ContentHistoryResponseDTO> history(@PathVariable("postId") Long postId,
-                                                       @RequestParam(value = "userId", required = false) Long userId,
+                                                       @RequestParam(value = "userId", required = false) Long ignoredUserId,
                                                        @RequestParam(value = "limit", required = false) Integer limit,
                                                        @RequestParam(value = "offset", required = false) Integer offset) {
+        Long userId = UserContext.requireUserId();
         ContentHistoryVO vo = contentService.history(postId, userId, limit, offset);
         ContentHistoryResponseDTO dto = ContentHistoryResponseDTO.builder()
                 .versions(vo.getVersions().stream()
@@ -156,14 +165,16 @@ public class ContentController implements IContentApi {
     @PostMapping("/content/{postId}/rollback")
     @Override
     public Response<OperationResultDTO> rollback(@PathVariable("postId") Long postId, @RequestBody ContentRollbackRequestDTO requestDTO) {
-        OperationResultVO vo = contentService.rollback(postId, requestDTO.getUserId(), requestDTO.getTargetVersionId());
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = contentService.rollback(postId, userId, requestDTO.getTargetVersionId());
         return toOperationResult(vo);
     }
 
     @Override
     @GetMapping("/content/schedule/{taskId}")
     public Response<ScheduleAuditResponseDTO> scheduleAudit(@PathVariable("taskId") Long taskId,
-                                                            @RequestParam("userId") Long userId) {
+                                                            @RequestParam("userId") Long ignoredUserId) {
+        Long userId = UserContext.requireUserId();
         ContentScheduleEntity task = contentService.getScheduleAudit(taskId, userId);
         if (task == null) {
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), null);

@@ -8,6 +8,7 @@ import cn.nexus.domain.social.model.valobj.TextScanResultVO;
 import cn.nexus.domain.social.model.valobj.UserRiskStatusVO;
 import cn.nexus.domain.social.service.IRiskService;
 import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -27,7 +28,8 @@ public class RiskController implements IRiskApi {
     @PostMapping("/scan/text")
     @Override
     public Response<TextScanResponseDTO> textScan(@RequestBody TextScanRequestDTO requestDTO) {
-        TextScanResultVO vo = riskService.textScan(requestDTO.getContent(), requestDTO.getUserId(), requestDTO.getScenario());
+        Long userId = UserContext.requireUserId();
+        TextScanResultVO vo = riskService.textScan(requestDTO.getContent(), userId, requestDTO.getScenario());
         TextScanResponseDTO dto = TextScanResponseDTO.builder().result(vo.getResult()).tags(vo.getTags()).build();
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
     }
@@ -35,7 +37,8 @@ public class RiskController implements IRiskApi {
     @PostMapping("/scan/image")
     @Override
     public Response<ImageScanResponseDTO> imageScan(@RequestBody ImageScanRequestDTO requestDTO) {
-        ImageScanResultVO vo = riskService.imageScan(requestDTO.getImageUrl(), requestDTO.getUserId());
+        Long userId = UserContext.requireUserId();
+        ImageScanResultVO vo = riskService.imageScan(requestDTO.getImageUrl(), userId);
         ImageScanResponseDTO dto = ImageScanResponseDTO.builder().taskId(vo.getTaskId()).build();
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
     }
@@ -43,7 +46,8 @@ public class RiskController implements IRiskApi {
     @GetMapping("/user/status")
     @Override
     public Response<UserRiskStatusResponseDTO> userStatus(UserRiskStatusRequestDTO requestDTO) {
-        UserRiskStatusVO vo = riskService.userStatus(requestDTO.getUserId());
+        Long userId = UserContext.requireUserId();
+        UserRiskStatusVO vo = riskService.userStatus(userId);
         UserRiskStatusResponseDTO dto = UserRiskStatusResponseDTO.builder()
                 .status(vo.getStatus())
                 .capabilities(vo.getCapabilities())

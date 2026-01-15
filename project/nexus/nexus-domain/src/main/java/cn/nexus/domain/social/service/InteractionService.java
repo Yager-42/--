@@ -18,13 +18,13 @@ public class InteractionService implements IInteractionService {
     private final ISocialIdPort socialIdPort;
 
     @Override
-    public ReactionResultVO react(Long targetId, String targetType, String type, String action) {
+    public ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action) {
         long count = "ADD".equalsIgnoreCase(action) ? 1L : 0L;
         return ReactionResultVO.builder().currentCount(count).success(true).build();
     }
 
     @Override
-    public CommentResultVO comment(Long postId, Long parentId, String content, List<Long> mentions) {
+    public CommentResultVO comment(Long userId, Long postId, Long parentId, String content, List<Long> mentions) {
         return CommentResultVO.builder()
                 .commentId(socialIdPort.nextId())
                 .createTime(socialIdPort.now())

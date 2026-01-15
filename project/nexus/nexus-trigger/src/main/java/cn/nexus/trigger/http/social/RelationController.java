@@ -10,6 +10,7 @@ import cn.nexus.domain.social.model.valobj.OperationResultVO;
 import cn.nexus.domain.social.model.valobj.RelationGroupVO;
 import cn.nexus.domain.social.service.IRelationService;
 import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -29,7 +30,8 @@ public class RelationController implements IRelationApi {
     @PostMapping("/follow")
     @Override
     public Response<FollowResponseDTO> follow(@RequestBody FollowRequestDTO requestDTO) {
-        FollowResultVO vo = relationService.follow(requestDTO.getSourceId(), requestDTO.getTargetId());
+        Long userId = UserContext.requireUserId();
+        FollowResultVO vo = relationService.follow(userId, requestDTO.getTargetId());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                 FollowResponseDTO.builder().status(vo.getStatus()).build());
     }
@@ -37,8 +39,9 @@ public class RelationController implements IRelationApi {
     @PostMapping("/friend/request")
     @Override
     public Response<FriendRequestResponseDTO> friendRequest(@RequestBody FriendRequestDTO requestDTO) {
+        Long userId = UserContext.requireUserId();
         FriendRequestResultVO vo = relationService.friendRequest(
-                requestDTO.getSourceId(), requestDTO.getTargetId(),
+                userId, requestDTO.getTargetId(),
                 requestDTO.getVerifyMsg(), requestDTO.getSourceChannel());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                 FriendRequestResponseDTO.builder().requestId(vo.getRequestId()).status(vo.getStatus()).build());
@@ -55,7 +58,8 @@ public class RelationController implements IRelationApi {
     @PostMapping("/block")
     @Override
     public Response<BlockResponseDTO> block(@RequestBody BlockRequestDTO requestDTO) {
-        OperationResultVO vo = relationService.block(requestDTO.getSourceId(), requestDTO.getTargetId());
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = relationService.block(userId, requestDTO.getTargetId());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                 BlockResponseDTO.builder().success(vo.isSuccess()).build());
     }
@@ -63,8 +67,9 @@ public class RelationController implements IRelationApi {
     @PostMapping("/list")
     @Override
     public Response<RelationGroupResponseDTO> manageGroup(@RequestBody RelationGroupRequestDTO requestDTO) {
+        Long userId = UserContext.requireUserId();
         RelationGroupVO vo = relationService.manageGroup(
-                requestDTO.getUserId(),
+                userId,
                 requestDTO.getAction(),
                 requestDTO.getListName(),
                 requestDTO.getListId(),

@@ -7,6 +7,7 @@ import cn.nexus.api.social.interaction.dto.*;
 import cn.nexus.domain.social.model.valobj.*;
 import cn.nexus.domain.social.service.IInteractionService;
 import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -28,7 +29,8 @@ public class InteractionController implements IInteractionApi {
     @PostMapping("/interact/reaction")
     @Override
     public Response<ReactionResponseDTO> react(@RequestBody ReactionRequestDTO requestDTO) {
-        ReactionResultVO vo = interactionService.react(requestDTO.getTargetId(), requestDTO.getTargetType(), requestDTO.getType(), requestDTO.getAction());
+        Long userId = UserContext.requireUserId();
+        ReactionResultVO vo = interactionService.react(userId, requestDTO.getTargetId(), requestDTO.getTargetType(), requestDTO.getType(), requestDTO.getAction());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                 ReactionResponseDTO.builder().currentCount(vo.getCurrentCount()).success(vo.isSuccess()).build());
     }
@@ -36,7 +38,8 @@ public class InteractionController implements IInteractionApi {
     @PostMapping("/interact/comment")
     @Override
     public Response<CommentResponseDTO> comment(@RequestBody CommentRequestDTO requestDTO) {
-        CommentResultVO vo = interactionService.comment(requestDTO.getPostId(), requestDTO.getParentId(), requestDTO.getContent(), requestDTO.getMentions());
+        Long userId = UserContext.requireUserId();
+        CommentResultVO vo = interactionService.comment(userId, requestDTO.getPostId(), requestDTO.getParentId(), requestDTO.getContent(), requestDTO.getMentions());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                 CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).build());
     }
@@ -51,7 +54,8 @@ public class InteractionController implements IInteractionApi {
     @GetMapping("/notification/list")
     @Override
     public Response<NotificationListResponseDTO> notifications(NotificationListRequestDTO requestDTO) {
-        NotificationListVO vo = interactionService.notifications(requestDTO.getUserId(), requestDTO.getCursor());
+        Long userId = UserContext.requireUserId();
+        NotificationListVO vo = interactionService.notifications(userId, requestDTO.getCursor());
         NotificationListResponseDTO dto = NotificationListResponseDTO.builder()
                 .notifications(vo.getNotifications().stream().map(this::toNotification).collect(Collectors.toList()))
                 .nextCursor(vo.getNextCursor())

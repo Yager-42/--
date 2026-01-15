@@ -9,6 +9,7 @@ import cn.nexus.domain.social.model.valobj.FeedTimelineVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
 import cn.nexus.domain.social.service.IFeedService;
 import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -30,7 +31,8 @@ public class FeedController implements IFeedApi {
     @GetMapping("/timeline")
     @Override
     public Response<FeedTimelineResponseDTO> timeline(FeedTimelineRequestDTO requestDTO) {
-        FeedTimelineVO vo = feedService.timeline(requestDTO.getUserId(), requestDTO.getCursor(), requestDTO.getLimit(), requestDTO.getFeedType());
+        Long userId = UserContext.requireUserId();
+        FeedTimelineVO vo = feedService.timeline(userId, requestDTO.getCursor(), requestDTO.getLimit(), requestDTO.getFeedType());
         FeedTimelineResponseDTO dto = toTimelineDTO(vo);
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
     }
@@ -38,23 +40,26 @@ public class FeedController implements IFeedApi {
     @GetMapping("/profile/{targetId}")
     @Override
     public Response<FeedTimelineResponseDTO> profile(@PathVariable("targetId") Long targetId, ProfileFeedRequestDTO requestDTO) {
-        FeedTimelineVO vo = feedService.profile(targetId, requestDTO.getVisitorId(), requestDTO.getCursor(), requestDTO.getLimit());
+        Long visitorId = UserContext.requireUserId();
+        FeedTimelineVO vo = feedService.profile(targetId, visitorId, requestDTO.getCursor(), requestDTO.getLimit());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), toTimelineDTO(vo));
     }
 
     @PostMapping("/feedback/negative")
     @Override
     public Response<OperationResultDTO> submitNegativeFeedback(@RequestBody NegativeFeedbackRequestDTO requestDTO) {
+        Long userId = UserContext.requireUserId();
         OperationResultVO vo = feedService.negativeFeedback(
-                requestDTO.getUserId(), requestDTO.getTargetId(), requestDTO.getType(), requestDTO.getReasonCode(), requestDTO.getExtraTags());
+                userId, requestDTO.getTargetId(), requestDTO.getType(), requestDTO.getReasonCode(), requestDTO.getExtraTags());
         return toOperationResult(vo);
     }
 
     @DeleteMapping("/feedback/negative/{targetId}")
     @Override
     public Response<OperationResultDTO> cancelNegativeFeedback(@PathVariable("targetId") Long targetId,
-                                                               @RequestBody CancelNegativeFeedbackRequestDTO requestDTO) {
-        OperationResultVO vo = feedService.cancelNegativeFeedback(requestDTO.getUserId(), targetId);
+                                                               @RequestBody CancelNegativeFeedbackRequestDTO ignoredRequestDTO) {
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = feedService.cancelNegativeFeedback(userId, targetId);
         return toOperationResult(vo);
     }
 

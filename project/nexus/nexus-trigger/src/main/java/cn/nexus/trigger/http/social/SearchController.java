@@ -10,6 +10,7 @@ import cn.nexus.domain.social.model.valobj.SearchSuggestVO;
 import cn.nexus.domain.social.model.valobj.SearchTrendingVO;
 import cn.nexus.domain.social.service.ISearchService;
 import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -63,7 +64,8 @@ public class SearchController implements ISearchApi {
     @DeleteMapping("/history")
     @Override
     public Response<OperationResultDTO> clearHistory(@RequestBody SearchHistoryDeleteRequestDTO requestDTO) {
-        OperationResultVO vo = searchService.clearHistory(requestDTO.getUserId());
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = searchService.clearHistory(userId);
         OperationResultDTO dto = OperationResultDTO.builder()
                 .success(vo.isSuccess())
                 .id(vo.getId())

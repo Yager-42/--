@@ -8,6 +8,7 @@ import cn.nexus.domain.social.model.valobj.GroupJoinResultVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
 import cn.nexus.domain.social.service.ICommunityService;
 import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -27,7 +28,8 @@ public class CommunityController implements ICommunityApi {
     @PostMapping("/join")
     @Override
     public Response<GroupJoinResponseDTO> join(@RequestBody GroupJoinRequestDTO requestDTO) {
-        GroupJoinResultVO vo = communityService.join(requestDTO.getGroupId(), requestDTO.getUserId(), requestDTO.getAnswers(), requestDTO.getInviteToken());
+        Long userId = UserContext.requireUserId();
+        GroupJoinResultVO vo = communityService.join(requestDTO.getGroupId(), userId, requestDTO.getAnswers(), requestDTO.getInviteToken());
         return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                 GroupJoinResponseDTO.builder().status(vo.getStatus()).build());
     }

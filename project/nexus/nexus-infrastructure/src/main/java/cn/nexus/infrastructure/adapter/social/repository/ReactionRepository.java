@@ -12,6 +12,7 @@ import cn.nexus.infrastructure.dao.social.po.LikeCountPO;
 import cn.nexus.infrastructure.dao.social.po.LikePO;
 import cn.nexus.infrastructure.dao.social.po.LikeTargetPO;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -341,11 +342,17 @@ public class ReactionRepository implements IReactionRepository {
                 members.add(member(t.getTargetType(), t.getTargetId()));
             }
             @SuppressWarnings("unchecked")
-            List<Object> res = stringRedisTemplate.executePipelined((SessionCallback<Object>) operations -> {
-                for (String m : members) {
-                    operations.opsForSet().isMember(key, m);
+            List<Object> res = stringRedisTemplate.executePipelined(new SessionCallback<Object>() {
+                @Override
+                public <K, V> Object execute(RedisOperations<K, V> operations) {
+                    // StringRedisTemplate 固定是 <String, String>，这里把泛型收敛回来，避免 K 推断失败导致编译不过。
+                    @SuppressWarnings("unchecked")
+                    RedisOperations<String, String> stringOps = (RedisOperations<String, String>) operations;
+                    for (String m : members) {
+                        stringOps.opsForSet().isMember(key, m);
+                    }
+                    return null;
                 }
-                return null;
             });
             for (int i = 0; i < validTargets.size(); i++) {
                 int originalIndex = validIndexes.get(i);

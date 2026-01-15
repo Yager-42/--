@@ -7,10 +7,14 @@ import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.types.event.PostPublishedEvent;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Feed 分发服务实现：处理内容发布后的写扩散（fanout）。
@@ -20,6 +24,7 @@ import java.util.List;
  * @author codex
  * @since 2026-01-12
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class FeedDistributionService implements IFeedDistributionService {
@@ -106,23 +111,48 @@ public class FeedDistributionService implements IFeedDistributionService {
         }
         int safeOffset = offset == null ? 0 : Math.max(0, offset);
         int safeLimit = limit == null ? Math.max(1, batchSize) : Math.max(1, limit);
+        long startNs = System.nanoTime();
         List<Long> followerIds = relationRepository.listFollowerIds(authorId, safeOffset, safeLimit);
-        fanoutFollowerIds(authorId, postId, publishTimeMs, followerIds);
+        FanoutWriteStat stat = fanoutFollowerIds(authorId, postId, publishTimeMs, followerIds);
+        long costMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
+        if (stat.candidates() > 0) {
+            log.info("feed fanout slice done, postId={}, authorId={}, offset={}, limit={}, wrote={}, skippedOffline={}, costMs={}",
+                    postId, authorId, safeOffset, safeLimit, stat.wrote(), stat.skippedOffline(), costMs);
+        }
     }
 
-    private void fanoutFollowerIds(Long authorId, Long postId, Long publishTimeMs, List<Long> followerIds) {
+    private FanoutWriteStat fanoutFollowerIds(Long authorId, Long postId, Long publishTimeMs, List<Long> followerIds) {
         if (followerIds == null || followerIds.isEmpty()) {
-            return;
+            return new FanoutWriteStat(0, 0, 0);
         }
+
+        List<Long> candidates = new ArrayList<>(followerIds.size());
         for (Long followerId : followerIds) {
             if (followerId == null || followerId.equals(authorId)) {
                 continue;
             }
-            if (!feedTimelineRepository.inboxExists(followerId)) {
+            candidates.add(followerId);
+        }
+        if (candidates.isEmpty()) {
+            return new FanoutWriteStat(0, 0, 0);
+        }
+
+        Set<Long> online = feedTimelineRepository.filterOnlineUsers(candidates);
+        if (online.isEmpty()) {
+            return new FanoutWriteStat(candidates.size(), 0, candidates.size());
+        }
+
+        int wrote = 0;
+        int skippedOffline = 0;
+        for (Long followerId : candidates) {
+            if (!online.contains(followerId)) {
+                skippedOffline++;
                 continue;
             }
             feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
+            wrote++;
         }
+        return new FanoutWriteStat(candidates.size(), wrote, skippedOffline);
     }
 
     private void pushToCoreFans(Long authorId, Long postId, Long publishTimeMs) {
@@ -134,14 +164,30 @@ public class FeedDistributionService implements IFeedDistributionService {
         if (coreFans == null || coreFans.isEmpty()) {
             return;
         }
+
+        List<Long> candidates = new ArrayList<>(coreFans.size());
         for (Long followerId : coreFans) {
             if (followerId == null || followerId.equals(authorId)) {
                 continue;
             }
-            if (!feedTimelineRepository.inboxExists(followerId)) {
+            candidates.add(followerId);
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+
+        Set<Long> online = feedTimelineRepository.filterOnlineUsers(candidates);
+        if (online.isEmpty()) {
+            return;
+        }
+        for (Long followerId : candidates) {
+            if (!online.contains(followerId)) {
                 continue;
             }
             feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
         }
+    }
+
+    private record FanoutWriteStat(int candidates, int wrote, int skippedOffline) {
     }
 }

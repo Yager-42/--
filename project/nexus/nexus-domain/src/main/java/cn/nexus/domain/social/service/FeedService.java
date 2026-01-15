@@ -377,13 +377,14 @@ public class FeedService implements IFeedService {
 
         cleanupMissingIndexes(userId, candidateIds, posts);
 
+        Set<Long> negativePostIds = feedNegativeFeedbackRepository.listPostIds(userId);
         Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
         List<FeedItemVO> items = new ArrayList<>(Math.min(posts.size(), normalizedLimit));
         for (ContentPostEntity post : posts) {
             if (post == null) {
                 continue;
             }
-            if (post.getPostId() != null && feedNegativeFeedbackRepository.contains(userId, post.getPostId())) {
+            if (post.getPostId() != null && negativePostIds.contains(post.getPostId())) {
                 continue;
             }
             if (hitNegativePostTypes(post, negativeTypes)) {

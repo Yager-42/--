@@ -60,3 +60,5 @@
 - 交付：负反馈类型语义最终落地为“用户从该帖 postTypes 中点选的一个类型”：写入时后端校验 type 是否属于该帖 postTypes，不合法直接忽略。
 - 交付：为支持撤销负反馈（cancel 接口无 type 参数），负反馈仓储新增 Redis HASH：`feed:neg:postTypeByPost:{userId}`（postId->type），撤销时反查并在“无其它 post 仍点选该 type”时才移除类型级过滤集合。
 - 同步：更新 `.codex/distribution-feed-implementation*.md`、`社交领域数据库.md`、`verification.md` 等文档，确保与代码一致。
+- 交付：按 `.codex/distribution-feed-implementation.md` 的 `10.6` 补齐可改进点（不影响 Phase 2 正确性）—— MQ 消息统一 JSON（`Jackson2JsonMessageConverter`）、timeline 负反馈 postId 批量过滤（`SMEMBERS`）、fanout DLQ（死信）与最小指标日志、fanout 在线判定改为 Redis pipeline（批量 `EXISTS`）。
+- 同步：更新 `.codex/distribution-feed-implementation.md` 与 `.codex/distribution-feed-implementation-ezRead.md`，将 `10.6.1/10.6.2/10.6.4/10.6.5` 标记为已落地；按用户要求跳过“热点探测 + L1 本地缓存（10.6.3）”。

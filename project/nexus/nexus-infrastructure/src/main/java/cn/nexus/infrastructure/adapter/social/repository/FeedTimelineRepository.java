@@ -6,12 +6,15 @@ import cn.nexus.domain.social.model.valobj.FeedIdPageVO;
 import cn.nexus.infrastructure.config.FeedInboxProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Repository;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -59,6 +62,48 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
         }
         Boolean exists = stringRedisTemplate.hasKey(inboxKey(userId));
         return Boolean.TRUE.equals(exists);
+    }
+
+    @Override
+    public Set<Long> filterOnlineUsers(List<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> candidates = new ArrayList<>(userIds.size());
+        for (Long userId : userIds) {
+            if (userId == null) {
+                continue;
+            }
+            candidates.add(userId);
+        }
+        if (candidates.isEmpty()) {
+            return Set.of();
+        }
+
+        List<Object> existsList = stringRedisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+            for (Long userId : candidates) {
+                byte[] key = inboxKey(userId).getBytes(StandardCharsets.UTF_8);
+                connection.keyCommands().exists(key);
+            }
+            return null;
+        });
+        if (existsList == null || existsList.isEmpty()) {
+            return Set.of();
+        }
+
+        int size = Math.min(candidates.size(), existsList.size());
+        Set<Long> online = new HashSet<>(size);
+        for (int i = 0; i < size; i++) {
+            Object exists = existsList.get(i);
+            if (Boolean.TRUE.equals(exists)) {
+                online.add(candidates.get(i));
+                continue;
+            }
+            if (exists instanceof Long l && l > 0) {
+                online.add(candidates.get(i));
+            }
+        }
+        return online.isEmpty() ? Set.of() : online;
     }
 
     @Override

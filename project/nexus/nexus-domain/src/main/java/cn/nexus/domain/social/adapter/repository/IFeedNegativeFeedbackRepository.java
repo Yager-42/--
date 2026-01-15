@@ -36,6 +36,16 @@ public interface IFeedNegativeFeedbackRepository {
     boolean contains(Long userId, Long targetId);
 
     /**
+     * 查询用户负反馈的 postId 集合（用于读侧批量过滤）。
+     *
+     * <p>实现建议：直接 {@code SMEMBERS feed:neg:{userId}} 拉全量集合，通常规模很小。</p>
+     *
+     * @param userId 用户 ID {@link Long}
+     * @return postId 集合 {@link java.util.Set} {@link Long}
+     */
+    java.util.Set<Long> listPostIds(Long userId);
+
+    /**
      * 记录负反馈的帖子类型（业务类目/主题维度；例如“xx游戏/情感/技术”等）。
      *
      * <p>注意：这里的“类型”不是 {@code content_post.media_type}（媒体形态：纯文/图文/视频）。</p>

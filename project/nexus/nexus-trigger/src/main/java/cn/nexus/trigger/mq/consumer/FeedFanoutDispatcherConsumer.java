@@ -16,7 +16,9 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Feed fanout dispatcher：接收 PostPublishedEvent 并拆分为多个 {@link FeedFanoutTask} 切片任务。
@@ -137,14 +139,33 @@ public class FeedFanoutDispatcherConsumer {
         if (coreFans == null || coreFans.isEmpty()) {
             return;
         }
+
+        List<Long> candidates = new ArrayList<>(coreFans.size());
         for (Long followerId : coreFans) {
             if (followerId == null || followerId.equals(authorId)) {
                 continue;
             }
-            if (!feedTimelineRepository.inboxExists(followerId)) {
+            candidates.add(followerId);
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+
+        Set<Long> online = feedTimelineRepository.filterOnlineUsers(candidates);
+        if (online.isEmpty()) {
+            return;
+        }
+        int wrote = 0;
+        int skippedOffline = 0;
+        for (Long followerId : candidates) {
+            if (!online.contains(followerId)) {
+                skippedOffline++;
                 continue;
             }
             feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
+            wrote++;
         }
+        log.info("feed corefans pushed, postId={}, authorId={}, wrote={}, skippedOffline={}",
+                postId, authorId, wrote, skippedOffline);
     }
 }

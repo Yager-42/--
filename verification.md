@@ -3,9 +3,10 @@
 ## 本次交付内容
 
 - `.codex/context-scan.json`：项目结构/技术栈/现状扫描结果。
-- `.codex/distribution-feed-implementation.md`：分发与 Feed 服务实现方案（MVP → 优化 → 排序推荐，已落地 10.5.1 ~ 10.5.7）。
+- `.codex/distribution-feed-implementation.md`：分发与 Feed 服务实现方案（MVP → 优化 → 排序推荐，已落地 10.5.1 ~ 10.5.7 + 10.6.1/10.6.2/10.6.4/10.6.5）。
 - `.codex/distribution-feed-implementation-ezRead.md`：当前代码实现快照说明（Phase 1 + Phase 2 + 10.5.2~10.5.7 快照）。
 - 负反馈类型语义修复与落地：负反馈“类型”指 postTypes（业务类目/主题），来源 `content_post_type`；发布接口支持用户提交 postTypes（最多 5 个）并落库；负反馈写入会校验 `type` 是否属于该帖 postTypes，并通过 Redis HASH `feed:neg:postTypeByPost:{userId}` 支持撤销反查。
+- Feed 10.6 可改进点补齐：MQ 消息统一 JSON、timeline 负反馈 postId 批量过滤、fanout 补齐 DLQ 与最小指标日志、fanout 在线判定改为 Redis pipeline（批量 EXISTS）。
 - `.codex/interaction-like-pipeline-implementation.md`：点赞/取消点赞计数方案（Redis 秒回 + 延迟落库 + 实时监控 + 离线分析，已补齐读链路、收敛 Redis 数据结构，并补充“热点探测 + L1 Caffeine + 可选 TaiShan KV”章节）。
 - `.codex/operations-log.md`：关键决策记录。
 - `.codex/review-report.md`：自检审查报告。

@@ -79,3 +79,16 @@
 - 负反馈写入：对 postId 提交负反馈并传 `type="游戏"`（且该帖 postTypes 包含），应写入 `feed:neg:{userId}` + `feed:neg:postType:{userId}` + `feed:neg:postTypeByPost:{userId}[postId]=游戏`。
 - 负反馈非法输入：若 `type` 不属于该帖 postTypes，应只记录 `feed:neg:{userId}`（精确隐藏），不写入类型维度与反查映射。
 - 负反馈撤销：撤销后 `feed:neg:{userId}` 移除 postId；若该 type 没有其它 post 仍点选，应从 `feed:neg:postType:{userId}` 移除该 type；并清理 `feed:neg:postTypeByPost:{userId}` 对应 field。
+
+## 2026-01-15（Feed 10.6 可改进点落地：JSON / 批量过滤 / DLQ / pipeline）
+
+本次交付补齐了 `.codex/distribution-feed-implementation.md` 的 10.6.1/10.6.2/10.6.4/10.6.5：MQ 消息统一 JSON、timeline postId 负反馈批量过滤、fanout DLQ 与最小指标日志、fanout 在线判定改为 Redis pipeline（批量 EXISTS）。
+
+按用户要求，未执行 Maven 编译/测试，仅做静态自检：
+- RabbitMQ：`FeedFanoutConfig` 已声明 `Jackson2JsonMessageConverter`，并为 `feed.post.published.queue`/`feed.fanout.task.queue` 配置 DLX/DLQ；consumer 失败路径已统一 `AmqpRejectAndDontRequeueException`，确保消息可进入 DLQ。
+- fanout：`IFeedTimelineRepository` 已新增 `filterOnlineUsers(List<Long>)` 且 Redis 实现存在；写扩散路径（`FeedDistributionService`、`FeedFanoutDispatcherConsumer.pushToCoreFans`）已改为批量过滤在线用户后写 inbox。
+- timeline：`IFeedNegativeFeedbackRepository` 已新增 `listPostIds(Long)` 且 Redis 实现存在；读侧不再逐条调用 `contains`（避免 N 次 `SISMEMBER` 往返）。
+
+建议后续人工验收（需要 MySQL + Redis + RabbitMQ）：
+- MQ：发布一条内容，观察 `PostPublishedEvent`/`FeedFanoutTask` 能以 JSON 正常投递与消费；故意让 consumer 抛异常，消息应进入对应 DLQ 队列。
+- fanout：造一批 followerId，其中部分 inbox key 不存在，验证写入日志里的 `skippedOffline` 与实际一致。

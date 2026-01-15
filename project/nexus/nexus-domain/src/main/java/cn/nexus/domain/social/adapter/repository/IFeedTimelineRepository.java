@@ -4,6 +4,7 @@ import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedIdPageVO;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Feed 时间线仓储接口：封装 InboxTimeline（Redis ZSET）的读写。
@@ -29,6 +30,16 @@ public interface IFeedTimelineRepository {
      * @return true=存在，false=不存在 {@code boolean}
      */
     boolean inboxExists(Long userId);
+
+    /**
+     * 批量过滤在线用户（用于 fanout 写扩散）：仅返回 inbox key 存在的 userId 集合。
+     *
+     * <p>语义：以 {@code feed:inbox:{userId}} key 是否存在定义在线（Phase 2 在线推/离线拉）。</p>
+     *
+     * @param userIds 用户 ID 列表 {@link List} {@link Long}
+     * @return 在线用户集合 {@link Set} {@link Long}
+     */
+    Set<Long> filterOnlineUsers(List<Long> userIds);
 
     /**
      * 原子化重建用户 InboxTimeline：写入临时 key 并通过 RENAME 覆盖正式 inbox。

@@ -159,6 +159,8 @@ graph TD
 - Exchange：`social.feed`（Direct）
 - Queue：`feed.post.published.queue`
 - RoutingKey：`post.published`
+- DLX：`social.feed.dlx.exchange`
+- DLQ：`feed.post.published.dlx.queue` / `feed.fanout.task.dlx.queue`
 
 ### 5.3 Redis
 - `feed:inbox:{userId}`：关注页 InboxTimeline（ZSET）
@@ -179,13 +181,12 @@ graph TD
 4) A 对某 postId 提交负反馈后再次拉取（验证过滤生效）再撤销验证恢复
 
 ## 7. 剩余不足（Phase 1 之外 / 非阻塞）
-- 对标关注流“生产级演进”的关键方案（`10.5.1` ~ `10.5.7`）已按实现文档落地；性能/可运维改进仍建议按 `10.6` 逐步补齐。
+- 对标关注流“生产级演进”的关键方案（`10.5.1` ~ `10.5.7`）已按实现文档落地；`10.6` 已补齐 `10.6.1/10.6.2/10.6.4/10.6.5`，剩余优化按需再做。
 - Phase 3 未实现：推荐与排序（关注 + 推荐召回、排序演进），但实现级方案已补齐，详见 `.codex/distribution-feed-implementation.md` 的 `11`。
 - unfollow 仍无接口/事件：`.codex/distribution-feed-implementation.md` 的 `10.5.2.2` 仅保留实现级说明（当前不做回收历史或 evict inbox）。
 - 铁粉集合生成未实现：当前只提供 `IFeedCoreFansRepository` 查询契约与写侧推送入口；铁粉集合建议复用互动计数/亲密度产出（见 `.codex/interaction-like-pipeline-implementation.md`）。
 - 聚合池默认关闭：开启 `feed.bigv.pool.enabled` 前，建议确认确实存在“关注很多大 V 导致 N 次 outbox 读”的规模问题。
-- MQ 序列化未显式统一为 JSON（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.1`）。
-- timeline 负反馈过滤是逐条 `SISMEMBER`（N 次 Redis 调用），高 QPS 场景可考虑批量化策略（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.2`）。
+- 热点探测 + L1 本地缓存（`JD HotKey` + Caffeine）未实现：按用户要求当前不做（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.3`）。
 - 异步清理未落地：当前为读时懒清理；若不想在读接口里做写操作，可按 `10.5.7.3` 补齐 `feed.index.cleanup` MQ 异步清理。
 - 内容负反馈类型已升级为 postTypes（业务类目/主题）维度；若要更细粒度（例如标签、多选、权重），详见 `.codex/distribution-feed-implementation.md` 的 `10.6.6`。
 

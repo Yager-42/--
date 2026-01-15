@@ -135,3 +135,22 @@
 ### 改进方向（不阻塞交付）
 
 - 类型字典：当前 type 是自由文本字符串；未来若要统一枚举/多语言/推荐，可在不破坏现有表结构的前提下引入“类型字典表 + type_id”并逐步迁移。
+
+## 2026-01-15（Feed 10.6 可改进点落地：JSON / 批量过滤 / DLQ / pipeline）
+
+综合评分：91 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：按 `.codex/distribution-feed-implementation.md` 的 10.6.1/10.6.2/10.6.4/10.6.5 落地，且不影响 Phase 2 正确性；按用户要求跳过 10.6.3（热点探测 + L1 缓存）。
+- 数据结构优先：把“在线判定”收敛为一次 pipeline `EXISTS feed:inbox:{id}`；把“负反馈 postId 过滤”收敛为一次 `SMEMBERS feed:neg:{userId}` + 内存过滤，消除 N 次 RTT。
+- 特殊情况消除：fanout 写扩散不再对每个 follower 单独 `inboxExists`；读侧不再逐条 `SISMEMBER`；两处最容易被 RTT 打爆的特殊情况被消掉了。
+- 可运维性：Feed fanout 队列补齐 DLX/DLQ；consumer 失败时 `AmqpRejectAndDontRequeueException` 直接入 DLQ；最小指标用日志输出 wrote/skippedOffline/costMs，方便排查写扩散异常与性能抖动。
+
+### 致命问题（必须正视）
+
+- MQ 序列化切换的迁移风险：如果线上/本地队列里已有“旧格式（Java 序列化）”消息，切换到 JSON 后消费会失败并进入 DLQ。上线时要么先清空/隔离队列，要么做一次性迁移策略（本次按“快速落地”未做兼容层）。
+
+### 改进方向（不阻塞交付）
+
+- 指标进一步结构化：如果后续接入 Micrometer/Actuator，再把 wrote/skippedOffline/costMs 从日志升级为 counter/timer（本次按最小实现只打日志）。 

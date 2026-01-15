@@ -58,6 +58,25 @@ public class FeedNegativeFeedbackRepository implements IFeedNegativeFeedbackRepo
     }
 
     @Override
+    public Set<Long> listPostIds(Long userId) {
+        if (userId == null) {
+            return Set.of();
+        }
+        Set<String> members = stringRedisTemplate.opsForSet().members(negKey(userId));
+        if (members == null || members.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> result = new HashSet<>(members.size());
+        for (String member : members) {
+            Long id = parseLong(member);
+            if (id != null) {
+                result.add(id);
+            }
+        }
+        return result.isEmpty() ? Set.of() : result;
+    }
+
+    @Override
     public void addPostType(Long userId, String postType) {
         if (userId == null || postType == null || postType.isBlank()) {
             return;
@@ -116,6 +135,17 @@ public class FeedNegativeFeedbackRepository implements IFeedNegativeFeedbackRepo
         }
         String type = value.toString();
         return type == null ? null : type.trim();
+    }
+
+    private Long parseLong(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     @Override

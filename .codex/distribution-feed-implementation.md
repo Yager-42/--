@@ -48,7 +48,7 @@
 
 ### 0.5 实现进度 Checklist（合并版，自动更新）
 
-> 更新时间：2026-01-14  
+> 更新时间：2026-01-15  
 > 说明：
 > - `[x]` 代表“代码已实现并已合入仓库”
 > - `[ ]` 代表“未实现 / 仅方案（文档里写了，但代码还没落地）”
@@ -89,11 +89,11 @@
 
 #### 可改进点（不影响 Phase 2 正确性）
 
-- [ ] MQ 消息序列化统一为 JSON
-- [ ] timeline 读侧批量 postId 负反馈过滤（减少 `SISMEMBER` 次数）
-- [ ] 热点探测 + L1 本地缓存：`JD HotKey` + Caffeine（短 TTL，只缓存 hot key；落地清单见 `.codex/interaction-like-pipeline-implementation.md` 的 2.2.6）(当前不要实现)
-- [ ] fanout 补齐 DLQ/重试与监控指标
-- [ ] fanout 的 `inboxExists` 使用 Redis pipeline（减少 1:1 round-trip）
+- [x] MQ 消息序列化统一为 JSON
+- [x] timeline 读侧批量 postId 负反馈过滤（减少 `SISMEMBER` 次数）
+- [ ] 热点探测 + L1 本地缓存：`JD HotKey` + Caffeine（短 TTL，只缓存 hot key；落地清单见 `.codex/interaction-like-pipeline-implementation.md` 的 2.2.6）(按用户要求：当前不做)
+- [x] fanout 补齐 DLQ/重试与监控指标（DLQ + 最小指标日志）
+- [x] fanout 的 `inboxExists` 使用 Redis pipeline（减少 1:1 round-trip）
 - [x] 负反馈维度扩展：使用 postTypes（业务类目/主题），来源 `content_post_type`；发布接口支持用户提交 postTypes（最多 5 个）并落库
 
 ---
@@ -1672,16 +1672,13 @@ for id in candidatePostIds:
 落点：
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFanoutConfig.java`
 
+已落地（代码）：
+- 仅声明 `MessageConverter` Bean（`Jackson2JsonMessageConverter`）即可；Spring Boot 会自动把它注入到 `RabbitTemplate` 与 `@RabbitListener` 容器工厂，做到“同一套 converter”。
+
 pseudocode：
 ```text
 @Bean
 MessageConverter messageConverter() = new Jackson2JsonMessageConverter()
-
-@Bean
-RabbitTemplate rabbitTemplate(ConnectionFactory cf):
-  template = new RabbitTemplate(cf)
-  template.setMessageConverter(messageConverter)
-  return template
 ```
 
 #### 10.6.2 timeline 读侧批量 postId 负反馈过滤（减少 N 次 SISMEMBER）
@@ -1703,6 +1700,9 @@ RabbitTemplate rabbitTemplate(ConnectionFactory cf):
 - infrastructure：`FeedNegativeFeedbackRepository` 增加 `Set<Long> listPostIds(Long userId)` 或 `Map<Long, Boolean> containsBatch(Long userId, List<Long> postIds)`
 - domain：`FeedService.timeline` 改用批量结果过滤
 
+已落地（代码）：
+- 采用方案 A：新增 `IFeedNegativeFeedbackRepository.listPostIds`，timeline 读侧改为一次 `SMEMBERS feed:neg:{userId}` + 内存过滤。
+
 #### 10.6.3 热点探测 + L1 本地缓存：JD HotKey + Caffeine
 
 目标：热点 postId 的回表/回 Redis 成本打爆时，先顶住。
@@ -1722,6 +1722,11 @@ DLQ（死信）最小可用：
 - 记录 fanout 写入条数、跳过离线条数、处理耗时
 - 记录 DLQ 堆积长度（RabbitMQ 自带指标/管理台即可）
 
+已落地（代码）：
+- DLX：`social.feed.dlx.exchange`
+- DLQ：`feed.post.published.dlx.queue` / `feed.fanout.task.dlx.queue`
+- 指标：在 `FeedDistributionService.fanoutSlice` 与 `FeedFanoutDispatcherConsumer.pushToCoreFans` 输出最小日志（wrote/skippedOffline/costMs）。
+
 #### 10.6.5 fanout 的 inboxExists 使用 Redis pipeline（减少 1:1 round-trip）
 
 现状：每个 followerId 一次 `EXISTS`。
@@ -1737,6 +1742,11 @@ online = timelineRepo.filterOnlineUsers(followers)
 for id in online:
   timelineRepo.addToInbox(id, postId, ts)
 ```
+
+已落地（代码）：
+- domain：`IFeedTimelineRepository.filterOnlineUsers(List<Long>)`
+- infrastructure：`FeedTimelineRepository.filterOnlineUsers` 使用 Redis pipeline 批量 `EXISTS feed:inbox:{id}`
+- fanout：`FeedDistributionService` 与 `FeedFanoutDispatcherConsumer` 已改为批量过滤在线用户再写入 inbox
 
 #### 10.6.6 负反馈维度扩展：从 media_type 扩到业务类目/标签
 

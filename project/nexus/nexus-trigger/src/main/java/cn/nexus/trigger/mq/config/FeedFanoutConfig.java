@@ -4,9 +4,15 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.support.converter.DefaultJackson2JavaTypeMapper;
+import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
+import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Feed 写扩散 MQ 拓扑：发布内容后触发 fanout。
@@ -43,6 +49,47 @@ public class FeedFanoutConfig {
     public static final String TASK_QUEUE = "feed.fanout.task.queue";
 
     /**
+     * DLX：Feed fanout 死信交换机（Direct）。
+     */
+    public static final String DLX_EXCHANGE = "social.feed.dlx.exchange";
+
+    /**
+     * DLQ：内容发布事件死信队列。
+     */
+    public static final String DLQ_POST_PUBLISHED = "feed.post.published.dlx.queue";
+
+    /**
+     * DLQ：fanout 切片任务死信队列。
+     */
+    public static final String DLQ_FANOUT_TASK = "feed.fanout.task.dlx.queue";
+
+    /**
+     * DLX RoutingKey：内容发布事件进入死信队列的路由键。
+     */
+    public static final String DLX_ROUTING_KEY_POST_PUBLISHED = "post.published.dlx";
+
+    /**
+     * DLX RoutingKey：fanout 切片任务进入死信队列的路由键。
+     */
+    public static final String DLX_ROUTING_KEY_FANOUT_TASK = "feed.fanout.task.dlx";
+
+    /**
+     * 统一 MQ 消息序列化为 JSON：避免默认 Java 序列化导致的跨语言/跨版本不稳定。
+     *
+     * <p>注意：这里故意信任所有 package（trustedPackages="*"），避免本地/多模块下类型映射被拦截。</p>
+     *
+     * @return JSON MessageConverter {@link MessageConverter}
+     */
+    @Bean
+    public MessageConverter messageConverter() {
+        Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter();
+        DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
+        typeMapper.setTrustedPackages("*");
+        converter.setJavaTypeMapper(typeMapper);
+        return converter;
+    }
+
+    /**
      * 声明 Feed 分发交换机（Direct）。
      *
      * @return exchange
@@ -53,13 +100,26 @@ public class FeedFanoutConfig {
     }
 
     /**
+     * 声明 Feed fanout 死信交换机（Direct）。
+     *
+     * @return DLX exchange
+     */
+    @Bean
+    public DirectExchange feedDlxExchange() {
+        return new DirectExchange(DLX_EXCHANGE, true, false);
+    }
+
+    /**
      * 声明内容发布队列。
      *
      * @return queue
      */
     @Bean
     public Queue feedPostPublishedQueue() {
-        return new Queue(QUEUE, true);
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
+        args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY_POST_PUBLISHED);
+        return new Queue(QUEUE, true, false, false, args);
     }
 
     /**
@@ -69,7 +129,30 @@ public class FeedFanoutConfig {
      */
     @Bean
     public Queue feedFanoutTaskQueue() {
-        return new Queue(TASK_QUEUE, true);
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
+        args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY_FANOUT_TASK);
+        return new Queue(TASK_QUEUE, true, false, false, args);
+    }
+
+    /**
+     * 声明内容发布事件死信队列。
+     *
+     * @return DLQ queue
+     */
+    @Bean
+    public Queue feedPostPublishedDlqQueue() {
+        return new Queue(DLQ_POST_PUBLISHED, true);
+    }
+
+    /**
+     * 声明 fanout 切片任务死信队列。
+     *
+     * @return DLQ queue
+     */
+    @Bean
+    public Queue feedFanoutTaskDlqQueue() {
+        return new Queue(DLQ_FANOUT_TASK, true);
     }
 
     /**
@@ -81,7 +164,7 @@ public class FeedFanoutConfig {
      */
     @Bean
     public Binding feedPostPublishedBinding(@Qualifier("feedPostPublishedQueue") Queue feedPostPublishedQueue,
-                                            DirectExchange feedExchange) {
+                                            @Qualifier("feedExchange") DirectExchange feedExchange) {
         return BindingBuilder.bind(feedPostPublishedQueue).to(feedExchange).with(ROUTING_KEY);
     }
 
@@ -94,7 +177,33 @@ public class FeedFanoutConfig {
      */
     @Bean
     public Binding feedFanoutTaskBinding(@Qualifier("feedFanoutTaskQueue") Queue feedFanoutTaskQueue,
-                                         DirectExchange feedExchange) {
+                                         @Qualifier("feedExchange") DirectExchange feedExchange) {
         return BindingBuilder.bind(feedFanoutTaskQueue).to(feedExchange).with(TASK_ROUTING_KEY);
+    }
+
+    /**
+     * 声明死信交换机与“内容发布事件死信队列”的绑定关系。
+     *
+     * @param feedPostPublishedDlqQueue 内容发布事件死信队列
+     * @param feedDlxExchange           死信交换机
+     * @return binding
+     */
+    @Bean
+    public Binding feedPostPublishedDlqBinding(@Qualifier("feedPostPublishedDlqQueue") Queue feedPostPublishedDlqQueue,
+                                               @Qualifier("feedDlxExchange") DirectExchange feedDlxExchange) {
+        return BindingBuilder.bind(feedPostPublishedDlqQueue).to(feedDlxExchange).with(DLX_ROUTING_KEY_POST_PUBLISHED);
+    }
+
+    /**
+     * 声明死信交换机与“fanout 切片任务死信队列”的绑定关系。
+     *
+     * @param feedFanoutTaskDlqQueue fanout 切片任务死信队列
+     * @param feedDlxExchange        死信交换机
+     * @return binding
+     */
+    @Bean
+    public Binding feedFanoutTaskDlqBinding(@Qualifier("feedFanoutTaskDlqQueue") Queue feedFanoutTaskDlqQueue,
+                                            @Qualifier("feedDlxExchange") DirectExchange feedDlxExchange) {
+        return BindingBuilder.bind(feedFanoutTaskDlqQueue).to(feedDlxExchange).with(DLX_ROUTING_KEY_FANOUT_TASK);
     }
 }

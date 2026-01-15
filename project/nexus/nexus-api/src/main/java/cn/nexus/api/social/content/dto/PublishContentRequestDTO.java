@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * 发布内容请求。
  */
@@ -20,4 +22,10 @@ public class PublishContentRequestDTO {
     private String mediaInfo;
     private String location;
     private String visibility;
+    /**
+     * 帖子类型列表（业务类目/主题），由用户发布时提交；最多 5 个。
+     *
+     * <p>注意：这里的“类型”不是媒体类型（纯文/图文/视频）。</p>
+     */
+    private List<String> postTypes;
 }

@@ -16,6 +16,14 @@ CREATE TABLE `content_post` (
   INDEX `idx_user_time` (`user_id`, `create_time`)
 ) ENGINE=InnoDB COMMENT='内容发布主表';
 
+CREATE TABLE `content_post_type` (
+  `post_id` BIGINT NOT NULL COMMENT '内容ID',
+  `type` VARCHAR(64) NOT NULL COMMENT '业务类型/主题（用户发布时提交）',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`post_id`, `type`),
+  INDEX `idx_type` (`type`)
+) ENGINE=InnoDB COMMENT='内容-业务类型映射表（一对多）';
+
 CREATE TABLE `content_history` (
   `history_id` BIGINT NOT NULL,
   `post_id` BIGINT NOT NULL COMMENT '关联内容ID',

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IContentPostTypeDao">
+
+    <resultMap id="ContentPostTypeMap" type="cn.nexus.infrastructure.dao.social.po.ContentPostTypePO">
+        <id property="postId" column="post_id"/>
+        <result property="type" column="type"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <delete id="deleteByPostId">
+        DELETE FROM content_post_type
+        WHERE post_id = #{postId}
+    </delete>
+
+    <insert id="insertBatch">
+        INSERT INTO content_post_type(post_id, type, create_time)
+        VALUES
+        <foreach collection="types" item="t" separator=",">
+            (#{postId}, #{t}, NOW())
+        </foreach>
+    </insert>
+
+    <select id="selectByPostIds" resultMap="ContentPostTypeMap">
+        SELECT post_id, type, create_time
+        FROM content_post_type
+        WHERE post_id IN
+        <foreach collection="postIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+</mapper>
+

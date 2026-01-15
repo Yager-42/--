@@ -154,7 +154,7 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
     private List<FeedInboxEntryVO> buildInboxEntries(Long userId, List<ContentPostEntity> candidates) {
         int limit = Math.max(1, inboxSize);
         List<FeedInboxEntryVO> entries = new ArrayList<>(limit);
-        Set<Integer> negativeTypes = feedNegativeFeedbackRepository.listContentTypes(userId);
+        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
         for (ContentPostEntity post : candidates) {
             if (post == null) {
                 continue;
@@ -167,7 +167,7 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
             if (feedNegativeFeedbackRepository.contains(userId, postId)) {
                 continue;
             }
-            if (post.getMediaType() != null && negativeTypes.contains(post.getMediaType())) {
+            if (hitNegativePostTypes(post, negativeTypes)) {
                 continue;
             }
             entries.add(FeedInboxEntryVO.builder()
@@ -179,5 +179,21 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
             }
         }
         return entries;
+    }
+
+    private boolean hitNegativePostTypes(ContentPostEntity post, Set<String> negativeTypes) {
+        if (post == null || negativeTypes == null || negativeTypes.isEmpty()) {
+            return false;
+        }
+        List<String> postTypes = post.getPostTypes();
+        if (postTypes == null || postTypes.isEmpty()) {
+            return false;
+        }
+        for (String postType : postTypes) {
+            if (postType != null && negativeTypes.contains(postType)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

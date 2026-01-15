@@ -19,6 +19,16 @@ public interface IContentRepository {
 
     ContentPostEntity savePost(ContentPostEntity post);
 
+    /**
+     * 覆盖写入内容的帖子类型列表（业务类目/主题）。
+     *
+     * <p>语义：先删除旧映射，再批量插入新映射；postTypes 为空表示清空。</p>
+     *
+     * @param postId     内容 ID
+     * @param postTypes  帖子类型列表（最多 5 个，调用方应先做归一化）
+     */
+    void replacePostTypes(Long postId, List<String> postTypes);
+
     ContentPostEntity findPost(Long postId);
     ContentPostEntity findPostForUpdate(Long postId);
 

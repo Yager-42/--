@@ -56,7 +56,7 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
             return;
         }
 
-        Set<Integer> negativeTypes = feedNegativeFeedbackRepository.listContentTypes(followerId);
+        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(followerId);
         for (ContentPostEntity post : posts) {
             if (post == null || post.getPostId() == null || post.getCreateTime() == null) {
                 continue;
@@ -64,11 +64,26 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
             if (feedNegativeFeedbackRepository.contains(followerId, post.getPostId())) {
                 continue;
             }
-            if (post.getMediaType() != null && negativeTypes.contains(post.getMediaType())) {
+            if (hitNegativePostTypes(post, negativeTypes)) {
                 continue;
             }
             feedTimelineRepository.addToInbox(followerId, post.getPostId(), post.getCreateTime());
         }
     }
-}
 
+    private boolean hitNegativePostTypes(ContentPostEntity post, Set<String> negativeTypes) {
+        if (post == null || negativeTypes == null || negativeTypes.isEmpty()) {
+            return false;
+        }
+        List<String> postTypes = post.getPostTypes();
+        if (postTypes == null || postTypes.isEmpty()) {
+            return false;
+        }
+        for (String postType : postTypes) {
+            if (postType != null && negativeTypes.contains(postType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+}

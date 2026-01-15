@@ -49,3 +49,14 @@
 - 交付：落地 `10.5.6` Max_ID（内部）分页 —— `IFeedTimelineRepository` 增加 `pageInboxEntries/removeFromInbox`；Redis 侧用 `WITHSCORES + Max_ID 过滤` 做稳定分页；FeedService timeline 合并 Inbox + Outbox/Pool。
 - 交付：落地 `10.5.7` 读时懒清理 —— timeline 回表后对缺失 postId 执行 inbox/outbox/pool 索引清理，减少反复 miss。
 - 同步：更新 `.codex/distribution-feed-implementation.md` / `.codex/distribution-feed-implementation-ezRead.md` 将 10.5.2~10.5.7 标记为已落地，并补齐关键配置与文件清单。
+- 修复：负反馈“类型”语义从 `content_post.media_type`（媒体形态）改为 `postType`（业务类目/主题），并移除 `feed:neg:type:{userId}` 的错误假设（改为 `feed:neg:postType:{userId}`；Phase 1 仅 postId 维度生效）。按用户要求未执行 Maven 编译/测试，仅做静态一致性自检与文档同步。
+
+## 2026-01-15
+
+- 决策：post 的业务类型采用“一帖多类型”模型：`ContentPostEntity.postTypes`（List<String>，用户发布时提交，最多 5 个），不再依赖“发布时 LLM 生成单个 postType”的链路。
+- 交付：新增内容类型映射表 `content_post_type(post_id, type)`（一对多），并在 `ContentRepository` 回表时批量回填 `postTypes`。
+- 交付：发布接口扩展 `PublishContentRequestDTO.postTypes`，`ContentService.publish` 成功发布后调用 `IContentRepository.replacePostTypes(postId, postTypes)` 覆盖写入映射表（postTypes 为空=清空；postTypes 为 null=旧客户端不传，不破坏既有数据）。
+- 修复：清理错误的数据模型残留 —— 移除 `ContentPostPO.postType` 与仓储映射中的 `getPostType/setPostType`，避免与真实表结构不一致导致的编译/运行风险。
+- 交付：负反馈类型语义最终落地为“用户从该帖 postTypes 中点选的一个类型”：写入时后端校验 type 是否属于该帖 postTypes，不合法直接忽略。
+- 交付：为支持撤销负反馈（cancel 接口无 type 参数），负反馈仓储新增 Redis HASH：`feed:neg:postTypeByPost:{userId}`（postId->type），撤销时反查并在“无其它 post 仍点选该 type”时才移除类型级过滤集合。
+- 同步：更新 `.codex/distribution-feed-implementation*.md`、`社交领域数据库.md`、`verification.md` 等文档，确保与代码一致。

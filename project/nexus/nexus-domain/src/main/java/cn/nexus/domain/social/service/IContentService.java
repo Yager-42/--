@@ -13,7 +13,7 @@ public interface IContentService {
 
     DraftVO saveDraft(Long userId, String contentText, java.util.List<String> mediaIds);
 
-    OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility);
+    OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, java.util.List<String> postTypes);
 
     OperationResultVO delete(Long userId, Long postId);
 

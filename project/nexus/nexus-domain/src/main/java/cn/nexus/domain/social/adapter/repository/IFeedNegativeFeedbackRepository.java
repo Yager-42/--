@@ -1,7 +1,7 @@
 package cn.nexus.domain.social.adapter.repository;
 
 /**
- * Feed 负反馈仓储接口：用于读侧过滤（Redis SET）。
+ * Feed 负反馈仓储接口：用于读侧过滤（Redis SET/HASH）。
  *
  * @author codex
  * @since 2026-01-12
@@ -36,26 +36,54 @@ public interface IFeedNegativeFeedbackRepository {
     boolean contains(Long userId, Long targetId);
 
     /**
-     * 记录负反馈的内容类型（Phase 2：以 content_post.media_type 作为“内容类型”维度）。
+     * 记录负反馈的帖子类型（业务类目/主题维度；例如“xx游戏/情感/技术”等）。
      *
-     * @param userId    用户 ID {@link Long}
-     * @param mediaType 内容媒体类型 {@link Integer}
+     * <p>注意：这里的“类型”不是 {@code content_post.media_type}（媒体形态：纯文/图文/视频）。</p>
+     *
+     * @param userId   用户 ID {@link Long}
+     * @param postType 帖子类型（业务类目/主题） {@link String}
      */
-    void addContentType(Long userId, Integer mediaType);
+    void addPostType(Long userId, String postType);
 
     /**
-     * 撤销负反馈的内容类型。
+     * 撤销负反馈的帖子类型。
      *
-     * @param userId    用户 ID {@link Long}
-     * @param mediaType 内容媒体类型 {@link Integer}
+     * @param userId   用户 ID {@link Long}
+     * @param postType 帖子类型（业务类目/主题） {@link String}
      */
-    void removeContentType(Long userId, Integer mediaType);
+    void removePostType(Long userId, String postType);
 
     /**
-     * 查询用户负反馈的内容类型集合（用于读侧过滤）。
+     * 查询用户负反馈的帖子类型集合（用于读侧过滤）。
      *
      * @param userId 用户 ID {@link Long}
-     * @return 内容媒体类型集合 {@link java.util.Set} {@link Integer}
+     * @return 帖子类型集合 {@link java.util.Set} {@link String}
      */
-    java.util.Set<Integer> listContentTypes(Long userId);
+    java.util.Set<String> listPostTypes(Long userId);
+
+    /**
+     * 记录“用户对某个 post 点选的类型”（用于撤销时反查）。
+     *
+     * @param userId   用户 ID {@link Long}
+     * @param postId   内容 ID（postId） {@link Long}
+     * @param postType 点选的帖子类型（业务类目/主题） {@link String}
+     */
+    void saveSelectedPostType(Long userId, Long postId, String postType);
+
+    /**
+     * 获取“用户对某个 post 点选的类型”（用于撤销时反查）。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @param postId 内容 ID（postId） {@link Long}
+     * @return 点选的帖子类型；不存在返回 null
+     */
+    String getSelectedPostType(Long userId, Long postId);
+
+    /**
+     * 移除“用户对某个 post 点选的类型”（用于撤销时清理）。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @param postId 内容 ID（postId） {@link Long}
+     */
+    void removeSelectedPostType(Long userId, Long postId);
 }

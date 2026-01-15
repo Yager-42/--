@@ -53,7 +53,7 @@ public class ContentController implements IContentApi {
     public Response<PublishContentResponseDTO> publish(@RequestBody PublishContentRequestDTO requestDTO) {
         OperationResultVO vo = contentService.publish(
                 requestDTO.getPostId(), requestDTO.getUserId(), requestDTO.getText(), requestDTO.getMediaInfo(),
-                requestDTO.getLocation(), requestDTO.getVisibility());
+                requestDTO.getLocation(), requestDTO.getVisibility(), requestDTO.getPostTypes());
         PublishContentResponseDTO dto = PublishContentResponseDTO.builder()
                 .postId(vo.getId())
                 .attemptId(vo.getAttemptId())

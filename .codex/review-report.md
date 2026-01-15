@@ -101,3 +101,37 @@
 
 - 把 `FeedService.timeline` 的“候选合并/游标解析/懒清理”抽成更小的组件，避免 Service 文件过长。
 - 负反馈过滤可升级为批量化（`SMEMBERS` 或 pipeline），减少 N 次 `SISMEMBER`（对应 10.6.2）。
+
+## 2026-01-14（负反馈类型语义修复）
+
+综合评分：88 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：负反馈“类型”从媒体形态（`content_post.media_type`）纠正为业务类目/主题（postType），避免用户点一次负反馈就把所有视频/图文屏蔽掉的错误体验。
+- 数据结构优先：类型维度存储改为 Redis SET `feed:neg:postType:{userId}`，成员为字符串 postType；postId 维度保持 `feed:neg:{userId}` 不变。
+- 零破坏性：HTTP 路由与 DTO 字段不变；Phase 1 行为保持“只屏蔽这一条”（postId 维度）稳定可用。
+
+### 致命问题（必须正视）
+
+- postType 真值缺失：当前 `content_post` 还没有 `post_type` 真值落地，导致类型维度过滤在 Phase 1 实际不会生效；要启用类型维度，必须在发布链路补齐 postType（LLM 生成并落库/回填到实体）。
+
+## 2026-01-15（postTypes 落库 + 负反馈点选类型）
+
+综合评分：90 / 100（通过）
+
+### 覆盖检查清单
+
+- 需求对齐：负反馈类型语义落地为“业务类目/主题”，并明确来源是用户发布时提交的 postTypes（最多 5 个），而不是 `content_post.media_type`（媒体形态）。
+- 数据结构优先：用新表 `content_post_type(post_id, type)` 建模“一帖多类型”；读侧回表统一由 `ContentRepository` 批量回填 `ContentPostEntity.postTypes`，避免在 service 层到处散落 join/二次查询。
+- 特殊情况收敛：发布链路对 postTypes 做归一化（trim/去空/去重/最多 5 个）；旧客户端不传 `postTypes`（null）时不覆盖既有映射，避免意外破坏用户可见行为。
+- 零破坏性：HTTP 契约与既有 DTO 字段保持不变（仅新增可选字段 `postTypes`）；负反馈撤销接口不带 type 参数的问题，用 Redis HASH `feed:neg:postTypeByPost:{userId}` 存 postId->type 解决，不要求客户端补字段。
+- 可撤销性：撤销负反馈会清理 postId 维度与 postId->type 映射，并在“无其它 post 仍点选该 type”时才移除类型级过滤集合，避免误删导致过滤失效。
+
+### 致命问题（要记住，但本次不扩范围）
+
+- DB 变更未自动执行：新增表 `content_post_type` 需要实际迁移（本次仅同步文档与 DAO/Mapper）。线上落地前必须确保建表已完成。
+
+### 改进方向（不阻塞交付）
+
+- 类型字典：当前 type 是自由文本字符串；未来若要统一枚举/多语言/推荐，可在不破坏现有表结构的前提下引入“类型字典表 + type_id”并逐步迁移。

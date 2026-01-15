@@ -16,7 +16,7 @@
 - fanout 切片：新增 `FeedFanoutTask`（`nexus-types`）承载 `offset/limit`，将“大 fanout”拆成多个可并行消费的小任务，失败只重试切片。
 - 粉丝分页：补齐 `IFollowerDao.selectFollowerIds` + `IRelationRepository.listFollowerIds`，fanout 分页拉粉丝避免一次性全量。
 - InboxTimeline：新增 `IFeedTimelineRepository` + Redis 实现（ZSET：member=postId，score=publishTimeMs），支持 cursor 分页（兼容）+ Max_ID 条目分页（WITHSCORES）+ NoMore 哨兵 + 读侧刷新 TTL + 原子化重建 + `removeFromInbox` 懒清理入口。
-- 负反馈：扩展 `IFeedNegativeFeedbackRepository`，同时支持 **postId** 维度与 **内容类型（content_post.media_type）** 维度过滤（Redis SET）。
+- 负反馈：扩展 `IFeedNegativeFeedbackRepository`，同时支持 **postId** 维度与 **postTypes（业务类目/主题）** 维度过滤（Redis SET + 撤销反查 HASH）。
 - 读侧回表：扩展 `IContentPostDao`/`ContentPostMapper.xml` 支持 `selectByIds`（timeline 批量回表）与 `selectByUserPage`（个人页 cursor 分页）。
 - FeedService：替换占位实现为真实实现（timeline/profile/负反馈），timeline 已升级为“合并 Inbox + Outbox/Pool + 内部 Max_ID + 懒清理”，保持 `/api/v1/feed/*` 契约与 DTO 不变。
 - Phase 2：在线推 / 离线拉（方案 A）：以 inbox key 是否存在定义在线；fanout 仅写入在线用户；timeline 首页 inbox miss 自动重建（原子 replaceInbox + NoMore）。
@@ -66,7 +66,7 @@
   - 合并：Inbox + Outbox/Pool → 去重 → 排序截断（按 `publishTimeMs DESC, postId DESC`）
   - 负反馈过滤（两层）：
     - postId 维度：对每个 postId 执行 `SISMEMBER feed:neg:{userId} postId`
-    - 内容类型维度：读取 `feed:neg:type:{userId}`，回表后按 `content_post.media_type` 过滤
+    - 帖子类型维度：读取 `feed:neg:postType:{userId}`，回表后按 `ContentPostEntity.postTypes` 与负反馈类型集合求交集过滤（类型来源 `content_post_type`，不是 `media_type`）
   - MySQL 批量回表：`content_post` 按候选 `postIds` 顺序组装，映射为 `FeedItemVO`（并在回表后对“缺失 postId”做索引懒清理）
   - `nextCursor` 取“本次扫描候选列表”的 lastPostId（不因负反馈过滤而改变，避免卡住）
 - profile：
@@ -91,8 +91,11 @@
   - score：`publishTimeMs`（毫秒时间戳）
 - 负反馈：`feed:neg:{userId}`（SET）
   - member：`targetId`（Phase 1 约定通常为 postId）
-- 负反馈内容类型：`feed:neg:type:{userId}`（SET）
-  - member：`mediaType`（来自 `content_post.media_type`）
+- 负反馈帖子类型：`feed:neg:postType:{userId}`（SET）
+  - member：`postType`（业务类目/主题，来自 `content_post_type`）
+- 点选类型反查：`feed:neg:postTypeByPost:{userId}`（HASH）
+  - field：`postId`
+  - value：`postType`（用于撤销负反馈时反查当时点选的类型）
 
 ### 3.3 Inbox 保留策略（配置）
 - `feed.inbox.maxSize`：默认 1000（超出裁剪最旧数据）
@@ -143,12 +146,8 @@ graph TD
 graph TD
   NF[POST /api/v1/feed/feedback/negative] --> A[FeedService.negativeFeedback]
   A --> SADD_POST["Redis SADD feed:neg:<userId> targetId"]
-  A --> FIND["ContentRepository.findPost(targetId)"]
-  FIND --> SADD_TYPE["Redis SADD feed:neg:type:<userId> mediaType"]
   CNF["DELETE /api/v1/feed/feedback/negative/<targetId>"] --> Rm[FeedService.cancelNegativeFeedback]
   Rm --> SREM_POST["Redis SREM feed:neg:<userId> targetId"]
-  Rm --> FIND2["ContentRepository.findPost(targetId)"]
-  FIND2 --> SREM_TYPE["Redis SREM feed:neg:type:<userId> mediaType"]
 ```
 
 ## 5. 表/队列/缓存映射（补充）
@@ -164,7 +163,8 @@ graph TD
 ### 5.3 Redis
 - `feed:inbox:{userId}`：关注页 InboxTimeline（ZSET）
 - `feed:neg:{userId}`：负反馈集合（SET）
-- `feed:neg:type:{userId}`：负反馈内容类型集合（SET，`content_post.media_type`）
+- `feed:neg:postType:{userId}`：负反馈帖子类型集合（SET，业务类目/主题）
+- `feed:neg:postTypeByPost:{userId}`：负反馈点选类型反查（HASH，postId->type，用于撤销）
 
 ## 6. 有效性（当前已满足/可验证）
 - 契约：`/api/v1/feed/*` 路由与 DTO 字段保持不变，只替换占位实现为真实实现。
@@ -187,7 +187,7 @@ graph TD
 - MQ 序列化未显式统一为 JSON（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.1`）。
 - timeline 负反馈过滤是逐条 `SISMEMBER`（N 次 Redis 调用），高 QPS 场景可考虑批量化策略（详见 `.codex/distribution-feed-implementation.md` 的 `10.6.2`）。
 - 异步清理未落地：当前为读时懒清理；若不想在读接口里做写操作，可按 `10.5.7.3` 补齐 `feed.index.cleanup` MQ 异步清理。
-- 内容负反馈已升级为“内容类型（media_type）”维度；若要更细粒度“业务类目/标签”，详见 `.codex/distribution-feed-implementation.md` 的 `10.6.6`。
+- 内容负反馈类型已升级为 postTypes（业务类目/主题）维度；若要更细粒度（例如标签、多选、权重），详见 `.codex/distribution-feed-implementation.md` 的 `10.6.6`。
 
 ## 8. 配置示例（application-dev.yml）
 ```yml

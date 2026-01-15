@@ -377,7 +377,7 @@ public class FeedService implements IFeedService {
 
         cleanupMissingIndexes(userId, candidateIds, posts);
 
-        Set<Integer> negativeTypes = feedNegativeFeedbackRepository.listContentTypes(userId);
+        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
         List<FeedItemVO> items = new ArrayList<>(Math.min(posts.size(), normalizedLimit));
         for (ContentPostEntity post : posts) {
             if (post == null) {
@@ -386,7 +386,7 @@ public class FeedService implements IFeedService {
             if (post.getPostId() != null && feedNegativeFeedbackRepository.contains(userId, post.getPostId())) {
                 continue;
             }
-            if (post.getMediaType() != null && negativeTypes.contains(post.getMediaType())) {
+            if (hitNegativePostTypes(post, negativeTypes)) {
                 continue;
             }
             items.add(FeedItemVO.builder()
@@ -401,6 +401,22 @@ public class FeedService implements IFeedService {
             }
         }
         return items;
+    }
+
+    private boolean hitNegativePostTypes(ContentPostEntity post, Set<String> negativeTypes) {
+        if (post == null || negativeTypes == null || negativeTypes.isEmpty()) {
+            return false;
+        }
+        List<String> postTypes = post.getPostTypes();
+        if (postTypes == null || postTypes.isEmpty()) {
+            return false;
+        }
+        for (String postType : postTypes) {
+            if (postType != null && negativeTypes.contains(postType)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void cleanupMissingIndexes(Long userId, List<Long> candidateIds, List<ContentPostEntity> foundPosts) {
@@ -487,10 +503,17 @@ public class FeedService implements IFeedService {
                     .build();
         }
         feedNegativeFeedbackRepository.add(userId, targetId, type, reasonCode);
-        ContentPostEntity post = contentRepository.findPost(targetId);
-        if (post != null && post.getMediaType() != null) {
-            feedNegativeFeedbackRepository.addContentType(userId, post.getMediaType());
+
+        // 负反馈类型：必须是该帖的 postTypes 之一；前端不保证，后端必须校验并忽略非法输入。
+        String normalizedType = type == null ? null : type.trim();
+        if (normalizedType != null && !normalizedType.isEmpty()) {
+            ContentPostEntity post = contentRepository.findPost(targetId);
+            List<String> postTypes = post == null ? null : post.getPostTypes();
+            if (postTypes != null && postTypes.contains(normalizedType)) {
+                feedNegativeFeedbackRepository.saveSelectedPostType(userId, targetId, normalizedType);
+            }
         }
+
         return OperationResultVO.builder()
                 .success(true)
                 .id(targetId)
@@ -517,10 +540,7 @@ public class FeedService implements IFeedService {
                     .build();
         }
         feedNegativeFeedbackRepository.remove(userId, targetId);
-        ContentPostEntity post = contentRepository.findPost(targetId);
-        if (post != null && post.getMediaType() != null) {
-            feedNegativeFeedbackRepository.removeContentType(userId, post.getMediaType());
-        }
+        feedNegativeFeedbackRepository.removeSelectedPostType(userId, targetId);
         return OperationResultVO.builder()
                 .success(true)
                 .id(targetId)

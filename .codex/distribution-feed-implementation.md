@@ -62,7 +62,7 @@
 - [x] 新增 `IFeedDistributionService` + `FeedDistributionService.fanout`（`nexus-domain`）
 - [x] 粉丝分页查询：`IFollowerDao` + `IRelationRepository.listFollowerIds`（MyBatis）
 - [x] Redis InboxTimeline：`IFeedTimelineRepository` + `FeedTimelineRepository`（ZSET）
-- [x] Redis 负反馈：`IFeedNegativeFeedbackRepository` + `FeedNegativeFeedbackRepository`（SET：postId + `content_post.media_type`）
+- [x] Redis 负反馈：`IFeedNegativeFeedbackRepository` + `FeedNegativeFeedbackRepository`（SET：postId + postType（业务类目，非 `content_post.media_type`））
 - [x] 内容批量/分页查询：`IContentPostDao` + `IContentRepository` 扩展（`selectByIds`/`selectByUserPage`）
 - [x] 改造 `FeedService`：timeline/profile/负反馈走真实链路（保持 Controller/DTO 不变）
 
@@ -94,7 +94,7 @@
 - [ ] 热点探测 + L1 本地缓存：`JD HotKey` + Caffeine（短 TTL，只缓存 hot key；落地清单见 `.codex/interaction-like-pipeline-implementation.md` 的 2.2.6）(当前不要实现)
 - [ ] fanout 补齐 DLQ/重试与监控指标
 - [ ] fanout 的 `inboxExists` 使用 Redis pipeline（减少 1:1 round-trip）
-- [ ] 负反馈维度扩展：从 `content_post.media_type` 扩到业务类目/标签（需要补齐类型表与发布写入链路）
+- [x] 负反馈维度扩展：使用 postTypes（业务类目/主题），来源 `content_post_type`；发布接口支持用户提交 postTypes（最多 5 个）并落库
 
 ---
 
@@ -133,7 +133,7 @@
 1. A 关注 B，B 发布内容后：A 刷新关注页能看到 B 的新内容（允许秒级延迟）
 2. A 关注页连续下拉翻页：不重复、不漏页（不能用 offset）
 3. 个人页能按时间倒序拉到历史内容，并能稳定翻页
-4. A 对某条内容提交负反馈后：A 的关注页下一次拉取不再返回该条，并对该条的内容类型（media_type）进行过滤；撤销后可再次出现（只要数据还在）
+4. A 对某条内容提交负反馈后：A 的关注页下一次拉取不再返回该条；若用户在该帖的 postTypes 里点选了一个类型，则该类型会进入“类型级过滤”，后续同类型内容也会被隐藏；撤销后可再次出现（只要数据还在）
 
 ### 2.2 Phase 1 落地顺序（强制按这个顺序做，避免越写越乱）
 
@@ -169,7 +169,8 @@
 Redis Key 规范（必须统一）：
 - `feed:inbox:{userId}`：用户关注页 InboxTimeline（ZSET）
 - `feed:neg:{userId}`：用户负反馈集合（SET，postId 维度）
-- `feed:neg:type:{userId}`：用户负反馈内容类型集合（SET，media_type 维度）
+- `feed:neg:postType:{userId}`：用户负反馈帖子类型集合（SET，业务类目/主题维度）
+- `feed:neg:postTypeByPost:{userId}`：用户对某条 post 点选的类型（HASH，field=postId，value=postType，用于撤销反查）
 
 InboxTimeline 结构（ZSET）：
 - member：`postId`（字符串，唯一）
@@ -679,11 +680,11 @@ for id in ids:
 
 posts = contentRepo.listPostsByIds(candidateIds)
 
-// 2) 内容类型维度过滤：隐藏“这类内容”（media_type）
-negativeTypes = negRepo.listContentTypes(userId)
+// 2) 帖子类型维度过滤：隐藏“这类内容”（postTypes，业务类目/主题）
+negativePostTypes = negRepo.listPostTypes(userId)
 items = []
 for post in posts:
-  if post.mediaType in negativeTypes:
+  if intersects(post.postTypes, negativePostTypes):
     continue
   items.add(FeedItemVO(postId, authorId=post.userId, text=post.contentText, publishTime=post.createTime, source="FOLLOW"))
 return FeedTimelineVO(items, page.nextCursor)
@@ -705,21 +706,29 @@ return FeedTimelineVO(items, page.nextCursor)
 
 #### 负反馈
 
-Redis Set（两层过滤，避免“只屏蔽这一条”不好用）：
+Redis（两层过滤 + 一份反查映射，撤销必须用）：
 
 - postId 维度（精确隐藏某条内容）：
   - key：`feed:neg:{userId}`
   - `submitNegativeFeedback`：`SADD feed:neg:{userId} targetId`
   - `cancelNegativeFeedback`：`SREM feed:neg:{userId} targetId`
 
-- 内容类型维度（隐藏这类内容）：
-  - key：`feed:neg:type:{userId}`（类型值来源：`content_post.media_type`）
-  - submit：先 `contentRepo.findPost(targetId)` 取 `media_type`，再 `SADD feed:neg:type:{userId} mediaType`
-  - cancel：同理 `SREM feed:neg:type:{userId} mediaType`
+- 帖子类型维度（隐藏这类内容；业务类目/主题，不是媒体形态）：
+  - key：`feed:neg:postType:{userId}`（SET）
+  - 类型值来源：`content_post_type`（一帖多类型，用户发布时提交；`ContentPostEntity.postTypes` 由仓储回填）
+  - submit：仅当 `request.type` 属于该帖的 `postTypes` 时才写入 `SADD feed:neg:postType:{userId} type`
+  - cancel：撤销时需要先反查当时点选的 `type`（见下一条），并在“没有其它 post 仍点选该 type”时才 `SREM feed:neg:postType:{userId} type`
+
+- 点选类型反查（撤销必须用；因为 cancel 接口没有 type 参数）：
+  - key：`feed:neg:postTypeByPost:{userId}`（HASH）
+  - field：`postId`
+  - value：`type`
+  - submit：`HSET feed:neg:postTypeByPost:{userId} postId type`
+  - cancel：`type = HGET ... postId` → `HDEL ... postId`
 
 说明：
-- 当前项目已存在 `content_post.media_type`，所以**不需要**为了“内容类型负反馈”新增一张 post 类型表。
-- 如果未来要扩展到“业务类目/标签”等更细粒度（不是 media_type），再看 10.6.6 的扩展方案。
+- `content_post.media_type` 只描述“媒体形态”（纯文/图文/视频），不能用来代表“业务类目/主题”。把它当“内容类型”会导致用户点一次负反馈就把所有视频/图文都屏蔽掉，这是错误的用户体验。
+- postTypes 是“业务类目/主题”，由用户发布时提交（最多 5 个），通过 `content_post_type` 表落库。
 
 ---
 
@@ -769,28 +778,34 @@ return {postIds: ids(as Long), nextCursor}
 - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedNegativeFeedbackRepository.java`
 
 实现要点：
-- `StringRedisTemplate.opsForSet()`
+- `StringRedisTemplate.opsForSet()` + `opsForHash()`
 - key：
   - `feed:neg:{userId}`（SET，postId 维度）
-  - `feed:neg:type:{userId}`（SET，media_type 维度）
+  - `feed:neg:postType:{userId}`（SET，postType 维度：业务类目/主题）
+  - `feed:neg:postTypeByPost:{userId}`（HASH，postId->type，用于撤销反查）
 
-Phase 1 存储策略（固定，且与当前代码一致）：
-- postId 维度：只把 `targetId(postId)` 存入 `feed:neg:{userId}`（用于精确过滤这条内容）
-- 内容类型维度：把 `content_post.media_type` 存入 `feed:neg:type:{userId}`（用于过滤这类内容）
+存储策略（固定，且与当前代码一致）：
+- postId 维度：把 `targetId(postId)` 存入 `feed:neg:{userId}`（用于精确过滤这条内容）
+- postType 维度：仅当 `request.type` 属于该帖的 `postTypes` 时才写入（并记录 postId->type 映射，便于撤销）
 - `type/reasonCode/extraTags` 暂不持久化（可以继续用 `message=reasonCode` 回传给前端，保持现有行为）
 
 核心实现伪代码：
 ```
 postKey = "feed:neg:" + userId
-typeKey = "feed:neg:type:" + userId
+typeKey = "feed:neg:postType:" + userId
+typeByPostKey = "feed:neg:postTypeByPost:" + userId
 
 addPost: SADD postKey postId
 removePost: SREM postKey postId
 containsPost: SISMEMBER postKey postId
 
-addType: SADD typeKey mediaType
-removeType: SREM typeKey mediaType
-listTypes: SMEMBERS typeKey -> Set<Integer>
+addType: SADD typeKey postType
+removeType: SREM typeKey postType
+listTypes: SMEMBERS typeKey -> Set<String>
+
+saveSelectedType: HSET typeByPostKey postId postType; SADD typeKey postType
+getSelectedType: HGET typeByPostKey postId
+removeSelectedType: type=HGET; HDEL; 若其它 post 仍点选该 type 则不 SREM，否则 SREM typeKey type
 ```
 
 ### 8.3 fanout 事件发布（改造现有 ContentDispatchPort）
@@ -985,7 +1000,7 @@ rebuildFollowing(sourceId):
 重建流程（pseudocode，固定这样实现）：
 ```
 targets = [userId] + adjacencyCachePort.listFollowing(userId, feed.rebuild.maxFollowings)
-negativeTypes = negRepo.listContentTypes(userId)
+negativeTypes = negRepo.listPostTypes(userId)
 
 allPosts = []
 for each targetId in targets:
@@ -996,12 +1011,12 @@ sorted = sort(allPosts, by createTime desc then postId desc)
 top = sorted.takeFirst(feed.rebuild.inboxSize)
 
 entries = []
-for post in top:
-  if negRepo.contains(userId, post.postId):
-    continue
-  if post.mediaType in negativeTypes:
-    continue
-  entries.add({postId: post.postId, publishTimeMs: post.createTime})
+	for post in top:
+	  if negRepo.contains(userId, post.postId):
+	    continue
+	  if intersects(post.postTypes, negativeTypes):
+	    continue
+	  entries.add({postId: post.postId, publishTimeMs: post.createTime})
 
 timelineRepo.replaceInbox(userId, entries)   // 内部：lock + tmpKey + RENAME，且写入 NoMore + TTL
 ```
@@ -1158,7 +1173,7 @@ consume(FeedFanoutTask t):
 依赖（domain 只依赖接口）：
 - `IFeedTimelineRepository`：判断在线 + 写 inbox
 - `IContentRepository`：拉 followee 最近内容
-- `IFeedNegativeFeedbackRepository`：过滤 postId + media_type
+- `IFeedNegativeFeedbackRepository`：过滤 postId + postType（业务类目/主题）
 
 补偿逻辑（pseudocode）：
 ```text
@@ -1169,12 +1184,12 @@ onFollow(followerId, followeeId):
   if !timelineRepo.inboxExists(followerId):
     return
 
-  page = contentRepo.listUserPosts(followeeId, cursor=null, limit=feed.follow.compensate.recentPosts)
-  negativeTypes = negRepo.listContentTypes(followerId)
-  for post in page.posts:
-    if negRepo.contains(followerId, post.postId): continue
-    if post.mediaType in negativeTypes: continue
-    timelineRepo.addToInbox(followerId, post.postId, post.createTime)
+	  page = contentRepo.listUserPosts(followeeId, cursor=null, limit=feed.follow.compensate.recentPosts)
+	  negativeTypes = negRepo.listPostTypes(followerId)
+	  for post in page.posts:
+	    if negRepo.contains(followerId, post.postId): continue
+	    if intersects(post.postTypes, negativeTypes): continue
+	    timelineRepo.addToInbox(followerId, post.postId, post.createTime)
 ```
 
 listener 改造（trigger）：

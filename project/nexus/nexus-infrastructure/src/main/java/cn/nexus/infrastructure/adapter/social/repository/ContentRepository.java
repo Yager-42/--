@@ -9,15 +9,18 @@ import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
 import cn.nexus.infrastructure.dao.social.IContentDraftDao;
 import cn.nexus.infrastructure.dao.social.IContentHistoryDao;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
+import cn.nexus.infrastructure.dao.social.IContentPostTypeDao;
 import cn.nexus.infrastructure.dao.social.IContentScheduleDao;
 import cn.nexus.infrastructure.dao.social.po.ContentDraftPO;
 import cn.nexus.infrastructure.dao.social.po.ContentHistoryPO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
+import cn.nexus.infrastructure.dao.social.po.ContentPostTypePO;
 import cn.nexus.infrastructure.dao.social.po.ContentSchedulePO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +38,7 @@ public class ContentRepository implements IContentRepository {
 
     private final IContentDraftDao contentDraftDao;
     private final IContentPostDao contentPostDao;
+    private final IContentPostTypeDao contentPostTypeDao;
     private final IContentHistoryDao contentHistoryDao;
     private final IContentScheduleDao contentScheduleDao;
 
@@ -59,15 +63,31 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    public void replacePostTypes(Long postId, List<String> postTypes) {
+        if (postId == null) {
+            return;
+        }
+        contentPostTypeDao.deleteByPostId(postId);
+        if (postTypes == null || postTypes.isEmpty()) {
+            return;
+        }
+        contentPostTypeDao.insertBatch(postId, postTypes);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public ContentPostEntity findPost(Long postId) {
-        return toPostEntity(contentPostDao.selectById(postId));
+        ContentPostEntity post = toPostEntity(contentPostDao.selectById(postId));
+        fillPostTypes(post == null ? List.of() : List.of(post));
+        return post;
     }
 
     @Override
     @Transactional(readOnly = false)
     public ContentPostEntity findPostForUpdate(Long postId) {
-        return toPostEntity(contentPostDao.selectByIdForUpdate(postId));
+        ContentPostEntity post = toPostEntity(contentPostDao.selectByIdForUpdate(postId));
+        fillPostTypes(post == null ? List.of() : List.of(post));
+        return post;
     }
 
     @Override
@@ -95,6 +115,7 @@ public class ContentRepository implements IContentRepository {
                 ordered.add(entity);
             }
         }
+        fillPostTypes(ordered);
         return ordered;
     }
 
@@ -111,6 +132,7 @@ public class ContentRepository implements IContentRepository {
             return ContentPostPageVO.builder().posts(List.of()).nextCursor(null).build();
         }
         List<ContentPostEntity> posts = list.stream().map(this::toPostEntity).filter(Objects::nonNull).collect(Collectors.toList());
+        fillPostTypes(posts);
         ContentPostEntity last = posts.get(posts.size() - 1);
         String nextCursor = last.getCreateTime() == null || last.getPostId() == null
                 ? null
@@ -264,6 +286,7 @@ public class ContentRepository implements IContentRepository {
                 .postId(po.getPostId())
                 .userId(po.getUserId())
                 .contentText(po.getContentText())
+                .postTypes(List.of())
                 .mediaType(po.getMediaType())
                 .mediaInfo(po.getMediaInfo())
                 .locationInfo(po.getLocationInfo())
@@ -273,6 +296,43 @@ public class ContentRepository implements IContentRepository {
                 .edited(Objects.equals(po.getIsEdited(), 1))
                 .createTime(po.getCreateTime() == null ? null : po.getCreateTime().getTime())
                 .build();
+    }
+
+    private void fillPostTypes(List<ContentPostEntity> posts) {
+        if (posts == null || posts.isEmpty()) {
+            return;
+        }
+        List<Long> postIds = new ArrayList<>(posts.size());
+        for (ContentPostEntity post : posts) {
+            if (post == null || post.getPostId() == null) {
+                continue;
+            }
+            postIds.add(post.getPostId());
+        }
+        if (postIds.isEmpty()) {
+            return;
+        }
+        List<ContentPostTypePO> rows = contentPostTypeDao.selectByPostIds(postIds);
+        Map<Long, List<String>> typesByPostId = new HashMap<>();
+        if (rows != null) {
+            for (ContentPostTypePO row : rows) {
+                if (row == null || row.getPostId() == null) {
+                    continue;
+                }
+                String type = row.getType();
+                if (type == null || type.isBlank()) {
+                    continue;
+                }
+                typesByPostId.computeIfAbsent(row.getPostId(), k -> new ArrayList<>()).add(type.trim());
+            }
+        }
+        for (ContentPostEntity post : posts) {
+            if (post == null || post.getPostId() == null) {
+                continue;
+            }
+            List<String> types = typesByPostId.get(post.getPostId());
+            post.setPostTypes(types == null ? List.of() : types);
+        }
     }
 
     private static final class Cursor {

@@ -54,3 +54,28 @@
 - 10.5.3/10.5.6：将 `feed.bigv.followerThreshold` 临时调小（便于造数），验证“大 V 发布不推全量 fanout”但 timeline 仍能通过 Outbox 合并读到
 - 10.5.5：开启 `feed.bigv.pool.enabled=true` 并让关注数超过 `feed.bigv.pool.triggerFollowings`，验证读侧走聚合池分桶读取
 - 10.5.7：将某些 `content_post.status` 改为非 2，验证 timeline 读侧不返回该内容，且后续 Redis 索引不会反复 miss（索引被懒清理）
+
+## 2026-01-14（负反馈类型语义修复）
+
+本次交付修复了负反馈“类型”误用 `content_post.media_type` 的问题：类型应指业务类目/主题（postType），而不是媒体形态（纯文/图文/视频）。
+
+按用户要求，未执行 Maven 编译/测试，仅做静态自检：
+- 代码一致性：全仓库搜索确认不存在 `listContentTypes/addContentType/removeContentType/feed:neg:type` 残留引用
+- 行为一致性：负反馈仍保留 postId 维度的精确隐藏；类型维度切换为 postType（待发布链路补齐 postType 后再启用）
+- 文档一致性：同步更新 `.codex/distribution-feed-implementation*.md` 的 key/流程图/实现说明，避免文档继续误导实现
+
+## 2026-01-15（postTypes 落库 + 负反馈点选类型校验/撤销）
+
+本次交付补齐了 postTypes 的真值落地与负反馈“点选类型”链路：postTypes 由用户发布时提交（最多 5 个）并落库到 `content_post_type`；负反馈写入时后端校验 type 是否属于该帖 postTypes，撤销时通过 Redis HASH 反查当时点选的 type 并做正确清理。
+
+按用户要求，未执行 Maven 编译/测试，仅做静态自检：
+- 代码一致性：全仓库搜索确认不存在 `ContentPostEntity.postType/getPostType/setPostType` 残留引用
+- 仓储一致性：`ContentRepository` 回表路径（find/list/page）均会回填 `postTypes`
+- 文档一致性：`.codex/distribution-feed-implementation*.md` 与 `社交领域数据库.md` 已同步到 `content_post_type` 与 `feed:neg:postTypeByPost:{userId}`
+
+建议后续人工验收（需要 MySQL + Redis + RabbitMQ）：
+- 发布：POST `/api/v1/content/publish` 传入 `postTypes=["游戏","技术"]`，校验 `content_post_type` 插入两条映射；再次发布同 postId 传空数组 `[]` 应清空映射；不传 `postTypes`（null）不应覆盖旧映射。
+- 回表：timeline/profile 回表得到 `ContentPostEntity.postTypes`，并能用于负反馈类型过滤。
+- 负反馈写入：对 postId 提交负反馈并传 `type="游戏"`（且该帖 postTypes 包含），应写入 `feed:neg:{userId}` + `feed:neg:postType:{userId}` + `feed:neg:postTypeByPost:{userId}[postId]=游戏`。
+- 负反馈非法输入：若 `type` 不属于该帖 postTypes，应只记录 `feed:neg:{userId}`（精确隐藏），不写入类型维度与反查映射。
+- 负反馈撤销：撤销后 `feed:neg:{userId}` 移除 postId；若该 type 没有其它 post 仍点选，应从 `feed:neg:postType:{userId}` 移除该 type；并清理 `feed:neg:postTypeByPost:{userId}` 对应 field。

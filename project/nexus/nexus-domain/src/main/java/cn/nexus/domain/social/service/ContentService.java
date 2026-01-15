@@ -114,7 +114,7 @@ public class ContentService implements IContentService {
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility) {
+    public OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, List<String> postTypes) {
         assertTx("publish");
         Long targetPostId = postId == null ? socialIdPort.nextId() : postId;
         RLock lock = lockFor(targetPostId);
@@ -125,9 +125,14 @@ public class ContentService implements IContentService {
                 return OperationResultVO.builder().success(false).id(targetPostId).status("NO_PERMISSION").message("无权限").build();
             }
 
-            String token = hash("publish:" + (userId == null ? "0" : userId) + ":" + targetPostId + ":" +
+            List<String> normalizedPostTypes = normalizePostTypes(postTypes);
+            String tokenSeed = "publish:" + (userId == null ? "0" : userId) + ":" + targetPostId + ":" +
                     (text == null ? "" : text) + ":" + (mediaInfo == null ? "" : mediaInfo) + ":" +
-                    (location == null ? "" : location) + ":" + (visibility == null ? "" : visibility));
+                    (location == null ? "" : location) + ":" + (visibility == null ? "" : visibility);
+            if (postTypes != null) {
+                tokenSeed = tokenSeed + ":" + String.join(",", normalizedPostTypes);
+            }
+            String token = hash(tokenSeed);
 
             ContentPublishAttemptEntity attempt = ContentPublishAttemptEntity.builder()
                     .attemptId(socialIdPort.nextId())
@@ -235,6 +240,11 @@ public class ContentService implements IContentService {
                     ContentPublishAttemptStatusEnumVO.CREATED.getCode());
             if (!ok) {
                 throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attempt.getAttemptId());
+            }
+
+            // 仅当入参提供了 postTypes 时，才进行覆盖写入；null 表示旧客户端不传，不破坏既有类型数据。
+            if (postTypes != null) {
+                contentRepository.replacePostTypes(targetPostId, normalizedPostTypes);
             }
 
             contentDispatchPort.onPublished(targetPostId, userId);
@@ -470,7 +480,7 @@ public class ContentService implements IContentService {
                 contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_CANCELED, task.getRetryCount(), "已取消跳过", 0, null, SCHEDULE_STATUS_SCHEDULED);
                 continue;
             }
-            OperationResultVO res = publish(null, task.getUserId(), task.getContentData(), null, null, "PUBLIC");
+            OperationResultVO res = publish(null, task.getUserId(), task.getContentData(), null, null, "PUBLIC", null);
             if (res.isSuccess()) {
                 success++;
                 contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null, SCHEDULE_STATUS_SCHEDULED);
@@ -516,7 +526,7 @@ public class ContentService implements IContentService {
         if (task.getIsCanceled() != null && task.getIsCanceled() == 1) {
             return OperationResultVO.builder().success(false).status("CANCELED").message("任务已取消").build();
         }
-        OperationResultVO res = publish(null, task.getUserId(), task.getContentData(), null, null, "PUBLIC");
+        OperationResultVO res = publish(null, task.getUserId(), task.getContentData(), null, null, "PUBLIC", null);
         if (res.isSuccess()) {
             contentRepository.updateScheduleStatus(taskId, SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null, SCHEDULE_STATUS_SCHEDULED);
         } else {
@@ -708,6 +718,30 @@ public class ContentService implements IContentService {
                 throw new IllegalStateException("post 更新失败，可能存在版本冲突 postId=" + postId);
             }
         }
+    }
+
+    private List<String> normalizePostTypes(List<String> postTypes) {
+        if (postTypes == null) {
+            return null;
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String raw : postTypes) {
+            if (raw == null) {
+                continue;
+            }
+            String type = raw.trim();
+            if (type.isEmpty()) {
+                continue;
+            }
+            if (normalized.contains(type)) {
+                continue;
+            }
+            normalized.add(type);
+            if (normalized.size() >= 5) {
+                break;
+            }
+        }
+        return normalized;
     }
 
     private RLock lockFor(Long postId) {

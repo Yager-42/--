@@ -44,3 +44,7 @@
 1) 在 `.codex/interaction-like-pipeline-implementation.md` 增加“四条链路 <-> 步骤对照表”，并补齐 Step 9-12，把链路 3/4 明确为“项目内可验收 + 外部系统交付物”。  
 2) 新增外部配置占位目录：`project/nexus/docs/analytics/like-pipeline/`，提供 Logstash/Flink/Hive/Spark/Prometheus 的模板与 README 流程。  
 3) 让用户在**不写 Java**的情况下也能跑通链路 3/4：直接往 Kafka 写 JSON 事件即可验证 Flink 聚合输出。
+
+## 2026-01-16（新增 S2+S3 可借鉴点对照文档）
+
+- 新增：`.codex/interaction-like-s2-s3-adoption-notes.md`，把原文严格版（S2+S3）与当前流程图方案的“可借鉴点/不借鉴点”写成可执行取舍清单，并标注原因与适用条件。

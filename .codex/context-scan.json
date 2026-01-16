@@ -1,5 +1,5 @@
 {
-  "date": "2026-01-15",
+  "date": "2026-01-16",
   "executor": "Codex (Linus mode)",
   "cwd": "C:/Users/Administrator/Desktop/文档",
   "projectRoot": "C:/Users/Administrator/Desktop/文档/project/nexus",
@@ -23,7 +23,7 @@
   ],
   "currentState": {
     "feed": "FeedController + IFeedService/FeedService 已落地 Phase 1：timeline 读 Redis inbox(ZSET) + MySQL 批量查内容 + 负反馈过滤；profile 读 MySQL；negative feedback 写 Redis SET/HASH。fanout 已升级为任务切片（dispatcher+worker），domain 新增 fanoutSlice 执行单片写扩散。10.6 已补齐：RabbitMQ 消息统一 JSON、fanout DLQ、fanout 在线判定 pipeline（批量 EXISTS）、timeline 负反馈 postId 批量过滤。",
-    "interaction": "InteractionController + /api/v1/interact/reaction 已存在，但 InteractionService.react 仍为占位；点赞方案文档已迭代：补齐读链路（单条/批量 likeCount+likedByMe + miss 回源/回填），收敛 Redis 方案（like:win 合并 sync+dirty，like:touch 记录窗口内最终状态，flush 用 RENAMENX 快照避免误删），并补充原文“解法3”落地映射（热点探测 + L1 Caffeine 可选；热点探测实现优先复用 JD HotKey；L3 TaiShan KV 仅作为远期可选项）。",
+    "interaction": "点赞链路 Step 1~3 已落地：react/state/batchState API、Redis Lua 原子写（幂等集合+计数+touch+win）、RabbitMQ 延迟 flush（RENAMENX 快照 + finalize 状态机），并已按 13.3 改进点完成 P0/P1：countKey miss 回源+SETNX（避免 flush 写 0）、flush touch 快照改 HSCAN 流式读取、batchState targets 上限（默认 50）+ SQL 行值 IN、reschedule 延迟改为仅 buffer。",
     "content": "content_post/content_history/content_schedule 等仓储与 DAO 已存在（MyBatis）",
     "relation": "RelationRepository/DAO 已存在；Follower 反向表支持分页拉粉丝 ID + count；RabbitMQ 已新增 Feed fanout 事件链路（PostPublishedEvent -> dispatcher 拆片 -> FeedFanoutTask 并行消费）。",
     "timelineStorage": "已实现：FeedTimelineRepository（Redis ZSET：feed:inbox:{userId}）+ FeedNegativeFeedbackRepository（Redis SET：feed:neg:{userId}）。Phase 2 在线推/离线拉在 .codex/distribution-feed-implementation.md 中规划。"

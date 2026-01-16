@@ -20,9 +20,9 @@
         FROM like_counts
         <choose>
             <when test="targets != null and targets.size() > 0">
-                WHERE
-                <foreach collection="targets" item="t" separator=" OR ">
-                    (target_type = #{t.targetType} AND target_id = #{t.targetId})
+                WHERE (target_type, target_id) IN
+                <foreach collection="targets" item="t" open="(" separator="," close=")">
+                    (#{t.targetType}, #{t.targetId})
                 </foreach>
             </when>
             <otherwise>
@@ -39,4 +39,3 @@
         update_time = NOW()
     </insert>
 </mapper>
-

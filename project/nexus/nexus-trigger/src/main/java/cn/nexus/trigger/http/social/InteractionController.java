@@ -44,6 +44,12 @@ public class InteractionController implements IInteractionApi {
     @Value("${interaction.like.delayBufferSeconds:10}")
     private long delayBufferSeconds;
 
+    /**
+     * 批量查询上限：一次最多 N 个 targets，避免超长请求导致 SQL 退化（比如超长 OR）与系统抖动。
+     */
+    @Value("${interaction.like.batchStateMaxTargets:50}")
+    private int batchStateMaxTargets;
+
     @PostMapping("/interact/reaction")
     @Override
     public Response<ReactionResponseDTO> react(@RequestBody ReactionRequestDTO requestDTO) {
@@ -73,6 +79,14 @@ public class InteractionController implements IInteractionApi {
     @Override
     public Response<ReactionBatchStateResponseDTO> batchState(@RequestBody ReactionBatchStateRequestDTO requestDTO) {
         Long userId = UserContext.requireUserId();
+        if (requestDTO != null
+                && requestDTO.getTargets() != null
+                && requestDTO.getTargets().size() > Math.max(1, batchStateMaxTargets)) {
+            return Response.<ReactionBatchStateResponseDTO>builder()
+                    .code(ResponseCode.ILLEGAL_PARAMETER.getCode())
+                    .info("非法参数：targets 数量超限，max=" + Math.max(1, batchStateMaxTargets))
+                    .build();
+        }
         java.util.List<ReactionTargetVO> targets = requestDTO == null || requestDTO.getTargets() == null
                 ? java.util.List.of()
                 : requestDTO.getTargets().stream()

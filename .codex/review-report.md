@@ -194,3 +194,23 @@
 - 参数更严谨：`type` 目前允许为空/空白时默认走 LIKE，会让契约变“半兼容”，建议明确要求 `type=LIKE`（或在 DTO 校验层强制）：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java:38`。
 - 批量 SQL 规模：`batchState` 回源 SQL 通过 `OR` 拼接 where 条件，targets 很多时会退化：`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeMapper.xml:27`、`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeCountMapper.xml:24`。建议限制 targets 最大长度（例如 50）或改为临时表/UNION ALL。
 - reschedule 延迟：flush 期间发生新写入时，当前仍按 `window+buffer` 延迟再跑一轮，DB 最终一致上界可能到 2 个窗口；若你在意“更快追平”，可把 reschedule 的 delay 调小（例如仅 buffer）。
+
+## 2026-01-16（点赞链路 13.3 改进点 P0/P1 落地 CR）
+
+综合评分：92 / 100（通过）
+
+【品味评分】
+🟢 好品味
+
+### 覆盖检查清单
+
+- P0-1（countKey 真值假设）：写链路进入 Lua 前对 `countKey` miss 回源 `like_counts` 并 `SETNX` 初始化；flush 侧同样对 miss 做回源 + `SETNX` + 二次读取，避免把 miss 当 0 写回 DB。
+- P0-2（touch 快照 HGETALL）：flush 侧快照读取改为 `HSCAN` 流式读取 + 分批 upsert，避免热点目标拉爆内存/超时；snapKey 成功处理后才删除，失败可重试（upsert 幂等）。
+- P1-3（批量 OR 退化）：`batchState` 增加 targets 上限（默认 50，可配），超限返回 `ILLEGAL_PARAMETER`；批量回源 SQL 改为 MySQL 行值 IN，避免超长 OR。
+- P1-4（reschedule 延迟）：reschedule 从 `window+buffer` 改为仅 `buffer`（至少 1 秒），缩短 DB 追平上界。
+
+【致命问题】
+- 无
+
+【改进方向】
+- 读链路的 count 回填与写链路共用“SETNX 初始化”原则：本次已把 `getOrLoadCount` 与批量回填改为 `SETNX`，避免在 countKey miss 场景下覆盖并发写入。后续若要进一步压榨 RTT，可把“初始化+二次读取”收敛为单个 Lua（但没必要现在自研复杂度）。

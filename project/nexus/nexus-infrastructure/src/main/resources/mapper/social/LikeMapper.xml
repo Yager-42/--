@@ -23,11 +23,10 @@
         WHERE user_id = #{userId} AND status = 1
         <choose>
             <when test="targets != null and targets.size() > 0">
-                AND (
-                <foreach collection="targets" item="t" separator=" OR ">
-                    (target_type = #{t.targetType} AND target_id = #{t.targetId})
+                AND (target_type, target_id) IN
+                <foreach collection="targets" item="t" open="(" separator="," close=")">
+                    (#{t.targetType}, #{t.targetId})
                 </foreach>
-                )
             </when>
             <otherwise>
                 AND 1 = 0
@@ -46,4 +45,3 @@
         update_time = NOW()
     </insert>
 </mapper>
-

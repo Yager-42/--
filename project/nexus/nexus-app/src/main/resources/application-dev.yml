@@ -63,5 +63,6 @@ interaction:
   like:
     windowSeconds: 60
     delayBufferSeconds: 10
+    batchStateMaxTargets: 50
     syncTtlSeconds: 180
     flushLockSeconds: 30

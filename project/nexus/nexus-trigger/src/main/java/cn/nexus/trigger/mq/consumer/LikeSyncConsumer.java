@@ -23,12 +23,6 @@ public class LikeSyncConsumer {
     private final LikeSyncProducer likeSyncProducer;
 
     /**
-     * 窗口长度（秒），默认 60s。
-     */
-    @Value("${interaction.like.windowSeconds:60}")
-    private long windowSeconds;
-
-    /**
      * 延迟缓冲（秒），用于吸收边界抖动，默认 10s。
      */
     @Value("${interaction.like.delayBufferSeconds:10}")
@@ -46,7 +40,9 @@ public class LikeSyncConsumer {
                 LikeFlushTaskEvent next = new LikeFlushTaskEvent();
                 next.setTargetType(event.getTargetType());
                 next.setTargetId(event.getTargetId());
-                likeSyncProducer.sendDelay(next, delayMs());
+                // P1：reschedule 不再等一整个 window。
+                // 这一步的语义是“flush 期间又发生了新写入”，应该尽快追平 DB，而不是再等 window+buffer。
+                likeSyncProducer.sendDelay(next, rescheduleDelayMs());
             }
         } catch (Exception e) {
             log.error("MQ like flush failed, targetType={}, targetId={}", event.getTargetType(), event.getTargetId(), e);
@@ -55,9 +51,8 @@ public class LikeSyncConsumer {
         }
     }
 
-    private long delayMs() {
-        long window = Math.max(0L, windowSeconds);
+    private long rescheduleDelayMs() {
         long buffer = Math.max(0L, delayBufferSeconds);
-        return (window + buffer) * 1000L;
+        return Math.max(1L, buffer) * 1000L;
     }
 }

@@ -12,7 +12,9 @@ import cn.nexus.infrastructure.dao.social.po.LikeCountPO;
 import cn.nexus.infrastructure.dao.social.po.LikePO;
 import cn.nexus.infrastructure.dao.social.po.LikeTargetPO;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -69,6 +71,11 @@ public class ReactionRepository implements IReactionRepository {
         String touchKey = touchKey(targetType, targetId);
         String winKey = winKey(targetType, targetId);
         String member = member(targetType, targetId);
+
+        // P0：countKey 不能把“缺失”当成 0。
+        // Redis 被逐出/清空时，Lua 会从 0 开始计数，直接制造“用户可见错数”。
+        // 这里先用 DB like_counts 回源初始化，并且只允许 SETNX，避免覆盖并发写入的新计数。
+        ensureCountKeyInitialized(targetType, targetId);
 
         List<String> keys = List.of(userKey, countKey, touchKey, winKey);
         List<Object> res = stringRedisTemplate.execute(
@@ -166,8 +173,19 @@ public class ReactionRepository implements IReactionRepository {
 
         try {
             // 1) 计数绝对值落库：以 Redis 为准（重复 flush 也是幂等的）。
-            Long cachedCount = parseLong(stringRedisTemplate.opsForValue().get(countKey(targetType, targetId)));
-            long count = cachedCount == null ? 0L : cachedCount;
+            String countKey = countKey(targetType, targetId);
+            Long cachedCount = parseLong(stringRedisTemplate.opsForValue().get(countKey));
+            if (cachedCount == null) {
+                // P0：countKey miss 不能写 0 回 DB。
+                // 先回源 DB 做基准，并用 SETNX 初始化缓存；再读一次，避免覆盖并发 toggle 的更新。
+                long loaded = loadCountFromDb(targetType, targetId);
+                stringRedisTemplate.opsForValue().setIfAbsent(countKey, String.valueOf(loaded));
+                cachedCount = parseLong(stringRedisTemplate.opsForValue().get(countKey));
+                if (cachedCount == null) {
+                    cachedCount = loaded;
+                }
+            }
+            long count = cachedCount;
             LikeCountPO countPO = new LikeCountPO();
             countPO.setTargetType(targetType);
             countPO.setTargetId(targetId);
@@ -188,10 +206,15 @@ public class ReactionRepository implements IReactionRepository {
             }
 
             if (hasSnapshot) {
-                Map<Object, Object> entries = stringRedisTemplate.opsForHash().entries(snapKey);
-                if (entries != null && !entries.isEmpty()) {
-                    List<LikePO> rows = new ArrayList<>(entries.size());
-                    for (Map.Entry<Object, Object> e : entries.entrySet()) {
+                // P0：不要 HGETALL 一次性把整个 Hash 拉回 JVM。
+                // 热点目标在一个窗口内可能积累大量用户状态，HGETALL 会把内存/网络打爆，甚至引发超时与 OOM。
+                // 用 HSCAN 流式读取 + 分批 upsert：即使中途失败，snapKey 仍保留，下一次 flush 可以续跑（upsert 幂等）。
+                final int scanCount = 500;
+                ScanOptions options = ScanOptions.scanOptions().count(scanCount).build();
+                List<LikePO> rows = new ArrayList<>(scanCount);
+                try (Cursor<Map.Entry<Object, Object>> cursor = stringRedisTemplate.opsForHash().scan(snapKey, options)) {
+                    while (cursor.hasNext()) {
+                        Map.Entry<Object, Object> e = cursor.next();
                         Long uid = parseLong(String.valueOf(e.getKey()));
                         Long status = parseLong(String.valueOf(e.getValue()));
                         if (uid == null || status == null) {
@@ -203,11 +226,16 @@ public class ReactionRepository implements IReactionRepository {
                         po.setTargetId(targetId);
                         po.setStatus(status == 1L ? 1 : 0);
                         rows.add(po);
-                    }
-                    if (!rows.isEmpty()) {
-                        batchUpsertLikes(rows);
+                        if (rows.size() >= scanCount) {
+                            batchUpsertLikes(rows);
+                            rows.clear();
+                        }
                     }
                 }
+                if (!rows.isEmpty()) {
+                    batchUpsertLikes(rows);
+                }
+                // 只有成功处理完全部快照后才删除，避免失败时“快照丢失”。
                 stringRedisTemplate.delete(snapKey);
             }
 
@@ -242,8 +270,26 @@ public class ReactionRepository implements IReactionRepository {
         LikeCountPO po = likeCountDao.selectOne(targetType, targetId);
         long loaded = po == null || po.getLikeCount() == null ? 0L : po.getLikeCount();
         // countKey 不设置 TTL：避免热点内容“清零”造成用户可见错误。
-        stringRedisTemplate.opsForValue().set(key, String.valueOf(loaded));
-        return loaded;
+        // 注意：读链路的回填也必须是 SETNX，否则可能覆盖并发 toggle 刚写入的新计数。
+        stringRedisTemplate.opsForValue().setIfAbsent(key, String.valueOf(loaded));
+        Long after = parseLong(stringRedisTemplate.opsForValue().get(key));
+        return after == null ? loaded : after;
+    }
+
+    private void ensureCountKeyInitialized(String targetType, Long targetId) {
+        String key = countKey(targetType, targetId);
+        // GET 为 null 才需要回源：这里不在乎值是多少（包括 0），只在乎“是否存在”。
+        if (stringRedisTemplate.opsForValue().get(key) != null) {
+            return;
+        }
+        long loaded = loadCountFromDb(targetType, targetId);
+        // 只允许“缺失时写入”：避免覆盖并发 toggle 产生的新计数。
+        stringRedisTemplate.opsForValue().setIfAbsent(key, String.valueOf(loaded));
+    }
+
+    private long loadCountFromDb(String targetType, Long targetId) {
+        LikeCountPO po = likeCountDao.selectOne(targetType, targetId);
+        return po == null || po.getLikeCount() == null ? 0L : po.getLikeCount();
     }
 
     private boolean getOrLoadLikedByMe(Long userId, String targetType, Long targetId) {
@@ -314,7 +360,8 @@ public class ReactionRepository implements IReactionRepository {
             String m = e.getKey();
             LikeTargetPO t = e.getValue();
             Long cnt = dbCountMap.getOrDefault(m, 0L);
-            stringRedisTemplate.opsForValue().set(countKey(t.getTargetType(), t.getTargetId()), String.valueOf(cnt));
+            // 同上：只能 SETNX，避免批量回填覆盖并发 toggle 的新计数。
+            stringRedisTemplate.opsForValue().setIfAbsent(countKey(t.getTargetType(), t.getTargetId()), String.valueOf(cnt));
         }
         for (int i = 0; i < validTargets.size(); i++) {
             int originalIndex = validIndexes.get(i);

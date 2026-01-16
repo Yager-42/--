@@ -69,3 +69,11 @@
 - 交付：新增 likes/like_counts 建表脚本 `project/nexus/docs/interaction_like_tables.sql`，并在 `application-dev.yml` 增加 `interaction.like.*` 配置项（windowSeconds/delayBufferSeconds/syncTtlSeconds/flushLockSeconds）。
 - 决策：按用户要求跳过 Maven 编译与测试，仅做静态 CR（幂等/竞态/批量查询/NPE 风险）并同步实现文档。
 - 修复：flush 关键正确性补强 —— `setIfAbsent` 非 true 即视为未持锁；解锁改为 Lua compare-and-delete；touch 快照 key 改为固定 key（避免 flush 失败后产生“孤儿快照”丢落库）；延迟队列补齐 DLX/DLQ 配置并统一用 `AmqpRejectAndDontRequeueException` 进入 DLQ。
+
+## 2026-01-16
+
+- 改进（P0-1）：修复 Redis 计数真值假设 —— 写链路在进入 Lua 前对 `countKey` miss 回源 `like_counts` 并 `SETNX` 初始化；flush 侧 `countKey` miss 时回源+`SETNX` 并二次读取，避免把 miss 当 0 写回 DB（用户可见错数）。
+- 改进（P0-2）：flush 读取 touch 快照由 `HGETALL` 改为 `HSCAN` 流式读取 + 分批 upsert，避免热点目标一次性拉爆内存/超时；snapKey 仅在全部成功后删除，失败可重试。
+- 改进（P1-3）：`batchState` 增加 targets 上限（默认 50，可配 `interaction.like.batchStateMaxTargets`），并将批量回源 SQL 从 `OR` 拼接改为行值 IN，避免 SQL 退化。
+- 改进（P1-4）：reschedule 延迟从 `window+buffer` 改为仅 `buffer`（至少 1 秒），让 DB 更快追平。
+- 同步：更新 `.codex/interaction-like-pipeline-implementation.md` 的 13.3 状态为已落地，并在 `.codex/review-report.md` 追加本次 CR 记录。

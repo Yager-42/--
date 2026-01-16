@@ -645,7 +645,7 @@ trigger（MQ）：
 
 ## 13. 当前代码落地状态（已完成 / 未完成 / 改进点）
 
-截至：2026-01-15（以代码为准）
+截至：2026-01-16（以代码为准）
 
 ### 13.1 已完成（对应 Step 0~3）
 
@@ -677,18 +677,23 @@ trigger（MQ）：
 
 P0（不改会出“用户可见问题”）
 
-1. Redis 计数真值假设：当前 flush 直接以 `like:count:*` 作为绝对值写回 `like_counts`。
-   - 风险：Redis 逐出/清空会把计数打回 0，甚至被 flush 写回 DB（错数是用户可见 bug）
-   - 建议：`countKey` miss 时先从 `like_counts` 回源初始化，再进入 Lua 更新；并明确 Redis 运维前提（持久化/不随意清空/逐出策略）
-2. flush 读取 touch 快照用 `HGETALL`：热点目标在窗口内积累大量用户时，会一次性拉爆内存/超时。
-   - 建议：按方案改成 `HSCAN` 流式读取 + 分批 upsert（Redis 侧不要一次性拉全量）
+1. ✅ Redis 计数真值假设：已修复 `countKey` miss 直接写 0 回 DB 的坑。
+   - 改动：写链路进入 Lua 前先回源 MySQL `like_counts` 初始化 `like:count:{type}:{id}`（仅 `SETNX`，避免覆盖并发更新）。
+   - 改动：flush 侧 `countKey` miss 时先回源 + `SETNX` 初始化并二次读取，避免把 miss 当 0 写回 `like_counts`。
+   - 落点：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java`
+2. ✅ flush 读取 touch 快照用 `HGETALL`：已改为 `HSCAN` 流式读取 + 分批 upsert。
+   - 改动：`opsForHash().entries(snapKey)` -> `opsForHash().scan(snapKey, ScanOptions.count(...))`，每 500 条分批 upsert；全部成功后才删除 snapKey，失败可重试。
+   - 落点：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java`
 
 P1（规模上来会慢/会抖）
 
-3. 批量回源 SQL 用 `OR` 拼接：targets 很多时 SQL 会退化。
-   - 建议：限制 `batchState` 一次最多 N（例如 50）；或改为更友好的批量条件（避免超长 OR）
-4. reschedule 延迟偏保守：flush 期间有新写入会再等一轮 `window+buffer`，DB 追平上界变长。
-   - 建议：重排队可以只用 buffer（或更短延迟），让 DB 更快追平
+3. ✅ 批量回源 SQL 用 `OR` 拼接：已优化。
+   - 改动：限制 `batchState` 一次最多 N（默认 50，可配：`interaction.like.batchStateMaxTargets`），超限直接返回 `ILLEGAL_PARAMETER`。
+   - 改动：批量条件从 `OR` 拼接改为 MySQL 行值 IN：`(target_type, target_id) IN ((?,?),(?,?))`。
+   - 落点：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`、`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeCountMapper.xml`、`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/LikeMapper.xml`
+4. ✅ reschedule 延迟偏保守：已优化。
+   - 改动：reschedule（flush 期间有新写入）不再等待 `window+buffer`，改为仅 `buffer`（至少 1 秒），让 DB 更快追平。
+   - 落点：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/LikeSyncConsumer.java`
 
 P2（可运维性/可观察性）
 

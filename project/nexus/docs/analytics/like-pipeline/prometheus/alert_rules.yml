@@ -1,0 +1,36 @@
+groups:
+  - name: like-pipeline-basic
+    rules:
+      - alert: FlinkDown
+        expr: up{job="flink"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Flink metrics endpoint is down"
+
+      - alert: KafkaExporterDown
+        expr: up{job="kafka_exporter"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka exporter is down"
+
+      - alert: RedisExporterDown
+        expr: up{job="redis_exporter"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis exporter is down"
+
+      # 业务热点告警（占位）：你需要把 expr 改成你真实的指标。
+      # 建议做法：把 Flink 的热点结果输出到 topic_like_hot_alert，然后用 exporter 或中间件转成 Prometheus 指标。
+      # - alert: LikeHot
+      #   expr: like_hot_alert_count > 2000
+      #   for: 1m
+      #   labels:
+      #     severity: critical
+      #   annotations:
+      #     summary: "Like hot target detected"

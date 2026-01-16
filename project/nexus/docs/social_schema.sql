@@ -83,3 +83,27 @@ CREATE TABLE IF NOT EXISTS `relation_event_inbox` (
   UNIQUE KEY `uk_fingerprint` (`fingerprint`),
   KEY `idx_event_type` (`event_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='关系事件收件箱';
+
+
+-- 互动-点赞/态势（Reaction）事实表：用户是否对目标表达过某种态势
+CREATE TABLE IF NOT EXISTS `interaction_reaction` (
+  `target_type` VARCHAR(32) NOT NULL COMMENT '目标类型 POST/COMMENT',
+  `target_id` BIGINT NOT NULL COMMENT '目标ID (Sharding Key)',
+  `reaction_type` VARCHAR(16) NOT NULL COMMENT '态势类型 LIKE/LOVE/ANGRY（当前主要使用 LIKE）',
+  `user_id` BIGINT NOT NULL COMMENT '发起用户ID',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`target_type`, `target_id`, `reaction_type`, `user_id`),
+  KEY `idx_user_time` (`user_id`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='互动态势事实表（真相：某用户是否对某目标做过某态势）';
+
+-- 互动-态势计数（派生表）：某目标某态势的聚合计数
+CREATE TABLE IF NOT EXISTS `interaction_reaction_count` (
+  `target_type` VARCHAR(32) NOT NULL,
+  `target_id` BIGINT NOT NULL,
+  `reaction_type` VARCHAR(16) NOT NULL,
+  `count` BIGINT NOT NULL DEFAULT 0 COMMENT '聚合计数（最终一致）',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`target_type`, `target_id`, `reaction_type`),
+  KEY `idx_update_time` (`update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='互动态势计数表（派生值）';

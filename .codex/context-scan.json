@@ -1,66 +1,36 @@
 {
-  "date": "2026-01-15",
-  "executor": "Codex (Linus mode)",
-  "cwd": "C:/Users/Administrator/Desktop/文档",
-  "projectRoot": "C:/Users/Administrator/Desktop/文档/project/nexus",
-  "repoType": "Java Spring Boot Maven multi-module (DDD/Hexagonal)",
-  "modules": [
-    "nexus-api",
-    "nexus-app",
-    "nexus-domain",
-    "nexus-infrastructure",
-    "nexus-trigger",
-    "nexus-types"
+  "date": "2026-01-16",
+  "executor": "Codex (Linus-mode)",
+  "cwd": "c:\\Users\\Administrator\\Desktop\\文档",
+  "user_request": {
+    "deliverable": "基于点赞链路流程图 + 现有《社交接口.md》接口契约 + 《DDD-ARCHITECTURE-SPECIFICATION.md》分层规范，输出一份\"可照抄实施\"的点赞业务实现详细方案新文档（允许对点赞接口做小幅增强，允许引入标准生态组件如 HotKey Detector / Caffeine）",
+    "inputs": [
+      "社交接口.md",
+      ".codex/DDD-ARCHITECTURE-SPECIFICATION.md",
+      ".codex/interaction-like-business-implementation-s2-s3.md",
+      "点赞链路流程图（用户提供截图）"
+    ]
+  },
+  "existing_context": {
+    "open_tabs": [
+      ".codex/interaction-like-pipeline-implementation.md",
+      ".codex/comment-floor-system-implementation.md",
+      ".codex/interaction-like-pipeline-implementation-ezRead.md"
+    ]
+  },
+  "code_entrypoints": [
+    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java",
+    "project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java",
+    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/ContentScheduleDelayConfig.java",
+    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentScheduleConsumer.java"
   ],
-  "keyDocs": [
-    ".codex/DDD-ARCHITECTURE-SPECIFICATION.md",
-    ".codex/distribution-feed-implementation.md",
+  "outputs": [
+    ".codex/source-wechat-like-solutions-2-3.md",
+    ".codex/interaction-like-business-implementation-s2-s3.md",
     ".codex/interaction-like-pipeline-implementation.md",
-    "社交接口.md",
-    "社交领域.md",
-    "社交领域数据库.md",
-    ".codex/social-implementation.md"
-  ],
-  "currentState": {
-    "feed": "FeedController + IFeedService/FeedService 已落地 Phase 1：timeline 读 Redis inbox(ZSET) + MySQL 批量查内容 + 负反馈过滤；profile 读 MySQL；negative feedback 写 Redis SET/HASH。fanout 已升级为任务切片（dispatcher+worker），domain 新增 fanoutSlice 执行单片写扩散。10.6 已补齐：RabbitMQ 消息统一 JSON、fanout DLQ、fanout 在线判定 pipeline（批量 EXISTS）、timeline 负反馈 postId 批量过滤。",
-    "interaction": "InteractionController + /api/v1/interact/reaction 已存在，但 InteractionService.react 仍为占位；点赞方案文档已迭代：补齐读链路（单条/批量 likeCount+likedByMe + miss 回源/回填），收敛 Redis 方案（like:win 合并 sync+dirty，like:touch 记录窗口内最终状态，flush 用 RENAMENX 快照避免误删），并补充原文“解法3”落地映射（热点探测 + L1 Caffeine 可选；热点探测实现优先复用 JD HotKey；L3 TaiShan KV 仅作为远期可选项）。",
-    "content": "content_post/content_history/content_schedule 等仓储与 DAO 已存在（MyBatis）",
-    "relation": "RelationRepository/DAO 已存在；Follower 反向表支持分页拉粉丝 ID + count；RabbitMQ 已新增 Feed fanout 事件链路（PostPublishedEvent -> dispatcher 拆片 -> FeedFanoutTask 并行消费）。",
-    "timelineStorage": "已实现：FeedTimelineRepository（Redis ZSET：feed:inbox:{userId}）+ FeedNegativeFeedbackRepository（Redis SET：feed:neg:{userId}）。Phase 2 在线推/离线拉在 .codex/distribution-feed-implementation.md 中规划。"
-  },
-  "techStackObserved": {
-    "language": "Java",
-    "framework": "Spring Boot",
-    "persistence": "MyBatis + MySQL (OLTP)",
-    "cache": "Redis (StringRedisTemplate 已用于 Snowflake ID 生成器)",
-    "mq": "RabbitMQ (RabbitTemplate 已使用)",
-    "style": "DDD 分层：trigger/api/domain/infrastructure/types"
-  },
-  "notableFiles": [
-    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/FeedController.java",
-    "project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedService.java",
-    "project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java",
-    "project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedDistributionService.java",
-    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java",
-    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskConsumer.java",
-    "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFanoutConfig.java",
-    "project/nexus/nexus-types/src/main/java/cn/nexus/types/event/PostPublishedEvent.java",
-    "project/nexus/nexus-types/src/main/java/cn/nexus/types/event/FeedFanoutTask.java",
-    "project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java"
-  ],
-  "observations": [
-    "接口文档明确要求分发/Feed 支持写扩散、读扩散与混合排序；目前已落地 Phase 1（写扩散 + FOLLOW timeline + 最小负反馈），Phase 2/3 按文档继续推进。",
-    "数据库文档明确建议：Feed Timeline 不存 MySQL，应使用 Redis(List/ZSet) 或 NoSQL。",
-    "现有 RabbitMQ 事件发布模式可复用到 Post_Published -> fanout -> Timeline 写入链路。",
-    "已落地 10.5.1 fanout 大任务切片：PostPublishedEvent 由 dispatcher 拆为多个 FeedFanoutTask(offset,limit) 并行消费，失败只重试切片；写入幂等性依赖 Redis ZSET 的 member 幂等。",
-    "互动点赞链路仍为占位；若要按“点赞/取消点赞”实现幂等，必须能在服务端拿到 userId（已拍板：网关注入 Header `X-User-Id`，trigger 层提供 UserContext 读取）。",
-    "点赞方案文档在不改用户可见行为的前提下做了结构性收敛：补齐读链路与批量查询契约，并用 like:win + like:touch 消除旧版 sync/dirty/touched 的分支与 flush 往返成本。"
-  ],
-  "openQuestionsForImplementation": [
-    "Redis 版本是否 >= 6.2（读侧批量 likedByMe 优先用 SMISMEMBER；否则需要 pipeline 多次 SISMEMBER）？",
-    "是否需要新增/对外暴露点赞读接口（state/batchState），还是由 Feed/Content 聚合接口内联返回？",
-    "Phase 2 的离线重建（断流/无 key）触发方式与参数（K/M）是否需要产品/运维对齐",
-    "Phase 3 推荐/排序与更多 feedType 的扩展边界（FOLLOW 之外何时做）",
-    "feed.* 配置项默认值（maxSize/ttlDays/batchSize）是否需要与实际容量/性能目标对齐"
+    ".codex/operations-log.md",
+    ".codex/review-report.md",
+    ".codex/testing.md",
+    "verification.md"
   ]
 }

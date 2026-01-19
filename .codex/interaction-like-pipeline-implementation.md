@@ -1,6 +1,6 @@
 # 点赞业务实现说明书（可照抄实施）
 
-日期：2026-01-16  
+日期：2026-01-19  
 执行者：Codex（Linus-mode）  
 输入：点赞链路流程图（用户截图）+ `社交接口.md` + `.codex/DDD-ARCHITECTURE-SPECIFICATION.md` + 现有代码  
 目标：让另一个不了解项目的 Codex agent 按步骤照抄也能把点赞链路完整实现。
@@ -14,6 +14,16 @@
 1) **立刻返回**：按钮马上变红/变灰，并拿到“当前点赞数”。
 2) **后台慢慢对齐**：过一会儿把数据写进数据库，最终一致。
 3) **还能发现热点**：哪个帖子突然爆火，系统要能看见并报警。
+
+## 0.1 本文拍板清单（已定，不再分支）
+
+你已经做出的选择（实现必须严格按这套走）：
+
+1) **端到端范围**：必须跑通链路 1/2/3（在线写入 + 延迟落库 + 实时监控/热榜），不做离线分析（Hive/Spark/日报热榜）。
+2) **接口**：`POST /api/v1/interact/reaction` 的 DTO 增加 `requestId` 字段（String，可选传入）；服务端必须生成并在响应中回传（用于日志串联，不参与幂等）。
+3) **动态窗口**：必须实现 `window_ms`；由“5 分钟热榜聚合结果”驱动自动写入 `interact:reaction:window_ms:{tag}`。
+4) **热点识别**：必须接入「京东 HotKey」（`JdHotKeyStore.isHotKey("like__" + tag)`）作为热点判定；不再使用“读热榜->hotTags 本地集合”的方式。
+5) **热点读优化**：必须启用 L1 Caffeine（只缓存 count，短 TTL）；不做 EMERGENCY（绕过 Redis 的 L1-only）模式。
 
 ---
 
@@ -91,6 +101,77 @@
 2) 热点集中，必须有“写轻 + 异步聚合 + 监控告警”。
 3) 现有代码点赞还只是占位，实现空间清晰。
 
+## 3.1 S2+S3 可借鉴点（实现者必须逐条落地）
+
+> 来源：`.codex/interaction-like-s2-s3-adoption-notes.md`  
+> 目的：把“可借鉴点”写进实现契约里，避免实现者边写边发明特殊情况。
+
+必须全部落地：**1 / 2 / 3 / 4 / 5 / 6 / 7**
+
+### 3.1.1 借鉴点 1：禁止 toggle，只做 set-state
+
+你必须做到的事：
+
+- 对外接口只暴露 `ADD/REMOVE`（等价 `desiredState=1/0`），不允许 “toggle 反转”。（见 10.2）
+- 幂等来自数据结构：用 Redis `SADD/SREM` 的返回值决定是否 `INCR/DECR`，别自己写一堆 if/else。（见 11.4）
+
+验收（必须能复现）：
+
+- 同一用户对同一 target 连续 `ADD` 两次：第一次 +1，第二次不变。
+- 再连续 `REMOVE` 两次：第一次 -1，第二次不变。（见 17.1）
+
+### 3.1.2 借鉴点 2：同一用户窗口内以最后一次为准（last-write-wins）
+
+你必须做到的事：
+
+- `ops` 用 Hash 存：`field=userId`，`value=desiredState`；窗口内多次操作必须覆盖写。（见 11.4）
+- 延迟落库时：按快照里的最终状态批量 upsert/delete；不要按事件逐条加减。（见 12.4）
+
+验收（必须能复现）：
+
+- 同一用户在一个窗口内 `ADD -> REMOVE -> ADD`：最终 DB 里必须是“存在”（点赞状态=1），count 最终对齐。
+
+### 3.1.3 借鉴点 7：把“状态”和“计数”当两类数据
+
+你必须做到的事：
+
+- `interaction_reaction` 是真相（是否点赞）；`interaction_reaction_count` 是派生（聚合数）。（见 5/7）
+- 写链路只维护 Redis 近实时计数；DB count 由延迟链路“覆盖式对齐”，不做强一致。（见 12.4）
+
+验收（必须能复现）：
+
+- DB 事实行最终与 Redis set 一致；`count` 永不为负。（见 5.5/17.2/17.3）
+
+### 3.1.4 借鉴点 3：动态窗口（热点更快，冷门更慢）
+
+你要做到的事：
+
+- 热点 target 用更小 `window_ms`（例如 1-10s），冷门用更大窗口（例如默认 5min）。实现见 11.5。
+
+验收：
+
+- 人为制造热点 target：后续延迟消息的 `x-delay` 明显变小（在日志里可见）。
+
+### 3.1.5 借鉴点 5：明确成功语义（success != DB 已一致）
+
+你必须把这句话写进文档/代码注释里（别让前端/产品误解）：
+
+- `success=true` 只代表“Redis 原子更新接住并返回”；DB 由延迟队列最终对齐。（见 10.2）
+
+### 3.1.6 借鉴点 6：requestId（字段可选传入）用于追踪与对账
+
+你必须做到的事：
+
+- DTO 增加 `requestId` 字段：客户端可传；不传则服务端生成并回传。（见 10.3/11.3/13.1）
+- `requestId` 只用于链路追踪，不参与幂等；幂等靠 set-state + Redis set。（见 11.4）
+
+### 3.1.7 借鉴点 4：L1 本地缓存只给热点 key 启用
+
+你必须做到的事：
+
+- 只对热点 key 启用 Caffeine（短 TTL）；常规流量仍回源 Redis。（见 14）
+- 不做 “L1-only 绕过 Redis” 模式；热点读一律按 **L1-first**：L1 miss 必须回源 Redis。（见 14.3）
+
 ---
 
 ## 4. 现状对齐（你必须先看懂现在是什么）
@@ -160,6 +241,7 @@
 - `action=ADD` 表示 **desiredState=1**；`action=REMOVE` 表示 **desiredState=0**。
 - 重复 ADD 不得让计数一直 +1；重复 REMOVE 不得让计数一直 -1。
 - `count` 不得小于 0（Redis 侧必须避免 DECR 到负数）。
+- `interaction_reaction` 是真相；`count` 永远是派生值：写链路不要回查 DB“算真相”，出问题只能以事实表重算。
 
 ---
 
@@ -186,7 +268,7 @@
 - 脏操作快照：`interact:reaction:ops:processing:{tag}`（Redis Hash）
 - 同步标记：`interact:reaction:sync:{tag}`（String：PENDING/SYNCING）
 - 最后同步时间：`interact:reaction:last_sync:{tag}`（String：epochMillis）
-- 动态窗口（可选）：`interact:reaction:window_ms:{tag}`（String：毫秒）
+- 动态窗口：`interact:reaction:window_ms:{tag}`（String：毫秒）
 - 同步互斥锁：`interact:reaction:lock:{tag}`（String：uuid，带 TTL）
 
 建议 TTL（按默认 5min 窗口）：
@@ -219,19 +301,17 @@
 
 ## 8. 全链路总览（把流程图翻译成人话）
 
-你给的流程图可以拆成 4 条链路：
+你给的流程图可以拆成 3 条链路：
 
 1) **在线写入链路（用户立刻看到结果）**
 2) **延迟落库链路（最终一致）**
 3) **实时监控链路（发现热点并告警）**
-4) **离线分析链路（日报/周报/月报）**
 
 对应流程图编号（对齐用）：
 
 - 1-5：在线写入（Redis 原子更新 + sync_flag + 延迟消息）
-- 6-12：实时监控（结构化日志 -> Kafka -> Flink -> 告警/热榜/Hive）
+- 6-12：实时监控（结构化日志 -> Kafka -> Flink -> 告警/热榜）
 - 13-17：延迟落库（把 Redis 的“脏数据”批量写入 DB）
-- 18-21：离线分析（Hive -> Spark -> 热点推荐/趋势报表）
 
 ---
 
@@ -241,7 +321,7 @@
 
 ### 9.1 你要改/新增的模块
 
-- `nexus-api`：保持 `ReactionRequestDTO/ReactionResponseDTO` 不变（可选新增 requestId，但必须可选）。
+- `nexus-api`：`ReactionRequestDTO/ReactionResponseDTO` 增加 `requestId` 字段（可选传入/回传）；其余字段保持兼容旧调用。
 - `nexus-domain`：新增“点赞子域”服务 + 端口接口（domain 不直接依赖 Redis/Rabbit/MyBatis）。
 - `nexus-infrastructure`：实现 Redis 端口 + MyBatis 仓储（落库）。
 - `nexus-trigger`：实现 RabbitMQ 延迟队列（config/producer/consumer）。
@@ -270,6 +350,7 @@ trigger（建议放在 `cn.nexus.trigger.mq.*` 下）：
 
 请求（现状）：
 
+- `requestId`：String（可选，用于串联日志；不参与幂等）
 - `targetId`：Long
 - `targetType`：String（`POST` / `COMMENT`）
 - `type`：String（本方案只处理 `LIKE`）
@@ -277,23 +358,40 @@ trigger（建议放在 `cn.nexus.trigger.mq.*` 下）：
 
 响应（现状）：
 
+- `requestId`：String（服务端回传；用于排障与对账）
 - `currentCount`：Long（来自 Redis 近实时计数）
 - `success`：boolean
 
 ### 10.2 语义约束（强制）
 
-- 这是 **set state**，不是 toggle：
-  - `ADD` 等价 `desiredState=1`
-  - `REMOVE` 等价 `desiredState=0`
-- `currentCount` 是“体验值”，允许与 DB 短暂不一致。
+1) 这是 **set state**，不是 toggle：
+   - `ADD` 等价 `desiredState=1`
+   - `REMOVE` 等价 `desiredState=0`
+   - 服务端禁止“反转”语义：一次请求只能表达“我想要的最终状态”，不能让后端去猜当前状态再翻转。
 
-### 10.3 可选增强（不破坏用户）
+2) `success` 的含义（必须对齐前端/产品）：
+   - `success=true`：表示本次请求已被系统接住，并完成了 Redis 原子更新（你可以把它理解成 `accepted=true`）。
+   - `success=true` **不代表** DB 已一致：DB 由延迟队列最终对齐（见 12）。
+   - 即使本次是幂等 no-op（`delta=0`），也允许 `success=true`（重复 ADD/REMOVE 是正常请求，不是错误）。
 
-如果你想要更好排查问题，可以在请求里加一个可选字段：
+3) `currentCount` 的含义：
+   - 来自 Redis 的近实时计数（体验值），允许与 DB 短暂不一致。
+   - 必须保证非负（见 5.5/11.4）。
 
-- `requestId`（String，可选）
+### 10.3 requestId（字段可选传入，服务端必须回传；不参与幂等）
 
-注意：必须可选，旧客户端不传也能跑。
+用途：把一次请求在 “HTTP 入口日志 / 业务结构化日志 / MQ 同步日志” 串起来（便于对账与排障）。
+
+约束：
+
+- 字段是可选的：旧客户端不传也能跑（Never break userspace）。
+- 服务端必须保证每次请求都有 requestId：客户端不传则生成（UUID/雪花均可）。
+- `requestId` 只用于日志串联，不参与幂等；幂等靠 set-state + Redis set（见 11.4）。
+
+你会在本文两个地方用到它：
+
+- 在线链路日志（见 11.3/13.1）：每次请求都打出来。
+- 同步链路日志（见 12.3/12.4）：用它串起 “这个 target 的 sync 在什么时候跑过”。
 
 ---
 
@@ -303,7 +401,7 @@ trigger（建议放在 `cn.nexus.trigger.mq.*` 下）：
 
 做到两件事：
 
-- 用户请求到达后 **立即返回**（只做 Redis + 可选 MQ 投递）。
+- 用户请求到达后 **立即返回**（只做 Redis + 必要时投递延迟消息）。
 - 同一个用户重复请求不产生副作用（幂等）。
 
 ### 11.2 写入的最小步骤（对应流程图 1-5）
@@ -323,11 +421,15 @@ trigger（建议放在 `cn.nexus.trigger.mq.*` 下）：
 > 建议实现：`ReactionLikeService.applyReaction()`，由 `InteractionService.react()` 委托调用。
 
 ```pseudocode
-applyReaction(userId, targetId, targetType, reactionType, action):
+applyReaction(userId, targetId, targetType, reactionType, action, requestId):
   assert reactionType == 'LIKE'           // 先只做 LIKE
   desiredState = (action == 'ADD') ? 1 : 0
 
   target = ReactionTargetVO(targetType, targetId, reactionType)
+
+  // requestId：客户端可传；不传则服务端生成，并在响应中回传
+  if requestId is null or blank:
+    requestId = newId()
 
   // 1) Redis 原子更新
   res = reactionCachePort.applyAtomic(userId, target, desiredState)
@@ -341,6 +443,7 @@ applyReaction(userId, targetId, targetType, reactionType, action):
   // 3) 结构化日志（给 Logstash/Kafka/Flink 用）
   logJson({
     event: 'reaction_like',
+    requestId,
     userId, targetType, targetId, reactionType,
     action, desiredState,
     delta: res.delta,
@@ -349,7 +452,7 @@ applyReaction(userId, targetId, targetType, reactionType, action):
     ts: now()
   })
 
-  return ReactionResultVO(currentCount=res.currentCount, success=true)
+  return ReactionResultVO(currentCount=res.currentCount, requestId=requestId, success=true)
 ```
 
 ### 11.4 Redis Lua 伪代码（原子更新，必须同 slot）
@@ -399,6 +502,62 @@ luaApplyAtomic(keys, argv):
 
 - 幂等来自 `SADD/SREM` 的返回值，不要自己发明 if/else。
 - 这里不写 DB，不写 MQ，只做 Redis。
+
+### 11.5 动态窗口：热点更快，冷门更慢
+
+这一点来自 S2+S3 严格版的“1s~10s 动态 flush”。在当前方案里，它对应的是：**延迟消息的 delayMs（也就是多久把 ops 结算落库一次）**。
+
+核心原则（好品味）：
+
+- 同一个 target 的写入越热，越应该更频繁结算（避免 opsKey 积压、降低“DB 落后太久”的概率）。
+- 冷门 target 用更大窗口，省 MQ/DB IO。
+
+#### 11.5.1 数据结构：window_ms key
+
+- key：`interact:reaction:window_ms:{tag}`（String，毫秒）
+- 读：`getWindowMs(target, defaultMs)`；不存在就用 defaultMs（见 11.3/12.4）
+- 写：热点时写入并设置 TTL（建议 60s）；不再热点时让它过期（回到 defaultMs）
+- 约束：值必须被 clamp 到合理区间，例如 `[1000ms, 600000ms]`，避免被写成 0/负数/极大值
+
+#### 11.5.2 `getWindowMs` 的实现伪代码
+
+```pseudocode
+getWindowMs(target, defaultMs):
+  v = GET(windowMsKey(target))
+  if v is null: return defaultMs
+
+  ms = parseLong(v)
+  if ms is invalid: return defaultMs
+
+  return clamp(ms, min=1000, max=600000)
+```
+
+#### 11.5.3 window_ms 谁来写（本项目：实时链路 Consumer 自动写）
+
+我们不搞“每 5 秒扫一次 ZSET”的轮询（那是额外复杂度），直接用事件驱动：
+
+- 输入：Flink 输出的 Kafka 聚合 `topic_like_5m_agg`（见 13.3 / Step 11）
+- 做法：本仓库内实现一个 Consumer（见 Step 12），每次收到一条聚合结果就写一次 `window_ms`：
+  1) 取 `like_add_count` 作为热度 score
+  2) 依据 score 映射 `window_ms`（分段足够，不要搞复杂公式）
+  3) `SET interact:reaction:window_ms:{tag} = ms, EX=60s`
+- 分段映射建议（示例，按你实际压测调整）：
+  - `score >= 5000` -> `1000ms`
+  - `score >= 2000` -> `3000ms`
+  - `score >= 500`  -> `10000ms`
+  - 否则 -> 不写（让 key 过期，回到 defaultMs）
+
+这样做的结果：热点会持续被写入 `window_ms` 并保持 60s 有效；一旦不再热点，key 自动过期回到默认窗口（没有额外特殊情况）。
+
+验收（建议）：
+
+- 人为刷一个热点 target：后续延迟消息 `x-delay` 明显变小（producer 打印/日志可见）。
+- 停止刷后：60s 以内 `window_ms` 自动失效，delayMs 回到 defaultMs。
+
+注意：
+
+- 把所有 target 都改成 1s 会把 MQ/DB 压炸；动态窗口的意义是“只对热点做”。
+- 开发环境为了加快验证，你可以把 defaultMs 暂时改为 3000-5000ms（本文 17.2 已说明）。
 
 ---
 
@@ -469,7 +628,7 @@ syncTarget(target):
   lastSyncKey = 'interact:reaction:last_sync:' + tag
 
   // 1) 快照：把 opsKey 原子挪走
-  moved = reactionCachePort.renameOpsIfExists(opsKey, processingKey)
+  moved = reactionCachePort.renameOpsIfExists(target)
   if !moved:
     DEL(syncKey)
     return
@@ -559,7 +718,7 @@ ON DUPLICATE KEY UPDATE
 
 ---
 
-## 13. 实时监控链路（Logstash -> Kafka -> Flink -> 告警/热榜/Hive）
+## 13. 实时监控链路（Logstash -> Kafka -> Flink -> 告警/热榜）
 
 > 这条链路是“旁路”：不影响点赞主链路的响应时间。
 
@@ -571,6 +730,7 @@ ON DUPLICATE KEY UPDATE
 {
   "event": "reaction_like",
   "ts": 1736990000000,
+  "requestId": "rid-20260116-xxxxxx",
   "userId": 10001,
   "targetType": "POST",
   "targetId": 90001,
@@ -585,6 +745,7 @@ ON DUPLICATE KEY UPDATE
 
 字段解释：
 
+- `requestId`：必填（客户端可不传，但服务端会生成）。用于把一次请求在多条日志之间串起来，不参与业务语义。
 - `delta`：本次是否真的改变了集合（1/-1/0），用于 Flink 聚合。
 - `currentCount`：Redis 的近实时计数，用于监控对齐与排查。
 
@@ -620,70 +781,116 @@ Flink 输入：Kafka `topic_like_monitor` 里的 JSON 事件。
 - window：5 分钟滚动窗口（tumbling 5m）
 - 指标：`like_add_count = sum(delta == 1 ? 1 : 0)`
 
-输出 3 份结果：
+输出（写死，必须交付）：
 
-1) **热点告警**（流程图 10）
-   - 规则：`like_add_count > 2000`（阈值你可调）
-   - 动作：写 Prometheus 指标 + Grafana 告警
+1) Kafka 聚合结果：`topic_like_5m_agg`
+   - 字段：`window_start, window_end, targetType, targetId, reactionType, like_add_count`
 
-2) **实时热点榜**（流程图 11）
-   - 写 Redis ZSET：`hot:like:5m:{targetType}`
+2) Kafka 热点告警：`topic_like_hot_alert`
+   - 规则：`like_add_count > 2000`（阈值按压测调）
+   - 最小告警动作（必须）：本仓库内 Consumer 消费后 `log.warn(...)` 打印（见 Step 12）
+
+3) Redis 实时热榜（必须）：本仓库内 Consumer 消费 `topic_like_5m_agg` 后回写
+   - ZSET：`hot:like:5m:{targetType}`
    - member：`targetId`
    - score：`like_add_count`
+   - 目的：给业务侧查热榜/给 `window_ms` 写入提供输入（见 11.5.3 / Step 12）
+   
+4) `window_ms` 自动写入（必须）：同一个 Consumer 在回写热榜时同步写入
+   - key：`interact:reaction:window_ms:{tag}`
+   - TTL：60s（不再热点就自动失效，回到 defaultMs）
+   - 目的：热点更快结算，冷门更慢（见 11.5）
+ 
+说明：
 
-3) **离线明细入湖**（流程图 12）
-   - 写 Hive（按小时分区）：`dwd_like_monitor_hourly(dt, hour)`
-   - 字段：`target_type, target_id, reaction_type, like_add_count`
-
-你不需要在本项目里实现 Flink/Hive，只要把“日志字段契约”和“输出 key/表结构”写死即可。
-
----
-
-## 14. 离线分析链路（Hive -> Spark SQL -> 趋势报表/热点推荐）
-
-对应流程图 18-21。
-
-### 14.1 Hive 输入表（来自实时链路落地）
-
-- `dwd_like_monitor_hourly(dt, hour)`
-  - `target_type, target_id, reaction_type, like_add_count`
-
-### 14.2 Spark 每日作业（最小可用）
-
-每日跑一次：
-
-- 计算昨日 TopN 热点：`sum(like_add_count)` 排序取前 10
-- 计算“持续时长”：一个 target 连续多小时进入 TopN 的小时数
-- 生成报表：日/周/月热点变化（趋势）
-
-输出（例）：
-
-- `ads_like_hot_daily(dt)`：`target_type, target_id, score,持续时长`
-
-### 14.3 结果回写（给业务侧直接用）
-
-- Redis ZSET：`hot:like:daily:{targetType}`
-  - member：`targetId`
-  - score：`score`
-
-业务侧（Feed/推荐）只需要读这个 ZSET，就能拿到“昨日热点”。
+- 本文范围内不做 Hive/Spark（离线入湖与日报热榜已移除）。
+- Flink 作业属于外部系统：你需要按本文给的 Kafka topic 与 SQL 模板把它跑起来（见 Step 11）。
 
 ---
 
-## 15. （可选）热点治理：HotKey Detector + 本地缓存
+## 14. 热点治理（必做）：HotKey Detector + L1 Caffeine（只缓存 count）
 
-你说可以用“京东 HotKey Detector”，那它的正确用途只有一个：
+目标（别把系统写复杂）：
 
-- **把超级热点 key 识别出来，让应用节点用本地缓存（Caffeine）扛读流量。**
+1) 写链路不变：写入仍然以 Redis Lua 为准（11），热点治理只优化“读”。
+2) 热点识别统一：一律用「京东 HotKey」判定热点（`JdHotKeyStore.isHotKey(key)`）。
+3) 热点读路径固定：一律 **L1-first**（热点先查 L1，miss 再回源 Redis 并回填）；冷门一律直读 Redis。
+4) 不做 EMERGENCY：不允许 “L1-only 绕过 Redis”。
 
-最小落地方式：
+### 14.1 HotKey Detector（京东 hotkey）部署与规则（外部系统，必须跑起来）
 
-1) Flink 写出的热点榜（Redis ZSET）就是一份“热点名单”。
-2) 应用读到“热点名单”里的 target 时：
-   - count 查询优先走 Caffeine（短 TTL，例如 1-3 秒）
-   - miss 再查 Redis
+京东 hotkey 的基本形态是：**etcd + worker + dashboard + client**（client 嵌入你的应用）。
 
-注意：这不影响写链路，只是省 Redis 读。
+你要做的事（按京东 hotkey README 的“安装教程”走）：
+
+1) 部署 etcd（3.4.x+），得到连接串（示例）：`http://127.0.0.1:2379`
+2) 启动 hotkey worker（可多实例）：
+   - 关键参数：`--etcd.server=<etcd连接串>`
+   - 关键参数：`--workerPath=<你的应用名>`（用于业务隔离）
+3) 启动 hotkey dashboard：
+   - 配置 dashboard 的 DB + etcd 地址
+   - 在 dashboard 里创建你的 APP（appName/workerPath 必须一致）
+   - 配置热点规则（示例，按压测可调）：
+     - `prefix = like__`（前缀匹配，覆盖所有点赞 key）
+     - `interval = 2s`
+     - `threshold = 10`（2 秒内出现 10 次视为热点）
+     - `expire = 60s`（热点标记在 JVM 内保留 60 秒）
+
+### 14.2 应用接入（client 初始化，必须在启动时完成）
+
+你必须在应用启动时初始化 hotkey client（示例伪代码）：
+
+```pseudocode
+initHotkey():
+  starter = ClientStarter.Builder()
+    .setAppName("nexus")                 // 你的 appName（与 dashboard 配置一致）
+    .setEtcdServer("http://127.0.0.1:2379")
+    .setPushPeriod(500ms)               // 默认 500ms；越小越灵敏，但更耗
+    .build()
+  starter.startPipeline()
+```
+
+约束（必须统一）：
+
+- 本项目的 hotkeyKey 统一为：`like__{targetType:targetId:reactionType}`
+  - 例：`like__{POST:90001:LIKE}`
+
+### 14.3 读链路（必做）：热点才进 L1，且一律 L1-first
+
+缓存对象：**点赞数 count**（读多写少，允许短时间不准）。
+
+默认参数（写死成默认值，后续只允许通过压测改）：
+
+- L1 实现：Caffeine
+- L1 TTL：2 秒
+- L1 最大容量：100_000
+
+读侧伪代码（建议实现在 `ReactionCachePort.getCount(target)`）：
+
+```pseudocode
+getCount(target):
+  tag = target.hashTag()                        // {POST:90001:LIKE}
+  hotkey = "like__" + tag
+
+  // isHotKey：即便不是热点也会参与上报，这是它的设计
+  hot = JdHotKeyStore.isHotKey(hotkey)
+  if !hot:
+    return redisGetCnt(tag) or 0
+
+  v = caffeine.getIfPresent(hotkey)
+  if v exists:
+    return v
+
+  cnt = redisGetCnt(tag) or 0
+  caffeine.put(hotkey, cnt)
+  return cnt
+```
+
+### 14.4 验收（本地必须能复现）
+
+1) 配置好 dashboard 的规则（prefix=like__），启动应用与 worker。
+2) 对同一个 target 连续高频调用“读 count”接口/路径（可用压测或循环请求）。
+3) 观察：`JdHotKeyStore.isHotKey(like__{...})` 由 false 变 true；随后该 key 的读开始稳定命中 L1（可通过日志打印命中/回源次数验证）。
 
 ---
 
@@ -691,33 +898,92 @@ Flink 输入：Kafka `topic_like_monitor` 里的 JSON 事件。
 
 > 你不需要一次写完。按步骤做，每一步都能跑通并验证。
 
-### 16.1 四条链路 <-> 步骤对照（先对齐，你就不会觉得“对照不起来”）
+### 16.1 三条链路 <-> 步骤对照（先对齐，你就不会觉得“对照不起来”）
 
 | 链路 | 你要实现什么 | 对应步骤 | 这些步骤在哪里实现 |
 | --- | --- | --- | --- |
-| 链路 1：在线写入 | API -> Redis 原子去重+计数+写入 ops + 返回 currentCount | Step 0、Step 2-5、Step 8 | 本仓库（Java 代码） |
+| 链路 1：在线写入 | API -> Redis 原子去重+计数+写入 ops + 返回 currentCount | Step 0、Step 2-5、Step 8、Step 13 | 本仓库（Java 代码） |
 | 链路 2：延迟落库 | RabbitMQ 延迟触发 -> ops 快照 -> 批量写 DB -> 清标记 | Step 0、Step 1、Step 3-7 | 本仓库（Java 代码） |
-| 链路 3：实时监控 | 日志 -> Logstash -> Kafka -> Flink -> 告警/热榜/Hive | Step 9-11 | Step 9 在本仓库；Step 10-11 属于外部系统 |
-| 链路 4：离线分析 | Hive -> Spark SQL -> 报表/热点推荐 -> 回写 Redis | Step 12 | 外部系统（数据平台作业） |
+| 链路 3：实时监控 | 日志 -> Logstash -> Kafka -> Flink -> Kafka 聚合 -> 回写热榜/写 window_ms/告警 | Step 9-12 | Step 9/12 在本仓库；Step 10-11 属于外部系统 |
 
 一句话总结：
 
 - **Step 0-8 = 把业务链路（链路 1 + 链路 2）做成可运行。**
-- **Step 9-12 = 把数据平台链路（链路 3 + 链路 4）补齐为可交付契约 + 可验收项。**
+- **Step 9-12 = 把实时监控链路（链路 3）补齐为可交付契约 + 可验收项。**
 
-### Step 0：准备本地依赖（最小可跑）
+### Step 0：准备本地依赖（端到端必备）
 
-需要 3 个本地服务（因为主链路只依赖它们）：
+你要跑通链路 1/2/3，需要把下面这些组件都跑起来（少一个都别抱怨跑不起来）：
 
-- MySQL（用于最终落库）
-- Redis（用于在线写入与缓冲）
-- RabbitMQ（用于延迟队列）
+- MySQL：最终落库（事实表 + 计数表）
+- Redis：在线写入/计数/`window_ms`/热榜回写
+- RabbitMQ：延迟队列（**必须**启用 `x-delayed-message` 插件）
+- Kafka：实时链路 WAL（Logstash 写入、Flink 读取/输出、应用 Consumer 回写）
+- Logstash：从应用日志抽取 `event=reaction_like` -> Kafka
+- Flink（SQL）：5 分钟窗口聚合 -> Kafka 输出
+- 京东 HotKey：etcd + worker + dashboard（外部）+ client（应用内）
 
-项目已有占位配置：`project/nexus/nexus-app/src/main/resources/application-dev.yml`
+#### Step 0.1 应用配置（必须能连上）
 
-验收：
+文件：`project/nexus/nexus-app/src/main/resources/application-dev.yml`
 
-- 应用能启动（不要求业务全通）。
+你至少要把这些“连通性”配对（值按你的环境改）：  
+
+- `spring.datasource.*`：MySQL
+- `spring.data.redis.*`：Redis
+- `spring.rabbitmq.*`：RabbitMQ
+
+如果你要跑通链路 3 的“回写热榜 + 写 window_ms”（Step 12），还必须补齐：
+
+- `spring.kafka.bootstrap-servers`：Kafka 地址（示例：`127.0.0.1:9092`）
+
+如果你要跑通热点治理（第 14 章），还必须补齐：
+
+- `hotkey.appName`：应用名（示例：`nexus`）
+- `hotkey.etcdServer`：etcd 地址（示例：`http://127.0.0.1:2379`）
+
+建议你直接把下面这段追加到 `application-dev.yml`（照抄即可，别发明新键名）：
+
+```yml
+spring:
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092
+    consumer:
+      group-id: nexus-like-pipeline
+      auto-offset-reset: earliest
+
+hotkey:
+  appName: nexus
+  etcdServer: http://127.0.0.1:2379
+```
+
+#### Step 0.2 RabbitMQ 延迟插件（必须）
+
+本项目的延迟队列用的是 **x-delayed-message**（见 `ReactionSyncDelayConfig`），你必须在 RabbitMQ 上启用插件：
+
+- 启用：`rabbitmq-plugins enable rabbitmq_delayed_message_exchange`
+- 验收：启动应用后能创建 `reaction.sync.exchange`，并且 Exchange 的 type 是 `x-delayed-message`
+
+#### Step 0.3 Kafka topics（必须）
+
+链路 3 固定用这 3 个 topic（名字写死，不要改）：  
+
+- `topic_like_monitor`：输入（点赞结构化日志）
+- `topic_like_5m_agg`：输出（5 分钟窗口聚合）
+- `topic_like_hot_alert`：输出（热点告警事件）
+
+验收（任选一种方式）：  
+
+- 你能创建出这 3 个 topic；并且能用 consumer 读到消息（见 Step 10/11）。
+
+#### Step 0.4 启动顺序（照抄，不要乱）
+
+1) 启动 MySQL / Redis / RabbitMQ / Kafka。  
+2) 启动 etcd + hotkey worker + hotkey dashboard，并在 dashboard 配好规则（prefix=`like__`）。  
+3) 启动应用（dev 配置）。  
+4) 启动 Logstash pipeline（Step 10）：日志 -> `topic_like_monitor`。  
+5) 启动 Flink SQL（Step 11）：`topic_like_monitor` -> `topic_like_5m_agg` / `topic_like_hot_alert`。  
+6) 启动/确认 Step 12 的回写 Consumer：`topic_like_5m_agg` -> Redis 热榜 + `window_ms`。
 
 ### Step 1：创建 DB 表（事实 + 计数）
 
@@ -901,7 +1167,7 @@ IReactionRepository:
 
 验收：
 
-- 调用 `POST /api/v1/interact/reaction` 返回的 `currentCount` 是 Redis 真实计数，而不是 0/1 占位。
+- 调用 `POST /api/v1/interact/reaction` 返回的 `currentCount` 是 Redis 真实计数，而不是 0/1 占位；并且响应里包含 `requestId`。
 
 ### Step 9：把结构化日志“打出来”（链路 3 的入口，项目内可验收）
 
@@ -912,7 +1178,7 @@ IReactionRepository:
 
 你要做的事：
 
-- 在 `applyReaction` 成功后打印一条 JSON 日志（字段对齐本文 13.1 的示例，至少要有 `event/ts/targetType/targetId/reactionType/delta/currentCount`）。
+- 在 `applyReaction` 成功后打印一条 JSON 日志（字段对齐本文 13.1 的示例；`requestId` 必须出现，因为服务端每次都会生成并回传）。
 
 验收：
 
@@ -925,43 +1191,72 @@ IReactionRepository:
 - Logstash pipeline：从应用日志中筛选 `event=reaction_like`，写入 Kafka topic `topic_like_monitor`。
 - 配置模板：`project/nexus/docs/analytics/like-pipeline/logstash/topic_like_monitor.conf`
   - 你只要替换：`PATH_TO_NEXUS_LOG` / `SINCE_DB_PATH` / `KAFKA_BOOTSTRAP_SERVERS`
-- 配置流程说明书：`project/nexus/docs/analytics/like-pipeline/README.md`
+
+提示（别在这里浪费时间）：  
+
+- 默认日志文件是 `logs/nexus.log`（来自 `project/nexus/nexus-app/src/main/resources/logback-spring.xml`）。  
+- 只要你保持 logback pattern 不改，Logstash 的 grok 才能把 `json_payload` 抠出来。  
+
+启动示例（你按你的 Logstash 安装目录替换即可）：  
+
+- Windows：`logstash.bat -f project/nexus/docs/analytics/like-pipeline/logstash/topic_like_monitor.conf`  
+- Linux/Mac：`bin/logstash -f project/nexus/docs/analytics/like-pipeline/logstash/topic_like_monitor.conf`  
 
 验收：
 
 - Kafka 的 `topic_like_monitor` 能消费到 JSON 事件。
 
-### Step 11：Flink 5min 窗口聚合 + 告警 + 热榜（链路 3，外部系统交付物）
+### Step 11：Flink 5min 窗口聚合（链路 3，外部系统交付物）
 
-交付物：
+交付物（不在本仓库写 Java 代码）：
 
 - Flink 作业：按 `(targetType,targetId,reactionType)` 分组，5 分钟窗口聚合 `sum(delta==1)`。
-- 配置模板（不写 Java）：`project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
-  - 先跑最小版本：Kafka 输入 `topic_like_monitor` -> Kafka 输出 `topic_like_5m_agg` / `topic_like_hot_alert`
-- 输出（完整版/生产版）：
-  - Prometheus 指标 + Grafana 告警（热点阈值）
-  - Redis 热榜 ZSET：`hot:like:5m:{targetType}`
-  - Hive 小时分区表：`dwd_like_monitor_hourly(dt,hour)`
+- 配置模板：`project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
+  - 你只要替换：`KAFKA_BOOTSTRAP_SERVERS`
+
+启动示例（你按你的 Flink 安装目录替换即可）：  
+
+- Windows：`sql-client.bat -f project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
+- Linux/Mac：`bin/sql-client.sh -f project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
+
+输出（写死，必须有）：
+
+- `topic_like_5m_agg`：每个窗口的聚合结果（给热榜/window_ms 用）
+- `topic_like_hot_alert`：超过阈值的热点告警事件（给告警用）
 
 验收：
 
-- 最小版本：消费 `topic_like_5m_agg` 能看到聚合结果。
-- 完整版：人为刷一个热点 target，能看到：告警触发 + Redis 热榜出现 + Hive 有小时记录。
+- 你能消费 `topic_like_5m_agg`，看到 `like_add_count` 随着点赞增长而变大。
+- 人为刷一个热点 target，能消费到 `topic_like_hot_alert`。
 
-### Step 12：Hive -> Spark 离线分析与回写（链路 4，外部系统交付物）
+### Step 12：回写热榜 + 写 window_ms + 打印告警（链路 3，本仓库交付物）
 
-交付物：
+你要做的事（把实时链路“落地成业务可用”）：
 
-- Hive DDL 模板：`project/nexus/docs/analytics/like-pipeline/hive/dwd_like_monitor_hourly.sql`
-- Spark SQL 每日作业：基于 `dwd_like_monitor_hourly` 生成昨日 TopN 热点与趋势。
-  - 模板：`project/nexus/docs/analytics/like-pipeline/spark/ads_like_hot_daily.sql`
-- 回写 Redis：`hot:like:daily:{targetType}`（ZSET）。
+1) 在 `nexus-trigger` 增加 Kafka 消费者（Spring Kafka）：
+   - 消费 `topic_like_5m_agg`
+   - 消费 `topic_like_hot_alert`
 
-验收：
+2) `topic_like_5m_agg` 的消费逻辑（必须）：
+   - 回写 Redis 热榜 ZSET：`hot:like:5m:{targetType}`（member=`targetId`，score=`like_add_count`）
+   - 同步写入 `window_ms`：`SET interact:reaction:window_ms:{tag} = ms, EX=60s`（映射规则见 11.5.3）
 
-- Hive 表能建出来（按 dt/hour 分区）。
-- Spark SQL 跑完能得到昨日 TopN。
-- （如果你做了回写）Redis 能查到昨日热点榜；业务侧（Feed/推荐）可直接消费。
+3) `topic_like_hot_alert` 的消费逻辑（最小告警，必须）：
+   - `log.warn(...)` 打印一条“热点告警”结构化日志（含 `targetType/targetId/like_add_count/threshold`）
+
+验收（本地必须能复现）：
+
+- 链路 3 跑起来后：Redis 能查到热榜 ZSET（例如 `ZREVRANGE hot:like:5m:POST 0 10 WITHSCORES`）。
+- 人为刷热点后：Redis 能看到对应 tag 的 `window_ms` key（60s 内存在，停止刷后会自然过期）。 
+
+### Step 13：热点治理（必做）：HotKey Detector + L1 Caffeine
+
+这一步只优化“读”，不碰主写链路语义。按第 14 章照抄落地：
+
+- 外部系统：把 hotkey（etcd + worker + dashboard）跑起来，并配置规则（prefix=`like__`）。（见 14.1）
+- 应用内：启动时初始化 hotkey client；读 count 路径按 **L1-first** 实现（热点才查 L1，miss 回源 Redis 并回填）。（见 14.2/14.3）
+
+验收：见 14.4
 
 ---
 
@@ -1015,7 +1310,7 @@ IReactionRepository:
 ## 19. 交付物与下一步
 
 - 新文档：`.codex/interaction-like-pipeline-implementation.md`
-- 已更新：`.codex/context-scan.json`、`.codex/operations-log.md`、`project/nexus/docs/social_schema.sql`
+- 已更新：`.codex/context-scan.json`、`.codex/operations-log.md`、`project/nexus/docs/social_schema.sql`、`project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
 
 如果你希望我下一步直接把代码也落地（把占位实现变成可运行），你只要回复：
 

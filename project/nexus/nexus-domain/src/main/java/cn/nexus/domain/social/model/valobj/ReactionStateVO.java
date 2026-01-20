@@ -6,17 +6,17 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 互动结果。
+ * 点赞状态查询结果值对象。
+ *
+ * @author codex
+ * @since 2026-01-20
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ReactionResultVO {
-    /**
-     * 请求标识：服务端每次生成/回传，用于链路追踪与对账。
-     */
-    private String requestId;
+public class ReactionStateVO {
+    private boolean state;
     private Long currentCount;
-    private boolean success;
 }
+

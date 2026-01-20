@@ -6,19 +6,15 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 点赞/态势请求。
+ * 点赞状态查询请求（给列表页/详情页初始化按钮状态用）。
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ReactionRequestDTO {
-    /**
-     * 请求标识（可选）：用于日志串联与排障，不参与幂等。
-     */
-    private String requestId;
+public class ReactionStateRequestDTO {
     private Long targetId;
     private String targetType;
     private String type;
-    private String action;
 }
+

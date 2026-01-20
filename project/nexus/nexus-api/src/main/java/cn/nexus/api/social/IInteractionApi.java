@@ -11,6 +11,8 @@ public interface IInteractionApi {
 
     Response<ReactionResponseDTO> react(ReactionRequestDTO requestDTO);
 
+    Response<ReactionStateResponseDTO> reactionState(ReactionStateRequestDTO requestDTO);
+
     Response<CommentResponseDTO> comment(CommentRequestDTO requestDTO);
 
     Response<OperationResultDTO> pinComment(PinCommentRequestDTO requestDTO);

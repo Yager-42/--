@@ -7,7 +7,9 @@ import cn.nexus.domain.social.model.valobj.*;
  */
 public interface IInteractionService {
 
-    ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action);
+    ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action, String requestId);
+
+    ReactionStateVO reactionState(Long userId, Long targetId, String targetType, String type);
 
     CommentResultVO comment(Long userId, Long postId, Long parentId, String content, java.util.List<Long> mentions);
 

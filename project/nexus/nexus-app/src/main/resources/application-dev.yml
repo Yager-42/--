@@ -19,9 +19,19 @@ spring:
     port: 5672
     username: guest
     password: guest
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092
+    consumer:
+      group-id: nexus-like-pipeline
+      auto-offset-reset: earliest
   sql:
     init:
       mode: never
+
+hotkey:
+  appName: nexus
+  etcdServer: http://127.0.0.1:2379
+  pushPeriodMs: 500
 
 mybatis:
   mapper-locations: classpath*:mapper/social/*.xml

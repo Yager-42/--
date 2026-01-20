@@ -2,6 +2,8 @@ package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.model.valobj.*;
+import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.types.exception.AppException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -16,11 +18,22 @@ import java.util.List;
 public class InteractionService implements IInteractionService {
 
     private final ISocialIdPort socialIdPort;
+    private final IReactionLikeService reactionLikeService;
 
     @Override
-    public ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action) {
-        long count = "ADD".equalsIgnoreCase(action) ? 1L : 0L;
-        return ReactionResultVO.builder().currentCount(count).success(true).build();
+    public ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action, String requestId) {
+        ReactionTargetVO target = parseTarget(targetId, targetType, type);
+        ReactionActionEnumVO actionEnum = ReactionActionEnumVO.from(action);
+        if (actionEnum == null) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
+        }
+        return reactionLikeService.applyReaction(userId, target, actionEnum, requestId);
+    }
+
+    @Override
+    public ReactionStateVO reactionState(Long userId, Long targetId, String targetType, String type) {
+        ReactionTargetVO target = parseTarget(targetId, targetType, type);
+        return reactionLikeService.queryState(userId, target);
     }
 
     @Override
@@ -78,6 +91,19 @@ public class InteractionService implements IInteractionService {
                 .currencyType(currencyType)
                 .amount("100.00")
                 .frozenAmount("0.00")
+                .build();
+    }
+
+    private ReactionTargetVO parseTarget(Long targetId, String targetType, String type) {
+        ReactionTargetTypeEnumVO targetTypeEnum = ReactionTargetTypeEnumVO.from(targetType);
+        ReactionTypeEnumVO reactionTypeEnum = ReactionTypeEnumVO.from(type);
+        if (targetId == null || targetTypeEnum == null || reactionTypeEnum == null) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
+        }
+        return ReactionTargetVO.builder()
+                .targetType(targetTypeEnum)
+                .targetId(targetId)
+                .reactionType(reactionTypeEnum)
                 .build();
     }
 }

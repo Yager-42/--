@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IInteractionReactionDao">
+
+    <insert id="batchUpsert">
+        INSERT INTO interaction_reaction(target_type, target_id, reaction_type, user_id, create_time, update_time)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.targetType}, #{item.targetId}, #{item.reactionType}, #{item.userId}, NOW(), NOW())
+        </foreach>
+        ON DUPLICATE KEY UPDATE update_time = VALUES(update_time)
+    </insert>
+
+    <delete id="batchDelete">
+        DELETE FROM interaction_reaction
+        WHERE target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND reaction_type = #{reactionType}
+          AND user_id IN
+        <foreach collection="userIds" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

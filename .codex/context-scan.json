@@ -1,5 +1,6 @@
 {
   "date": "2026-01-16",
+  "last_update": "2026-01-20",
   "executor": "Codex (Linus-mode)",
   "cwd": "c:\\Users\\Administrator\\Desktop\\文档",
   "user_request": {
@@ -9,6 +10,18 @@
       ".codex/DDD-ARCHITECTURE-SPECIFICATION.md",
       ".codex/interaction-like-business-implementation-s2-s3.md",
       "点赞链路流程图（用户提供截图）"
+    ]
+  },
+  "followup_request": {
+    "deliverable": "根据 .codex/interaction-like-pipeline-implementation.md 第 16 章逐步实现清单，将点赞业务三条链路（链路1/2/3）落地到 project/nexus 代码，并补齐 CR 与自测文档（不要求 Maven 验证）",
+    "key_outputs": [
+      "project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java",
+      "project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionCachePort.java",
+      "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ReactionSyncConsumer.java",
+      "project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/kafka/ReactionLikeAggConsumer.java",
+      ".codex/review-report.md",
+      ".codex/testing.md",
+      "verification.md"
     ]
   },
   "existing_context": {

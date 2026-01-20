@@ -48,3 +48,46 @@
 ## 2026-01-16（新增 S2+S3 可借鉴点对照文档）
 
 - 新增：`.codex/interaction-like-s2-s3-adoption-notes.md`，把原文严格版（S2+S3）与当前流程图方案的“可借鉴点/不借鉴点”写成可执行取舍清单，并标注原因与适用条件。
+
+
+## 2026-01-20（补齐点赞说明书缺口）
+
+### 这次我做了什么
+
+1) 补齐“读接口：查询是否点赞(state)”的接口契约与实现步骤（10.4 / Step 8.1 / 14.3.2）。
+2) 修正文档矛盾：明确需要在 `InteractionController` 组装响应时回传 `requestId`（保持路由不变）。
+3) 修正 Redis 原子脚本：`cntKey` 丢失时用 `SCARD(setKey)` 重建，避免 `DECR` 负数；并补齐 `getCount` 的同类重建逻辑（11.4 / 14.3.1）。
+4) 补齐延迟同步 consumer 的锁竞争处理：通过 `attempt` + 短延迟重投递避免消息被 ack 掉后无人再触发（12.2 / 12.3）。
+5) 补齐本地依赖推荐版本与“先跑链路 1+2，再补链路 3”的最小跑法（Step 0.0）。
+
+### 关键工程决策（Good Taste）
+
+- `cntKey` 不是“另一个真相”，它丢了就用 `setKey` 的基数重建，把特殊情况变成普通情况。
+- `state` 查询要走 Redis set 的 Exists（近实时），不要拿最终一致的 DB 去当实时数据源。
+- 锁抢不到不能直接吞消息：吞了就可能永远不 sync；重投递才是正确的工程语义。
+
+
+### 2026-01-20（接口名/字段名复核）
+
+- 将 state 查询接口定为 GET（对齐现有 controller 的 GET 查询风格）。
+- 将 `state` 字段定为 boolean（true/false），并移除 state 查询的 `requestId/success` 字段（查询接口不需要重复“成功语义”）。
+
+
+## 2026-01-20（落地点赞三链路代码）
+
+### 这次我做了什么
+
+1) 按 `.codex/interaction-like-pipeline-implementation.md` 的 Step 清单，把点赞业务链路 1/2/3 的代码落进 `project/nexus`（不再是文档/占位）。  
+2) 写接口兼容升级：`ReactionRequestDTO/ReactionResponseDTO` 增加 `requestId`（可选传入，服务端必回传），并新增 `GET /api/v1/interact/reaction/state`（返回 `state + currentCount`）。  
+3) Domain 落地：新增 `ReactionLikeService` + VO/端口/仓储接口；彻底移除 `react()` 的 0/1 垃圾占位逻辑，改为委托真实链路。  
+4) Redis 落地：`ReactionCachePort` 实现 Lua 原子写 + RENAME 快照 + 热点读 L1 Caffeine，并接入 `JdHotKeyStore.isHotKey("like__"+tag)`。  
+5) MyBatis 落地：新增 reaction 事实/计数 DAO + Mapper XML + `ReactionRepository`，支持批量 upsert/delete 与覆盖写 count。  
+6) MQ 落地：新增 RabbitMQ 延迟队列 `ReactionSyncDelayConfig/Producer/Consumer`，用 Redis 锁 + attempt 重投递避免悬挂，并提供 DLQ 最小告警消费者。  
+7) 实时链路落地：新增 Kafka consumers 消费 `topic_like_5m_agg/topic_like_hot_alert`，回写 Redis 热榜与 `window_ms`，并打印热点告警。  
+8) 启动配置补齐：`application-dev.yml` 增加 `spring.kafka.*` 与 `hotkey.*`。  
+
+### 关键工程决策（Good Taste）
+
+- 禁止 toggle：对外只接受 ADD/REMOVE(set-state)，幂等由 Redis `SADD/SREM` 的返回值天然保证。  
+- 消灭“并发丢数据”特殊情况：同步链路用 `opsKey -> processingKey` 的原子快照（Lua + RENAME），同步期间的新写入落在新的 opsKey，再触发一次延迟同步。  
+- 热点读不搞花活：只缓存 count，热点才启用 L1，且一律 L1-first（miss 回源 Redis 并回填），不做 L1-only 绕过 Redis。  

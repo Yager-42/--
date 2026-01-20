@@ -24,6 +24,7 @@
 3) **动态窗口**：必须实现 `window_ms`；由“5 分钟热榜聚合结果”驱动自动写入 `interact:reaction:window_ms:{tag}`。
 4) **热点识别**：必须接入「京东 HotKey」（`JdHotKeyStore.isHotKey("like__" + tag)`）作为热点判定；不再使用“读热榜->hotTags 本地集合”的方式。
 5) **热点读优化**：必须启用 L1 Caffeine（只缓存 count，短 TTL）；不做 EMERGENCY（绕过 Redis 的 L1-only）模式。
+6) **读接口**：新增 `GET /api/v1/interact/reaction/state`（查询“我是否点过赞” + `currentCount`）；用于列表/详情页初始化按钮状态。
 
 ---
 
@@ -276,6 +277,12 @@
 - `sync`：10 分钟（>= 延迟时间，防止 backlog 误删）
 - `lock`：60 秒（够一次批处理）
 
+### 6.3 Redis 可靠性前置条件（生产必须满足，不满足就别做点赞）
+
+- `interact:reaction:set:{tag}` 是在线去重真相：它被驱逐/丢失，你的幂等就死了，count 会乱飞。
+- 生产 Redis 必须开启持久化（AOF/RDB 至少一种），并确保这些 key 不会被内存淘汰策略驱逐（建议 `maxmemory-policy noeviction`）。
+- 如果你真的清库/丢数据：不要“返回 0 当没事发生”。要么重建 Redis（从事实表回放），要么直接让写接口报错，逼着问题暴露出来。
+
 ---
 
 ## 7. 数据库表结构（DDL 已追加到仓库文档）
@@ -321,7 +328,7 @@
 
 ### 9.1 你要改/新增的模块
 
-- `nexus-api`：`ReactionRequestDTO/ReactionResponseDTO` 增加 `requestId` 字段（可选传入/回传）；其余字段保持兼容旧调用。
+- `nexus-api`：新增 `ReactionStateRequestDTO/ReactionStateResponseDTO`（读接口），并给 `ReactionRequestDTO/ReactionResponseDTO` 增加 `requestId` 字段（可选传入/回传）；其余字段保持兼容旧调用。
 - `nexus-domain`：新增“点赞子域”服务 + 端口接口（domain 不直接依赖 Redis/Rabbit/MyBatis）。
 - `nexus-infrastructure`：实现 Redis 端口 + MyBatis 仓储（落库）。
 - `nexus-trigger`：实现 RabbitMQ 延迟队列（config/producer/consumer）。
@@ -392,6 +399,26 @@ trigger（建议放在 `cn.nexus.trigger.mq.*` 下）：
 
 - 在线链路日志（见 11.3/13.1）：每次请求都打出来。
 - 同步链路日志（见 12.3/12.4）：用它串起 “这个 target 的 sync 在什么时候跑过”。
+
+### 10.4 读接口（必做）：查询“我是否点过赞”（给列表页/详情页初始化按钮用）
+
+接口：`GET /api/v1/interact/reaction/state`
+
+请求（QueryString）：
+
+- `targetId`：Long
+- `targetType`：String（`POST` / `COMMENT`）
+- `type`：String（本方案只处理 `LIKE`；保留该字段是为了将来扩展 reactionType）
+
+响应：
+
+- `state`：boolean（true=已点赞）
+- `currentCount`：Long（来自 Redis 近实时计数）
+
+实现约束：
+
+- `state` 必须走 Redis `SISMEMBER(interact:reaction:set:{tag}, userId)`（不要查 DB；DB 可能落后）。
+- `currentCount` 读取复用 14.3 的 getCount（热点走 L1，非热点走 Redis；`cntKey` 丢失时用 `SCARD(setKey)` 重建，见 11.4/14.3）。
 
 ---
 
@@ -475,6 +502,12 @@ luaApplyAtomic(keys, argv):
 
   delta = 0
 
+  // 防御：cntKey 丢失时用 set 的基数重建，避免 DECR 产生负数
+  current = GET(cntKey)
+  if current is null:
+    current = SCARD(setKey)
+    SET(cntKey, current)
+
   if desiredState == '1':
     added = SADD(setKey, userId)
     if added == 1:
@@ -493,7 +526,6 @@ luaApplyAtomic(keys, argv):
   firstPending = SET(syncKey, 'PENDING', NX, EX=syncTtlSec)
 
   current = GET(cntKey)
-  if current is null: current = '0'
 
   return {currentCount=current, delta=delta, firstPending=(firstPending == 'OK')}
 ```
@@ -582,7 +614,12 @@ getWindowMs(target, defaultMs):
 
 消息 payload（最简单可用）：
 
-- JSON：`{targetType, targetId, reactionType}`
+- JSON：`{targetType, targetId, reactionType, attempt}`
+
+说明：
+
+- `attempt`：int，可选；默认 0。用于 consumer “抢不到锁/短暂失败”时自重试，避免消息被 ack 掉后无人再触发同步。
+- Producer 首次投递必须把 `attempt=0`；consumer 重投递时 `attempt++`。
 
 ### 12.3 Consumer 入口伪代码（触发同步）
 
@@ -595,18 +632,28 @@ getWindowMs(target, defaultMs):
 - finally 解锁
 
 ```pseudocode
-onMessage(targetJson):
-  target = parse(targetJson)
+onMessage(rawJson):
+  msg = parse(rawJson)   // {targetType, targetId, reactionType, attempt}
+  target = ReactionTargetVO(msg.targetType, msg.targetId, msg.reactionType)
+  attempt = (msg.attempt is null) ? 0 : msg.attempt
+
   lockKey = 'interact:reaction:lock:' + tag(target)
   lockVal = uuid()
 
   if !SETNX(lockKey, lockVal, ttl=60s):
-    return // 已有同步在跑
+    // 同步在跑或锁残留：不能直接 ack 掉，否则可能出现“无人再触发同步”的悬挂。
+    if attempt >= 30:
+      sendToDLQ(rawJson)
+      return
+
+    msg.attempt = attempt + 1
+    sendDelay(msg, delayMs=1000)
+    return
 
   try:
     reactionLikeService.syncTarget(target)
   catch e:
-    sendToDLQ(targetJson)
+    sendToDLQ(rawJson)
     throw
   finally:
     if GET(lockKey) == lockVal: DEL(lockKey)
@@ -875,16 +922,48 @@ getCount(target):
   // isHotKey：即便不是热点也会参与上报，这是它的设计
   hot = JdHotKeyStore.isHotKey(hotkey)
   if !hot:
-    return redisGetCnt(tag) or 0
+    return redisGetCntOrRebuild(tag)
 
   v = caffeine.getIfPresent(hotkey)
   if v exists:
     return v
 
-  cnt = redisGetCnt(tag) or 0
+  cnt = redisGetCntOrRebuild(tag)
   caffeine.put(hotkey, cnt)
   return cnt
 ```
+
+#### 14.3.1 辅助：redisGetCntOrRebuild（cntKey 丢失时用 setKey 重建）
+
+```pseudocode
+redisGetCntOrRebuild(tag):
+  cntKey = 'interact:reaction:cnt:' + tag
+  setKey = 'interact:reaction:set:' + tag
+
+  v = GET(cntKey)
+  if v is not null: return parseLong(v)
+
+  // cntKey 丢失：用 set 的基数重建（不查 DB）
+  n = SCARD(setKey)
+  SET(cntKey, n)
+  return n
+```
+
+#### 14.3.2 读链路（必做）：查询用户是否已点赞（state）
+
+读侧伪代码（建议实现在 `ReactionCachePort.getState(userId, target)`）：
+
+```pseudocode
+getState(userId, target):
+  tag = target.hashTag()                        // {POST:90001:LIKE}
+  // 直接用 setKey 做 Exists 查询；这就是在线真相
+  return SISMEMBER('interact:reaction:set:' + tag, userId)
+```
+
+说明：
+
+- `state` 只保证“近实时正确”（以 Redis 为准）；DB 是最终一致（可能落后）。
+- 列表页需要批量查多个 target 时：用 pipeline/批量命令（别 for 循环一条条打 Redis）。
 
 ### 14.4 验收（本地必须能复现）
 
@@ -912,6 +991,22 @@ getCount(target):
 - **Step 9-12 = 把实时监控链路（链路 3）补齐为可交付契约 + 可验收项。**
 
 ### Step 0：准备本地依赖（端到端必备）
+
+#### Step 0.0 推荐版本（不一致就别抱怨）
+
+- JDK：17
+- MySQL：8.0+
+- Redis：7.0+
+- RabbitMQ：3.12+（启用 x-delayed-message）
+- Kafka：3.x（单机开发用 KRaft/或 ZK 均可，能用就行）
+- Logstash：8.x（或同等能采集日志的工具）
+- Flink SQL：1.17+（能跑 SQL client 即可）
+- etcd：3.5+（HotKey 依赖）
+
+最小本地跑法（别一上来就想跑全套）：
+
+- 只验证链路 1+2：只需要 MySQL/Redis/RabbitMQ（Kafka/Flink/Logstash/HotKey 可先不启动）
+- 验收要过“链路 3”：再补 Kafka/Logstash/Flink/HotKey
 
 你要跑通链路 1/2/3，需要把下面这些组件都跑起来（少一个都别抱怨跑不起来）：
 
@@ -1040,6 +1135,7 @@ IReactionCachePort:
   renameOpsIfExists(target) -> boolean
   readOpsSnapshot(target) -> map<userId, desiredState>
   getCount(target) -> long
+  getState(userId, target) -> boolean
   getWindowMs(target, defaultMs) -> long
   setSyncPending(target, ttlSec)
   clearSyncFlag(target)
@@ -1066,15 +1162,17 @@ IReactionRepository:
 - `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/IReactionLikeService.java`
 - `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
 
-必须实现 2 个方法：
+必须实现 3 个方法：
 
 1) `applyReaction(...)`：给 HTTP 写接口用（在线链路）
 2) `syncTarget(target)`：给 MQ consumer 用（延迟落库链路）
+3) `queryState(...)`：给读接口用（查询 state + currentCount，见 10.4/14.3）
 
 实现要点：
 
 - `applyReaction` 只做：Redis 原子更新 +（必要时）投递延迟消息 + 打日志。
 - `syncTarget` 只做：ops 快照 + 批量落库 + 同步 count + 清标记 +（若又脏了）再投递。
+- `queryState` 只做：读 Redis `SISMEMBER(setKey)` + `getCount`（热点读优化见 14.3）。
 
 验收：
 
@@ -1098,7 +1196,7 @@ IReactionRepository:
    - 输出所有 key（必须带同一个 `{tag}`）
 2) Lua#1：`applyAtomic`（见 11.4）
 3) Lua#2：`renameOpsIfExists`（见 12.5）
-4) 简单读写：`getCount/getWindowMs/setSyncPending/clearSyncFlag/setLastSyncTime`
+4) 简单读写：`getCount/getState/getWindowMs/setSyncPending/clearSyncFlag/setLastSyncTime`
 
 验收：
 
@@ -1147,7 +1245,7 @@ IReactionRepository:
 
 - 发一条延迟消息，能在延迟后被消费并触发 `syncTarget`。
 
-### Step 8：把占位实现替换成真实链路（不改 Controller）
+### Step 8：把占位实现替换成真实链路（不改现有写接口路由）
 
 改动文件：
 
@@ -1158,16 +1256,34 @@ IReactionRepository:
 - 在 `InteractionService` 注入 `IReactionLikeService`。
 - `react()` 里：
   1) 把请求的 String 参数解析成 EnumVO/TargetVO
-  2) 调 `reactionLikeService.applyReaction(...)`
+  2) 调 `reactionLikeService.applyReaction(...)`（把 requestId 也传进去；不传则服务端生成）
   3) 把结果塞进 `ReactionResultVO` 返回
 
 注意：
 
-- `InteractionController` 不需要改（它只负责 HTTP 入口）。
+- `InteractionController` 的现有写接口路由不需要改，但你必须改它组装响应 DTO 的部分，把 `requestId` 回传（见 10.1/10.3）。
 
 验收：
 
 - 调用 `POST /api/v1/interact/reaction` 返回的 `currentCount` 是 Redis 真实计数，而不是 0/1 占位；并且响应里包含 `requestId`。
+
+### Step 8.1：新增读接口：查询 state（初始化按钮状态）
+
+改动文件（建议最小变更路径）：
+
+- `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateRequestDTO.java`（新增）
+- `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateResponseDTO.java`（新增）
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`（新增一个 endpoint）
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`（新增一个 service 方法委托给 `reactionLikeService.queryState`）
+
+你要做的事：
+
+- 新增 endpoint：`GET /api/v1/interact/reaction/state`（契约见 10.4）。
+- controller 里拿 `userId = UserContext.requireUserId()`，把它传给 domain 做查询即可。
+
+验收：
+
+- 调用一次 state 接口：返回 `state`（true/false）和 `currentCount`（近实时）。
 
 ### Step 9：把结构化日志“打出来”（链路 3 的入口，项目内可验收）
 
@@ -1262,7 +1378,7 @@ IReactionRepository:
 
 ## 17. 最小验证清单（本地 AI 自测用）
 
-> 你只要验证 3 件事：幂等、最终一致、并发不丢。
+> 你只要验证 4 件事：幂等、状态可查、最终一致、并发不丢。
 
 ### 17.1 功能正确性（幂等）
 
@@ -1273,6 +1389,13 @@ IReactionRepository:
    - `currentCount` -1
 3) 再调用一次 `REMOVE`：
    - `currentCount` 不变
+
+### 17.1.1 状态查询（state）
+
+在 17.1 的步骤中穿插验证：
+
+- 第一次 `ADD` 之后，调用 `GET /api/v1/interact/reaction/state`：`state` 必须是 true。
+- `REMOVE` 之后再查：`state` 必须是 false。
 
 ### 17.2 最终一致（延迟落库）
 

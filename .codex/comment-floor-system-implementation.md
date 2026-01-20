@@ -13,6 +13,8 @@
 - `root_id` 取值：一级评论为 `NULL`；回复为所属一级评论的 `comment_id`
 - 点赞范围（已拍板）：只允许给**一级评论**点赞；楼内回复**不允许**被点赞
 - 置顶规则（已拍板）：每个 `post_id` 只允许 1 条置顶，且只能置顶一级评论；置顶永远在最上面，但**不参与分页**（接口返回 `pinned` 单独字段，`items` 不包含置顶）
+- 权限规则（上线版）：目前无管理员；仅**帖子作者**可置顶/删除本帖任意评论；**评论作者**仅可删除自己写的评论
+- 删除展示（上线版）：删除后不返回该评论（不做“占位”）；删除一级评论时必须**同步级联删除**其楼内所有回复；删除后不允许再回复
 - 交付范围（已拍板）：除写入外，必须补齐读侧与删除接口：一级评论列表 / 楼内回复列表 / 热榜 / 软删（幂等）
 - 读侧返回（已拍板）：所有读接口的评论条目必须包含作者 `nickname/avatarUrl`（写库只存 `userId`，读侧批量补全）
 
@@ -129,7 +131,7 @@ createComment(postId, userId, parentId, content, mentions):
     replyToId = null
   else:
     // 回复（楼内扁平化）
-    parent = commentRepo.getBrief(parentId) // {commentId, postId, rootId, status}
+    parent = commentRepo.getBrief(parentId) // {commentId, postId, userId, rootId, status}
     assert parent.postId == postId
     assert parent.status == NORMAL // 不允许回复已删评论
 
@@ -153,37 +155,83 @@ createComment(postId, userId, parentId, content, mentions):
 
 ### 2.2 删除评论（软删）
 
-规则（最小可用，已拍板）：
+规则（上线版，已拍板）：
 
 - 只做软删：把该行 `status` 从 `1` 改为 `2`，更新 `update_time`；不做物理删除
-- 幂等：如果该评论已是删除状态，直接返回（不要重复扣计数）
-- 不允许回复已删评论：写入时要求 `parent.status == NORMAL`
+- 幂等：重复删除不产生副作用（仍需通过权限校验；不要重复扣计数）
+- 权限（必须卡死）：
+  - 帖子作者：可删除本帖任意评论
+  - 评论作者：仅可删除自己写的评论
+  - 当前无管理员（未来可按“管理员=帖子作者同等权限”扩展）
 - 删除回复（`root_id IS NOT NULL`）：**需要把所属一级评论的 `reply_count` 减 1**
   - 触发事件：`RootReplyCountChangedEvent(rootCommentId=root_id, postId, delta=-1, tsMs)`
-- 删除一级评论（`root_id IS NULL`）：热榜只排一级评论，因此需要从热榜移除
+- 删除一级评论（`root_id IS NULL`）：必须**同步级联软删**该楼内所有回复（建议在同一事务内完成，避免“楼主删了但楼还在”的脏状态）
   - Redis：`ZREM comment:hot:{postId} comment_id`
   - 若该一级评论是置顶：必须清理置顶（删除 `interaction_comment_pin` 的该 `post_id` 记录）
-  - 楼内回复：保持可见（UI 显示“一级评论已删除”的占位即可）
+
+依赖（别猜，直接复用现成仓储）：
+
+- 帖子作者校验：用内容子域仓储 `IContentRepository.findPost(postId)` 查帖子作者（返回 `ContentPostEntity`，作者字段为 `userId`）。
+  - domain 接口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IContentRepository.java`
+  - infrastructure 实现：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ContentRepository.java`
 
 pseudocode：
 
 ```
-deleteComment(commentId):
+deleteComment(userId, commentId):
   nowMs = clock.nowMs()
-  c = commentRepo.getBrief(commentId) // {commentId, postId, rootId, status}
-  if c == null: return
-  // 幂等必须以“写入成功”为准：只有 status:1->2 成功，才允许扣减 reply_count
-  deleted = commentRepo.softDelete(commentId, nowMs) // returns true only when status 1->2
-  if !deleted: return
+  c = commentRepo.getBrief(commentId) // {commentId, postId, rootId, status, userId}
+  if c == null: return SUCCESS(true)
 
+  post = contentRepository.findPost(c.postId) // {postId, userId(postOwnerId)}
+  isPostOwner = (post != null && post.userId == userId)
+  isCommentOwner = (c.userId == userId)
+  if !isPostOwner && !isCommentOwner:
+    return NO_PERMISSION
+
+  // 幂等必须以“写入成功”为准：只有 status:1->2 成功，才允许扣减 reply_count
   if c.rootId != null:
-    mq.publish(RootReplyCountChangedEvent(c.rootId, c.postId, delta=-1, tsMs=nowMs))
-  else:
-    redis.zrem("comment:hot:" + c.postId, c.commentId)
-    pinRepo.clearIfPinned(c.postId, c.commentId)
+    deleted = commentRepo.softDelete(commentId, nowMs) // returns true only when status 1->2
+    if deleted:
+      mq.publish(RootReplyCountChangedEvent(c.rootId, c.postId, delta=-1, tsMs=nowMs))
+    return SUCCESS(true)
+
+  // 一级评论：同步级联删楼内回复（只删 status=1 的；可多次调用以自愈历史脏数据）
+  commentRepo.softDelete(commentId, nowMs) // root 1->2
+  commentRepo.softDeleteByRootId(c.commentId, nowMs) // replies 1->2
+  redis.zrem("comment:hot:" + c.postId, c.commentId)
+  pinRepo.clearIfPinned(c.postId, c.commentId)
+  return SUCCESS(true)
 ```
 
 ---
+
+### 2.3 置顶评论（仅帖子作者）
+
+规则（上线版，已拍板）：
+
+- 只有**帖子作者**可置顶（当前无管理员）
+- 只能置顶一级评论：`root_id IS NULL` 且 `status = 1` 且 `comment.post_id == post_id`
+- 一帖仅一条置顶：由 `interaction_comment_pin.PRIMARY KEY(post_id)` 保证；置顶行为用 upsert
+
+pseudocode：
+
+```
+pinComment(userId, postId, commentId):
+  nowMs = clock.nowMs()
+  post = contentRepository.findPost(postId) // {postId, userId(postOwnerId)}
+  if post == null: return NOT_FOUND
+  if post.userId != userId: return NO_PERMISSION
+
+  c = commentRepo.getBrief(commentId) // {commentId, postId, rootId, status}
+  assert c != null
+  assert c.postId == postId
+  assert c.rootId == null
+  assert c.status == NORMAL
+
+  pinRepo.pin(postId, commentId, nowMs)
+  return SUCCESS(true)
+```
 
 ## 3. 读链路（时间序 + 楼内分页 + 预加载）
 
@@ -195,14 +243,14 @@ deleteComment(commentId):
 SELECT * FROM interaction_comment
 WHERE post_id = :postId
   AND root_id IS NULL
-  AND status IN (1, 2)
+  AND status = 1
   AND (:pinnedId IS NULL OR comment_id <> :pinnedId)
   AND (create_time < :cursorTime OR (create_time = :cursorTime AND comment_id < :cursorId))
 ORDER BY create_time DESC, comment_id DESC
 LIMIT :limit;
 ```
 
-> 说明：一级评论列表建议包含 `status=2` 的占位评论（否则楼内回复会变“孤儿”）。读侧返回 DTO 时：`status=2` 的一级评论 `content` 置空/占位文案，不要把原内容吐给前端。
+> 说明（上线版）：删除的一级评论不返回；由于“删一级会同步删二级”，因此不会出现“孤儿回复”，也不需要占位文案。
 
 ### 3.2 楼内回复列表（按时间正序，游标分页）
 
@@ -287,6 +335,7 @@ WHERE comment_id = :pinnedId
 - 一级评论创建完成
 - 一级评论 `like_count` 变化
 - 一级评论 `reply_count` 变化
+- 一级评论删除完成（从 ZSET 移除）
 
 ---
 
@@ -345,7 +394,7 @@ WHERE comment_id = :pinnedId
 - 只允许一级评论点赞：事件必须只针对一级评论（`root_id IS NULL`）
 - `rootCommentId` 就是一级评论 ID（不要发“楼内回复点赞”的事件）
 
-> 本仓库已存在点赞链路（targetType=COMMENT）。建议在“点赞最终一致同步完成”后投递该事件，由本消费者回写 `interaction_comment.like_count` 并刷新 `comment:hot:{postId}`。
+> 本仓库已存在点赞链路（targetType=COMMENT）。建议在“点赞在线写入产生 delta”后立刻投递该事件（delta=0 不投），由本消费者回写 `interaction_comment.like_count` 并刷新 `comment:hot:{postId}`。
 
 ### 5.4 MentionedUsersEvent
 
@@ -389,7 +438,7 @@ WHERE comment_id = :pinnedId
 - `nickname`、`avatarUrl`（必须返回；从用户基础信息批量补全，不建议落进评论表做冗余）
 - `rootId`（一级为 null；回复为所属一级 commentId）
 - `parentId`、`replyToId`
-- `content`、`status`（1=正常；2=删除）
+- `content`、`status`（1=正常；2=删除；上线版读接口只返回 1，删除的不会返回）
 - `likeCount`（仅一级评论有意义；回复恒为 0/不返回均可）
 - `replyCount`（仅一级评论有意义）
 - `createTime`
@@ -427,12 +476,35 @@ validateCommentLike(targetCommentId):
 
 推荐落点：点赞 domain 服务在 `targetType=COMMENT` 时，进入 Redis 写入前先做一次 `commentRepo.getBrief` 校验；校验失败直接抛 `ILLEGAL_PARAMETER`。
 
+如果你要让「评论热榜」吃到点赞（即 5.3 的 like_count + hot score 生效），还必须补一刀：
+
+- 文件：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
+- 改动点：`applyReaction(...)` 在 `targetType=COMMENT` 且 `delta != 0` 时发布 `CommentLikeChangedEvent`
+  - `postId` 从 `commentRepo.getBrief(targetId).postId` 取得（因此这一步顺带完成“只允许一级评论点赞”的校验）
+
+pseudocode（照抄）：
+
+```pseudocode
+applyReaction(userId, target, action, requestId):
+  if target.targetType == COMMENT:
+    c = commentRepo.getBrief(target.targetId)
+    assert c != null && c.status == NORMAL && c.rootId == null
+    postId = c.postId
+
+  res = reactionCachePort.applyAtomic(...) // res.delta / res.currentCount
+
+  if target.targetType == COMMENT and res.delta != 0:
+    mq.publish(CommentLikeChangedEvent(rootCommentId=target.targetId, postId=postId, delta=res.delta, tsMs=nowMs))
+
+  return success + currentCount
+```
+
 已存在：
 - `POST /api/v1/interact/comment`（入口：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`）
-- `POST /api/v1/interact/comment/pin`（入口同上；当前 `pinComment` 是占位实现）
+- `POST /api/v1/interact/comment/pin`（入口同上；上线版需从 Header 拿 `userId` 并校验“仅帖子作者可置顶”；当前 `pinComment` 是占位实现）
 - `CommentRequestDTO`（当前字段：`postId/parentId/content/mentions`）
 - `PinCommentRequestDTO`（当前字段：`commentId/postId`）
-- `InteractionService.comment` / `InteractionService.pinComment` 目前是占位实现
+- `InteractionService.comment` / `InteractionService.pinComment` 目前是占位实现（上线版 pinComment 需要把 `userId` 纳入签名做权限校验）
 
 必须新增（按需求：读侧 + 删除 + 置顶不参与分页）：
 
@@ -448,12 +520,13 @@ HTTP 契约（建议直接照抄到 `nexus-api` 的 DTO；游标规则见 3.1/3.
 | 一级评论列表（含置顶/预加载回复） | GET | `/api/v1/comment/list` | `postId`, `cursor` (Optional), `limit` (Int), `preloadReplyLimit` (Optional) | `pinned` (Optional), `items` (List), `nextCursor` |
 | 楼内回复列表 | GET | `/api/v1/comment/reply/list` | `rootId`, `cursor` (Optional), `limit` (Int) | `items` (List), `nextCursor` |
 | 评论热榜（只排一级评论） | GET | `/api/v1/comment/hot` | `postId`, `limit` (Int) | `pinned` (Optional), `items` (List) |
-| 删除评论（软删/幂等） | DELETE | `/api/v1/comment/{commentId}` | - | `success` (Bool) |
+| 删除评论（软删/幂等/权限校验） | DELETE | `/api/v1/comment/{commentId}` | - | `success/status/message`（建议复用 `OperationResultDTO`） |
 
 约束（和接口强绑定，别“实现时再想”）：
 
 - `pinned` 永远不计入 `items` 与 `limit`（否则分页会重复/漏页）
 - `cursor/nextCursor` 永远只基于 `items`（不基于 `pinned`）
+- 删除一级评论（上线版）：一级列表/热榜/楼内列表都不应再返回该楼的任何评论（因为同步级联删除）
 
 实现前必须解决的阻塞点：
 - 服务端必须能拿到 `userId`（否则无法落库评论作者）。**`userId` 从登录态/网关上下文注入**，不允许从 `CommentRequestDTO` 传入。
@@ -616,6 +689,8 @@ import lombok.NoArgsConstructor;
 /**
  * 评论最小信息：用于 rootId 计算与幂等删除判定（避免读整行）。
  *
+ * <p>上线版额外用途：删除/置顶权限校验需要用到 userId（评论作者）。</p>
+ *
  * @author codex
  * @since 2026-01-14
  */
@@ -626,10 +701,57 @@ import lombok.NoArgsConstructor;
 public class CommentBriefVO {
     private Long commentId;
     private Long postId;
+    private Long userId;
     private Long rootId;
     private Integer status;
     private Long likeCount;
     private Long replyCount;
+}
+```
+
+#### 7.3.1.1 新增值对象：`CommentViewVO`（读侧用：列表/热榜/楼内回复）
+
+文件：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/CommentViewVO.java`
+
+> 读接口不要直接暴露 PO；domain 里用 VO 承载“够用的展示字段”，再由 trigger 层补全 `nickname/avatarUrl`。
+
+```java
+package cn.nexus.domain.social.model.valobj;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * 评论展示 VO（读侧用）。
+ *
+ * <p>注意：nickname/avatarUrl 不在这里，读侧由 IUserBaseRepository 批量补全。</p>
+ *
+ * @author codex
+ * @since 2026-01-20
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentViewVO {
+    private Long commentId;
+    private Long postId;
+    private Long userId;
+    /** 读侧必须返回：由 IUserBaseRepository 批量补全 */
+    private String nickname;
+    /** 读侧必须返回：由 IUserBaseRepository 批量补全 */
+    private String avatarUrl;
+    private Long rootId;
+    private Long parentId;
+    private Long replyToId;
+    private String content;
+    private Integer status;
+    private Long likeCount;
+    private Long replyCount;
+    /** 毫秒时间戳（与 CommentResponseDTO.createTime 一致） */
+    private Long createTime;
 }
 ```
 
@@ -641,6 +763,7 @@ public class CommentBriefVO {
 package cn.nexus.domain.social.adapter.repository;
 
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
+import cn.nexus.domain.social.model.valobj.CommentViewVO;
 import java.util.List;
 
 /**
@@ -653,6 +776,13 @@ public interface ICommentRepository {
 
     CommentBriefVO getBrief(Long commentId);
 
+    /**
+     * 批量回表：查询评论详情（用于列表/热榜/楼内回复）。
+     *
+     * <p>不保证返回顺序；如果你要按入参 commentIds 的顺序输出，请在调用方自行重排。</p>
+     */
+    List<CommentViewVO> listByIds(List<Long> commentIds);
+
     void insert(Long commentId, Long postId, Long userId, Long rootId, Long parentId, Long replyToId, String content, Long nowMs);
 
     /**
@@ -662,14 +792,25 @@ public interface ICommentRepository {
      */
     boolean softDelete(Long commentId, Long nowMs);
 
+    /**
+     * 软删（幂等）：把某个一级评论楼内的所有回复从 status=1 改为 2。
+     *
+     * <p>用于“删一级评论要同步级联删二级”的上线规则；多次调用应安全。</p>
+     *
+     * @return true=本次至少删除了 1 条回复；false=没有需要删除的回复
+     */
+    boolean softDeleteByRootId(Long rootId, Long nowMs);
+
     void addReplyCount(Long rootCommentId, Long delta);
 
     void addLikeCount(Long rootCommentId, Long delta);
 
     /**
-     * 一级评论分页（时间倒序，游标分页）。cursor 为空表示从最新开始。
+     * 一级评论分页（时间倒序，游标分页）。
+     *
+     * <p>注意：置顶不参与分页，因此 pinnedId 必须从 items 中排除；cursor 为空表示从最新开始。</p>
      */
-    List<Long> pageRootCommentIds(Long postId, String cursor, int limit);
+    List<Long> pageRootCommentIds(Long postId, Long pinnedId, String cursor, int limit);
 
     /**
      * 楼内回复分页（时间正序，游标分页）。cursor 为空表示从最早开始。
@@ -894,13 +1035,18 @@ public interface ICommentDao {
 
     CommentPO selectBriefById(@Param("commentId") Long commentId);
 
+    List<CommentPO> selectByIds(@Param("commentIds") List<Long> commentIds);
+
     int softDelete(@Param("commentId") Long commentId, @Param("updateTime") java.util.Date updateTime);
+
+    int softDeleteByRootId(@Param("rootId") Long rootId, @Param("updateTime") java.util.Date updateTime);
 
     int addReplyCount(@Param("commentId") Long commentId, @Param("delta") Long delta);
 
     int addLikeCount(@Param("commentId") Long commentId, @Param("delta") Long delta);
 
     List<Long> pageRootIds(@Param("postId") Long postId,
+                           @Param("pinnedId") Long pinnedId,
                            @Param("cursorTime") java.util.Date cursorTime,
                            @Param("cursorId") Long cursorId,
                            @Param("limit") Integer limit);
@@ -927,16 +1073,31 @@ public interface ICommentDao {
     </insert>
 
     <select id="selectBriefById" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
-        SELECT comment_id, post_id, root_id, status, like_count, reply_count
+        SELECT comment_id, post_id, user_id, root_id, status, like_count, reply_count
         FROM interaction_comment
         WHERE comment_id = #{commentId}
         LIMIT 1
+    </select>
+
+    <select id="selectByIds" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
+        SELECT comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content, status, like_count, reply_count, create_time, update_time
+        FROM interaction_comment
+        WHERE comment_id IN
+        <foreach collection="commentIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
     </select>
 
     <update id="softDelete">
         UPDATE interaction_comment
         SET status = 2, update_time = #{updateTime}
         WHERE comment_id = #{commentId} AND status = 1
+    </update>
+
+    <update id="softDeleteByRootId">
+        UPDATE interaction_comment
+        SET status = 2, update_time = #{updateTime}
+        WHERE root_id = #{rootId} AND status = 1
     </update>
 
     <update id="addReplyCount">
@@ -956,7 +1117,10 @@ public interface ICommentDao {
         FROM interaction_comment
         WHERE post_id = #{postId}
           AND root_id IS NULL
-          AND status IN (1, 2)
+          AND status = 1
+          <if test="pinnedId != null">
+            AND comment_id &lt;&gt; #{pinnedId}
+          </if>
           <if test="cursorTime != null and cursorId != null">
             AND (create_time &lt; #{cursorTime} OR (create_time = #{cursorTime} AND comment_id &lt; #{cursorId}))
           </if>
@@ -984,8 +1148,11 @@ public interface ICommentDao {
 
 实现要点（照着写，不要发明新概念）：
 - `getBrief`：调用 `ICommentDao.selectBriefById`，映射到 `CommentBriefVO`
+- `listByIds`：调用 `ICommentDao.selectByIds`，映射到 `CommentViewVO`（createTime 用毫秒时间戳）
 - `insert`：把 `nowMs` 转为 `Date` 并写入（`status=1`，计数默认 0）
 - `softDelete`：调用 `ICommentDao.softDelete`，用 affectedRows 判断幂等（=1 才算成功）
+- `softDeleteByRootId`：调用 `ICommentDao.softDeleteByRootId`，用于“删一级同步级联删二级”
+- `pageRootCommentIds`：需要接收 `pinnedId` 并在 SQL 层排除（否则 pinned 会混进 items）
 - `pageRootCommentIds/pageReplyCommentIds`：解析 cursor `{timeMs}:{commentId}` 为 `Date + Long`
 
 可照抄实现（完整文件）：
@@ -995,8 +1162,10 @@ package cn.nexus.infrastructure.adapter.social.repository;
 
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
+import cn.nexus.domain.social.model.valobj.CommentViewVO;
 import cn.nexus.infrastructure.dao.social.ICommentDao;
 import cn.nexus.infrastructure.dao.social.po.CommentPO;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -1026,11 +1195,44 @@ public class CommentRepository implements ICommentRepository {
         return CommentBriefVO.builder()
                 .commentId(po.getCommentId())
                 .postId(po.getPostId())
+                .userId(po.getUserId())
                 .rootId(po.getRootId())
                 .status(po.getStatus())
                 .likeCount(po.getLikeCount())
                 .replyCount(po.getReplyCount())
                 .build();
+    }
+
+    @Override
+    public List<CommentViewVO> listByIds(List<Long> commentIds) {
+        if (commentIds == null || commentIds.isEmpty()) {
+            return List.of();
+        }
+        List<CommentPO> list = commentDao.selectByIds(commentIds);
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        List<CommentViewVO> res = new ArrayList<>(list.size());
+        for (CommentPO po : list) {
+            if (po == null) {
+                continue;
+            }
+            Date ct = po.getCreateTime();
+            res.add(CommentViewVO.builder()
+                    .commentId(po.getCommentId())
+                    .postId(po.getPostId())
+                    .userId(po.getUserId())
+                    .rootId(po.getRootId())
+                    .parentId(po.getParentId())
+                    .replyToId(po.getReplyToId())
+                    .content(po.getContent())
+                    .status(po.getStatus())
+                    .likeCount(po.getLikeCount())
+                    .replyCount(po.getReplyCount())
+                    .createTime(ct == null ? null : ct.getTime())
+                    .build());
+        }
+        return res;
     }
 
     @Override
@@ -1063,6 +1265,16 @@ public class CommentRepository implements ICommentRepository {
     }
 
     @Override
+    public boolean softDeleteByRootId(Long rootId, Long nowMs) {
+        if (rootId == null) {
+            return false;
+        }
+        Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
+        int affected = commentDao.softDeleteByRootId(rootId, now);
+        return affected > 0;
+    }
+
+    @Override
     public void addReplyCount(Long rootCommentId, Long delta) {
         if (rootCommentId == null || delta == null || delta == 0) {
             return;
@@ -1079,10 +1291,11 @@ public class CommentRepository implements ICommentRepository {
     }
 
     @Override
-    public List<Long> pageRootCommentIds(Long postId, String cursor, int limit) {
+    public List<Long> pageRootCommentIds(Long postId, Long pinnedId, String cursor, int limit) {
         Cursor c = Cursor.parse(cursor);
         int normalizedLimit = Math.max(1, limit);
         return commentDao.pageRootIds(postId,
+                pinnedId,
                 c == null ? null : c.cursorTime,
                 c == null ? null : c.cursorId,
                 normalizedLimit);
@@ -1626,10 +1839,11 @@ public class MentionedUsersConsumer {
 
 改动要点：
 - 读取 `userId = UserContext.requireUserId()`
-- 调用 domain：`interactionService.comment(userId, postId, parentId, content, mentions)`
+- comment：调用 domain：`interactionService.comment(userId, postId, parentId, content, mentions)`
+- pinComment（上线版需要权限）：也必须从 `UserContext` 取 `userId` 再调用 domain（原 `pinComment` 签名没有 userId，需要调整）
 - 缺 header：返回 `ResponseCode.ILLEGAL_PARAMETER`（别继续往下跑）
 
-可照抄实现片段（只示意 comment 接口；其它接口同理）：
+可照抄实现片段（只示意 comment；pin/delete 同理）：
 
 ```java
 @PostMapping("/interact/comment")
@@ -1653,17 +1867,55 @@ public Response<CommentResponseDTO> comment(@RequestBody CommentRequestDTO reque
             requestDTO.getMentions());
     return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
             CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).build());
+ }
+ ```
+
+#### 7.6.3 修改 `InteractionController.pinComment`（置顶入口补齐 userId）
+
+文件：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
+
+改动要点：
+
+- 从 `UserContext.requireUserId()` 取 `userId`
+- 调用 domain：`interactionService.pinComment(userId, commentId, postId)`（注意：你需要先改 domain 的接口签名，见 7.7）
+
+可照抄实现片段：
+
+```java
+@PostMapping("/interact/comment/pin")
+@Override
+public Response<OperationResultDTO> pinComment(@RequestBody PinCommentRequestDTO requestDTO) {
+    Long userId = UserContext.requireUserId();
+    OperationResultVO vo = interactionService.pinComment(userId, requestDTO.getCommentId(), requestDTO.getPostId());
+    return toOperationResult(vo);
 }
 ```
-### 7.7 Step 6：domain（实现 InteractionService.comment）
+
+### 7.7 Step 6：domain（实现 InteractionService.comment/delete/pin）
 
 文件：
 - `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/IInteractionService.java`
 - `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
 
+接口签名必须补齐（别让 trigger 层没法传 userId）：
+
+```java
+CommentResultVO comment(Long userId, Long postId, Long parentId, String content, java.util.List<Long> mentions);
+
+OperationResultVO pinComment(Long userId, Long commentId, Long postId);
+
+OperationResultVO deleteComment(Long userId, Long commentId);
+```
+
 改动要点：
 - `comment(...)` 签名增加 `userId`
-- `InteractionService` 注入：`ISocialIdPort` + `ICommentRepository` + `ICommentEventPort`
+- `pinComment(...)` 签名增加 `userId`（上线版需要权限；见 2.3）
+- 新增 `deleteComment(...)`（软删/幂等/权限；见 2.2）
+- `InteractionService` 注入（按需补齐，不要塞成一坨）：
+  - `ISocialIdPort`
+  - `ICommentRepository` + `ICommentPinRepository` + `ICommentHotRankRepository`
+  - `IContentRepository`（用来查帖子作者做权限判断）
+  - `ICommentEventPort`（发布评论/计数/@ 事件）
 - rootId 计算严格按 2.1：
   - 一级：`rootId=null, parentId=null`
   - 回复：读 parent brief，校验 `postId` 一致且 `status=1`，然后 `rootId = parent.rootId==null ? parent.commentId : parent.rootId`
@@ -1671,6 +1923,16 @@ public Response<CommentResponseDTO> comment(@RequestBody CommentRequestDTO reque
   - `CommentCreatedEvent`（所有评论都发）
   - `RootReplyCountChangedEvent(delta=+1)`（仅回复才发）
   - `MentionedUsersEvent`（`mentions` 不为空才发；优先用 DTO 的 `mentions`，别解析 content）
+
+delete/pin 的实现约束（照 2.2/2.3，别发明新规则）：
+
+- `deleteComment(userId, commentId)`：
+  - 权限：帖子作者可删本帖任意评论；评论作者可删自己评论；否则 `NO_PERMISSION`
+  - 幂等：只有 `status:1->2` 成功才允许扣 `reply_count`（回复删除才扣）
+  - 删一级：同一事务内级联软删楼内回复 + `hotRankRepository.remove(postId, rootCommentId)` + `pinRepo.clearIfPinned(postId, rootCommentId)`
+- `pinComment(userId, commentId, postId)`：
+  - 只有帖子作者可置顶；只能置顶一级评论（`root_id IS NULL`）且 `status=1`
+  - 一帖仅一条置顶：`pinRepo.pin(postId, commentId, nowMs)` 用 upsert
 
 可照抄实现片段（核心逻辑，别写成巨石函数）：
 
@@ -1729,11 +1991,516 @@ public CommentResultVO comment(Long userId, Long postId, Long parentId, String c
     return CommentResultVO.builder().commentId(commentId).createTime(nowMs).build();
 }
 ```
-### 7.8 必验收（不跑这些，你实现等于没实现）
+### 7.8 Step 7：nexus-api（补齐评论读接口 DTO + API 接口）
+
+> 目标：让“一级评论列表/楼内回复列表/热榜/删除”这 4 个接口在代码层完全无歧义；字段名按 camelCase。
+
+#### 7.8.1 新增 API 接口：`ICommentApi`
+
+文件：`project/nexus/nexus-api/src/main/java/cn/nexus/api/social/ICommentApi.java`
+
+```java
+package cn.nexus.api.social;
+
+import cn.nexus.api.response.Response;
+import cn.nexus.api.social.common.OperationResultDTO;
+import cn.nexus.api.social.interaction.dto.CommentHotRequestDTO;
+import cn.nexus.api.social.interaction.dto.CommentHotResponseDTO;
+import cn.nexus.api.social.interaction.dto.CommentListRequestDTO;
+import cn.nexus.api.social.interaction.dto.CommentListResponseDTO;
+import cn.nexus.api.social.interaction.dto.CommentReplyListRequestDTO;
+import cn.nexus.api.social.interaction.dto.CommentReplyListResponseDTO;
+
+/**
+ * 评论读/删相关接口定义。
+ */
+public interface ICommentApi {
+
+    Response<CommentListResponseDTO> list(CommentListRequestDTO requestDTO);
+
+    Response<CommentReplyListResponseDTO> replyList(CommentReplyListRequestDTO requestDTO);
+
+    Response<CommentHotResponseDTO> hot(CommentHotRequestDTO requestDTO);
+
+    Response<OperationResultDTO> delete(Long commentId);
+}
+```
+
+#### 7.8.2 新增读侧 DTO（最小可用）
+
+新增目录：`project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/`
+
+1) `CommentViewDTO.java`
+
+```java
+package cn.nexus.api.social.interaction.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * 评论展示 DTO（读接口用）。
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentViewDTO {
+    private Long commentId;
+    private Long postId;
+    private Long userId;
+    private String nickname;
+    private String avatarUrl;
+    private Long rootId;
+    private Long parentId;
+    private Long replyToId;
+    private String content;
+    private Long likeCount;
+    private Long replyCount;
+    private Long createTime;
+}
+```
+
+2) `RootCommentViewDTO.java`
+
+```java
+package cn.nexus.api.social.interaction.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * 一级评论 + 楼内回复预览。
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class RootCommentViewDTO {
+    private CommentViewDTO root;
+    private List<CommentViewDTO> repliesPreview;
+}
+```
+
+3) `CommentListRequestDTO.java`
+
+```java
+package cn.nexus.api.social.interaction.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentListRequestDTO {
+    private Long postId;
+    /** 游标："{timeMs}:{commentId}"；为空表示从最新开始 */
+    private String cursor;
+    /** 单页数量 */
+    private Integer limit;
+    /** 预加载每条一级评论的前 N 条回复 */
+    private Integer preloadReplyLimit;
+}
+```
+
+`CommentListResponseDTO.java`
+
+```java
+package cn.nexus.api.social.interaction.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentListResponseDTO {
+    private RootCommentViewDTO pinned;
+    private List<RootCommentViewDTO> items;
+    private String nextCursor;
+}
+```
+
+4) `CommentReplyListRequestDTO.java`
+
+```java
+package cn.nexus.api.social.interaction.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentReplyListRequestDTO {
+    private Long rootId;
+    /** 游标："{timeMs}:{commentId}"；为空表示从最早开始 */
+    private String cursor;
+    private Integer limit;
+}
+```
+
+`CommentReplyListResponseDTO.java`
+
+```java
+package cn.nexus.api.social.interaction.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentReplyListResponseDTO {
+    private List<CommentViewDTO> items;
+    private String nextCursor;
+}
+```
+
+5) `CommentHotRequestDTO.java`
+
+```java
+package cn.nexus.api.social.interaction.dto;
+
+import java.util.List;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentHotRequestDTO {
+    private Long postId;
+    private Integer limit;
+    /** 可选：热榜也预加载回复预览（默认 3） */
+    private Integer preloadReplyLimit;
+}
+```
+
+`CommentHotResponseDTO.java`
+
+```java
+package cn.nexus.api.social.interaction.dto;
+
+import java.util.List;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentHotResponseDTO {
+    private RootCommentViewDTO pinned;
+    private List<RootCommentViewDTO> items;
+}
+```
+
+### 7.9 Step 8：domain + trigger（补齐读接口/删除接口）
+
+#### 7.9.1 新增 domain 查询服务：`ICommentQueryService`
+
+文件：
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ICommentQueryService.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/CommentQueryService.java`
+
+`CommentQueryService` 依赖注入（按需，别引入新概念）：
+
+- `ICommentRepository`（分页拿 ID + 批量回表）
+- `ICommentPinRepository`（查 pinnedId / 清理脏置顶）
+- `ICommentHotRankRepository`（热榜 topIds）
+- `IUserBaseRepository`（批量补全 nickname/avatarUrl）
+
+接口建议（最小可用）：
+
+```java
+package cn.nexus.domain.social.service;
+
+import cn.nexus.domain.social.model.valobj.CommentHotVO;
+import cn.nexus.domain.social.model.valobj.ReplyCommentPageVO;
+import cn.nexus.domain.social.model.valobj.RootCommentPageVO;
+
+/**
+ * 评论读侧查询服务（列表/回复/热榜）。
+ */
+public interface ICommentQueryService {
+
+    /**
+     * 一级评论列表（含 pinned + 回复预览）。
+     *
+     * <p>cursor 协议：nextCursor="{lastCreateTimeMs}:{lastCommentId}"；为空表示从最新开始。</p>
+     */
+    RootCommentPageVO listRootComments(Long postId, String cursor, Integer limit, Integer preloadReplyLimit);
+
+    /**
+     * 楼内回复列表（按时间正序）。
+     *
+     * <p>cursor 协议：nextCursor="{lastCreateTimeMs}:{lastCommentId}"；为空表示从最早开始。</p>
+     */
+    ReplyCommentPageVO listReplies(Long rootId, String cursor, Integer limit);
+
+    /**
+     * 评论热榜（只排一级评论）。
+     */
+    CommentHotVO hotComments(Long postId, Integer limit, Integer preloadReplyLimit);
+}
+```
+
+你需要新增 4 个 VO（domain 返回用）：
+
+- `RootCommentViewVO`：`root(CommentViewVO)` + `repliesPreview(List<CommentViewVO>)`
+- `RootCommentPageVO`：`pinned(RootCommentViewVO)` + `items(List<RootCommentViewVO>)` + `nextCursor(String)`
+- `ReplyCommentPageVO`：`items(List<CommentViewVO>)` + `nextCursor(String)`
+- `CommentHotVO`：`pinned(RootCommentViewVO)` + `items(List<RootCommentViewVO>)`
+
+VO 定义建议（照抄，别在字段名上各玩各的）：
+
+`RootCommentViewVO.java`（`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/RootCommentViewVO.java`）
+
+```java
+package cn.nexus.domain.social.model.valobj;
+
+import java.util.List;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class RootCommentViewVO {
+    private CommentViewVO root;
+    private List<CommentViewVO> repliesPreview;
+}
+```
+
+`RootCommentPageVO.java`（`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/RootCommentPageVO.java`）
+
+```java
+package cn.nexus.domain.social.model.valobj;
+
+import java.util.List;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * 一级评论分页结果。
+ *
+ * <p>cursor 协议：nextCursor="{lastCreateTimeMs}:{lastCommentId}"</p>
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class RootCommentPageVO {
+    private RootCommentViewVO pinned;
+    private List<RootCommentViewVO> items;
+    private String nextCursor;
+}
+```
+
+`ReplyCommentPageVO.java`（`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/ReplyCommentPageVO.java`）
+
+```java
+package cn.nexus.domain.social.model.valobj;
+
+import java.util.List;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * 楼内回复分页结果（按时间正序）。
+ *
+ * <p>cursor 协议：nextCursor="{lastCreateTimeMs}:{lastCommentId}"</p>
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ReplyCommentPageVO {
+    private List<CommentViewVO> items;
+    private String nextCursor;
+}
+```
+
+`CommentHotVO.java`（`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/CommentHotVO.java`）
+
+```java
+package cn.nexus.domain.social.model.valobj;
+
+import java.util.List;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CommentHotVO {
+    private RootCommentViewVO pinned;
+    private List<RootCommentViewVO> items;
+}
+```
+
+读侧核心伪代码（照抄，不要写巨石函数）：
+
+```pseudocode
+normalizeLimit(limit, default=20, max=50) -> int
+normalizePreload(preload, default=3, max=10) -> int
+formatCursor(last) -> "{last.createTime}:{last.commentId}"
+
+listRootComments(postId, cursor, limit, preloadReplyLimit):
+  limit = normalizeLimit(limit)
+  preload = normalizePreload(preloadReplyLimit)
+
+  pinnedId = pinRepo.getPinnedCommentId(postId)
+  pinned = loadPinned(postId, pinnedId, preload)  // pinned 无效则 clear(pin) 并返回 null
+
+  rootIds = commentRepo.pageRootCommentIds(postId, pinnedId, cursor, limit)
+  roots = loadRootsWithPreview(rootIds, preload)
+  enrichUserProfile(pinned, roots) // 批量查 user_base，补 nickname/avatarUrl
+
+  nextCursor = (rootIds.size < limit) ? null : formatCursor(last(roots).root)
+  return {pinned, items=roots, nextCursor}
+
+listReplies(rootId, cursor, limit):
+  limit = normalizeLimit(limit, default=50, max=100)
+  ids = commentRepo.pageReplyCommentIds(rootId, cursor, limit)
+  items = loadComments(ids)
+  enrichUserProfile(null, items)
+  nextCursor = (ids.size < limit) ? null : formatCursor(last(items))
+  return {items, nextCursor}
+
+hotComments(postId, limit, preloadReplyLimit):
+  limit = normalizeLimit(limit)
+  preload = normalizePreload(preloadReplyLimit)
+
+  pinnedId = pinRepo.getPinnedCommentId(postId)
+  pinned = loadPinned(postId, pinnedId, preload)
+
+  hotIds = hotRankRepo.topIds(postId, limit)
+  hotIds = remove(hotIds, pinnedId) // pinned 不重复展示
+  roots = loadRootsWithPreview(hotIds, preload)
+  enrichUserProfile(pinned, roots)
+  return {pinned, items=roots}
+```
+
+`loadPinned/loadRootsWithPreview/loadComments/enrichUserProfile` 都必须是小函数（每个函数只做一件事）。
+
+#### 7.9.2 新增 trigger Controller：`CommentController`
+
+文件：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/CommentController.java`
+
+接口（必须新增，见 6.0）：
+
+- `GET /api/v1/comment/list`
+- `GET /api/v1/comment/reply/list`
+- `GET /api/v1/comment/hot`
+- `DELETE /api/v1/comment/{commentId}`
+
+实现要点：
+
+- 读接口也会经过 `UserContextInterceptor`：没带 Header `X-User-Id` 会被拦截（如果你未来要“游客可读”，要改拦截器逻辑，这里不做）。
+- `pinned` 永远不计入 `items/limit`；`cursor/nextCursor` 永远只基于 `items`（见 3.4/6.0）
+- 返回字段必须包含 `nickname/avatarUrl`（即便为空字符串也要有字段）
+
+可照抄实现骨架（重点是“别把业务写进 Controller”）：
+
+```java
+@RestController
+@CrossOrigin("*")
+@RequestMapping("/api/v1")
+public class CommentController implements cn.nexus.api.social.ICommentApi {
+
+    @jakarta.annotation.Resource
+    private cn.nexus.domain.social.service.ICommentQueryService commentQueryService;
+    @jakarta.annotation.Resource
+    private cn.nexus.domain.social.service.IInteractionService interactionService;
+
+    @GetMapping("/comment/list")
+    @Override
+    public Response<CommentListResponseDTO> list(CommentListRequestDTO requestDTO) {
+        RootCommentPageVO vo = commentQueryService.listRootComments(
+                requestDTO.getPostId(),
+                requestDTO.getCursor(),
+                requestDTO.getLimit(),
+                requestDTO.getPreloadReplyLimit());
+        // TODO: vo -> DTO（字段同名，按 root/pinned/items/nextCursor 直译即可）
+        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), /*dto*/ null);
+    }
+
+    @GetMapping("/comment/reply/list")
+    @Override
+    public Response<CommentReplyListResponseDTO> replyList(CommentReplyListRequestDTO requestDTO) {
+        ReplyCommentPageVO vo = commentQueryService.listReplies(requestDTO.getRootId(), requestDTO.getCursor(), requestDTO.getLimit());
+        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), /*dto*/ null);
+    }
+
+    @GetMapping("/comment/hot")
+    @Override
+    public Response<CommentHotResponseDTO> hot(CommentHotRequestDTO requestDTO) {
+        CommentHotVO vo = commentQueryService.hotComments(requestDTO.getPostId(), requestDTO.getLimit(), requestDTO.getPreloadReplyLimit());
+        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), /*dto*/ null);
+    }
+
+    @DeleteMapping("/comment/{commentId}")
+    @Override
+    public Response<OperationResultDTO> delete(@PathVariable("commentId") Long commentId) {
+        Long userId = UserContext.requireUserId();
+        OperationResultVO vo = interactionService.deleteComment(userId, commentId);
+        // TODO: vo -> OperationResultDTO（见 InteractionController.toOperationResult）
+        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), /*dto*/ null);
+    }
+}
+```
+
+### 7.10 必验收（不跑这些，你实现等于没实现）
 
 1) 发一级评论：`root_id IS NULL`，热榜 `comment:hot:{postId}` 里出现该 `commentId`
 2) 发回复：`root_id = 一级评论comment_id`，且一级评论 `reply_count +1`
 3) 删除回复（软删）：状态从 1->2 时才触发 `delta=-1`，一级评论 `reply_count -1`
 4) 不允许回复已删评论：parent.status=2 时创建回复必须失败
-5) 热榜只排一级评论：回复不会出现在 `comment:hot:{postId}`
+5) 删除一级评论（上线版）：必须同步级联删除楼内所有回复
+   - 一级评论在一级评论列表里不再出现（不返回占位）
+   - 楼内回复列表返回空（items 为空）
+   - 热榜 `comment:hot:{postId}` 不再包含该一级评论
+   - 若该一级评论曾被置顶：必须清理 `interaction_comment_pin`
+6) 权限（上线版）：
+   - 非帖子作者且非评论作者：删除必须失败（建议返回 `NO_PERMISSION`）
+   - 非帖子作者：置顶必须失败（建议返回 `NO_PERMISSION`）
+7) 热榜只排一级评论：回复不会出现在 `comment:hot:{postId}`
+8) 一级评论列表：`pinned` 不进入 `items`；翻页 `cursor/nextCursor` 只基于 `items`
+9) 读接口补全用户信息：`items/pinned/repliesPreview` 里的每条评论都带 `nickname/avatarUrl`
+10) 楼内回复列表：按时间正序分页；重复翻页不重复不漏
+11) 热榜接口：返回 `pinned + items`，且 pinned 不会在 items 里重复出现
 > 重要提醒：SQL 里判断 NULL 必须用 `IS NULL`，不要写 `= NULL`（那是永远 false 的）。

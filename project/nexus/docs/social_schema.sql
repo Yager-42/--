@@ -118,3 +118,34 @@ CREATE TABLE IF NOT EXISTS `interaction_reaction_count` (
   PRIMARY KEY (`target_type`, `target_id`, `reaction_type`),
   KEY `idx_update_time` (`update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='互动态势计数表（派生值）';
+
+-- 互动-通知（聚合收件箱）：按用户+目标聚合 unread_count，列表按 update_time 倒序
+CREATE TABLE IF NOT EXISTS `interaction_notification` (
+  `notification_id` BIGINT NOT NULL,
+  `to_user_id` BIGINT NOT NULL,
+  `biz_type` VARCHAR(32) NOT NULL,
+  `target_type` VARCHAR(16) NOT NULL,
+  `target_id` BIGINT NOT NULL,
+  `post_id` BIGINT NULL,
+  `root_comment_id` BIGINT NULL,
+  `last_actor_user_id` BIGINT NULL,
+  `last_comment_id` BIGINT NULL,
+  `unread_count` BIGINT NOT NULL DEFAULT 0,
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`notification_id`),
+  UNIQUE KEY `uk_user_biz_target` (`to_user_id`, `biz_type`, `target_type`, `target_id`),
+  KEY `idx_user_time_id` (`to_user_id`, `update_time`, `notification_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='站内通知收件箱（聚合）';
+
+-- 通知事件收件箱（MQ 幂等去重）：仅插入成功的 event_id 才允许继续执行业务写入
+CREATE TABLE IF NOT EXISTS `interaction_notify_inbox` (
+  `event_id` VARCHAR(128) NOT NULL,
+  `event_type` VARCHAR(32) NOT NULL,
+  `payload` TEXT NULL,
+  `status` VARCHAR(16) NOT NULL,
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`event_id`),
+  KEY `idx_status_time` (`status`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通知事件收件箱（幂等去重）';

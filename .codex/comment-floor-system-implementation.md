@@ -596,7 +596,7 @@ applyReaction(userId, target, action, requestId):
 已存在：
 - `POST /api/v1/interact/comment`（入口：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`）
 - `POST /api/v1/interact/comment/pin`（入口同上；上线版需从 Header 拿 `userId` 并校验“仅帖子作者可置顶”；当前 `pinComment` 是占位实现）
-- `CommentRequestDTO`（当前字段：`postId/parentId/content/mentions`）
+- `CommentRequestDTO`（字段：`postId/parentId/content`；历史字段 `mentions` 已废弃，后端忽略并从 `content` 解析 `@username`）
 - `PinCommentRequestDTO`（当前字段：`commentId/postId`）
 - `InteractionService.comment` / `InteractionService.pinComment` 目前是占位实现（上线版 pinComment 需要把 `userId` 纳入签名做权限校验）
 
@@ -1887,7 +1887,7 @@ public class CommentLikeChangedConsumer {
 
 改动要点：
 - 读取 `userId = UserContext.requireUserId()`
-- comment：调用 domain：`interactionService.comment(userId, postId, parentId, content, mentions)`
+- comment：调用 domain：`interactionService.comment(userId, postId, parentId, content)`（@提及由后端从 content 解析 `@username`）
 - pinComment（上线版需要权限）：也必须从 `UserContext` 取 `userId` 再调用 domain（原 `pinComment` 签名没有 userId，需要调整）
 - 缺 header：返回 `ResponseCode.ILLEGAL_PARAMETER`（别继续往下跑）
 
@@ -1911,8 +1911,7 @@ public Response<CommentResponseDTO> comment(@RequestBody CommentRequestDTO reque
             userId,
             requestDTO.getPostId(),
             requestDTO.getParentId(),
-            requestDTO.getContent(),
-            requestDTO.getMentions());
+            requestDTO.getContent());
     return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
             CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).build());
  }
@@ -1948,7 +1947,7 @@ public Response<OperationResultDTO> pinComment(@RequestBody PinCommentRequestDTO
 接口签名必须补齐（别让 trigger 层没法传 userId）：
 
 ```java
-CommentResultVO comment(Long userId, Long postId, Long parentId, String content, java.util.List<Long> mentions);
+CommentResultVO comment(Long userId, Long postId, Long parentId, String content);
 
 OperationResultVO pinComment(Long userId, Long commentId, Long postId);
 
@@ -1969,8 +1968,9 @@ OperationResultVO deleteComment(Long userId, Long commentId);
   - 回复：读 parent brief，校验 `postId` 一致且 `status=1`，然后 `rootId = parent.rootId==null ? parent.commentId : parent.rootId`
 - insert 成功后发布事件：
   - `CommentCreatedEvent`（所有评论都发）
+  - `InteractionNotifyEvent(eventType=COMMENT_CREATED)`（所有评论都发；旁路通知，不允许影响评论创建）
+  - `InteractionNotifyEvent(eventType=COMMENT_MENTIONED)`（按 `content` 解析 `@username`，对每个收件人逐条发布；旁路通知）
   - `RootReplyCountChangedEvent(delta=+1)`（仅回复才发）
-  - `MentionedUsersEvent`（`mentions` 不为空才发；优先用 DTO 的 `mentions`，别解析 content）
 
 delete/pin 的实现约束（照 2.2/2.3，别发明新规则）：
 
@@ -1986,7 +1986,7 @@ delete/pin 的实现约束（照 2.2/2.3，别发明新规则）：
 
 ```java
 @Override
-public CommentResultVO comment(Long userId, Long postId, Long parentId, String content, List<Long> mentions) {
+public CommentResultVO comment(Long userId, Long postId, Long parentId, String content) {
     Long nowMs = socialIdPort.now();
     Long commentId = socialIdPort.nextId();
 
@@ -2026,15 +2026,7 @@ public CommentResultVO comment(Long userId, Long postId, Long parentId, String c
         commentEventPort.publish(changed);
     }
 
-    if (mentions != null && !mentions.isEmpty()) {
-        MentionedUsersEvent evt = new MentionedUsersEvent();
-        evt.setCommentId(commentId);
-        evt.setPostId(postId);
-        evt.setRootId(rootId);
-        evt.setMentionedUserIds(mentions);
-        evt.setTsMs(nowMs);
-        commentEventPort.publish(evt);
-    }
+    // @提及：后端从 content 解析 @username 并发布 COMMENT_MENTIONED（见通知业务文档 6.1），不要信任客户端传的 userId 列表。
 
     return CommentResultVO.builder().commentId(commentId).createTime(nowMs).build();
 }
@@ -2690,7 +2682,7 @@ USER_ID="10001"
 curl -s -X POST "${BASE_URL}/api/v1/interact/comment" \
   -H "Content-Type: application/json" \
   -H "X-User-Id: ${USER_ID}" \
-  -d "{\"postId\":${POST_ID},\"parentId\":null,\"content\":\"hello\",\"mentions\":[]}"
+  -d "{\"postId\":${POST_ID},\"parentId\":null,\"content\":\"hello\"}"
 
 # 2) 拉一级评论列表（含 pinned + repliesPreview）
 curl -s -G "${BASE_URL}/api/v1/comment/list" \

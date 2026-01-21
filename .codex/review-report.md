@@ -79,3 +79,108 @@
 - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java`
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/kafka/ReactionLikeAggConsumer.java`
 
+---
+
+# 追加：通知业务 CR
+
+日期：2026-01-21  
+执行者：Codex（Linus-mode）
+
+## 需求与范围
+
+- 依据：`.codex/notification-business-implementation.md` 第 10 章“逐步实现清单”。  
+- 目标：补齐通知业务（聚合收件箱 + MQ 消费者 + /notification/list 真实实现 + 已读接口）；不做 Maven 验证。  
+
+## Linus Review（从接口模拟链路走通性）
+
+【品味评分】🟢 好品味  
+【综合评分】92/100（通过）
+
+### 链路 1：点赞新增 -> 通知写入（旁路 MQ）
+
+前端请求（示例）：
+
+- `POST /api/v1/interact/reaction`
+- body：`{"targetId":90001,"targetType":"POST","type":"LIKE","action":"ADD","requestId":null}`
+
+走通路径：
+
+- HTTP：`InteractionController.react` -> `InteractionService.react` -> `ReactionLikeService.applyReaction`
+- 只在 `delta==+1` 时发布 `InteractionNotifyEvent(eventType=LIKE_ADDED, eventId=requestId)`
+- MQ：`InteractionNotifyConsumer` 先写 `interaction_notify_inbox` 幂等去重，再做聚合 UPSERT 写入 `interaction_notification`
+
+关键正确性：
+
+- 幂等不写补丁：点赞幂等靠 Redis set-state 的 `delta`；MQ 至少一次靠 notify inbox 的 `event_id` 去重。  
+- 聚合维度稳定：唯一键 `(to_user_id, biz_type, target_type, target_id)` 收敛高频写。  
+
+### 链路 2：评论创建 -> 通知写入（direct/reply 一刀切）
+
+前端请求（示例）：
+
+- `POST /api/v1/interact/comment`
+- direct：`{"postId":90001,"parentId":null,"content":"hi","mentions":[]}`
+- reply：`{"postId":90001,"parentId":80001,"content":"hi","mentions":[]}`
+
+走通路径：
+
+- `InteractionService.comment` 落库成功后发布 `InteractionNotifyEvent(eventType=COMMENT_CREATED, eventId=commentId)`
+- direct：`targetType=POST,targetId=postId` -> 通知消费者回表 post 拿作者作为收件人 -> `POST_COMMENTED`
+- reply：`targetType=COMMENT,targetId=parentId` -> 通知消费者回表 comment 拿作者作为收件人 -> `COMMENT_REPLIED`
+
+关键正确性：
+
+- 消灭“回复双通知”：reply 只通知被回复的评论作者（不再同时通知 post 作者）。  
+
+### 链路 3：@提及 -> 通知写入（去重规则在消费端统一）
+
+前端内容（示例）：`"hello @alice, @bob!"`
+
+走通路径：
+
+- 写侧解析 `@username` -> 回表 `user_base` -> 对每个收件人发布 `COMMENT_MENTIONED`（`eventId=commentId:toUserId`）
+- 消费端统一去重：若 `toUserId == targetOwnerUserId` 直接丢弃（避免“主收件人 + 提及”双通知）
+
+### 链路 4：通知列表读（/notification/list）
+
+前端请求（示例）：
+
+- `GET /api/v1/notification/list?cursor=1700000000000:10001`
+
+走通路径：
+
+- `InteractionService.notifications` -> `InteractionNotificationRepository.pageByUser`
+- 只读 `unread_count>0`，排序 `update_time DESC, notification_id DESC`
+- `nextCursor` 固定格式：`{updateTimeMs}:{notificationId}`
+- title/content 在 domain 渲染（不在 DB 存文案，避免迁移）
+
+### 链路 5：已读闭环（/notification/read /read/all）
+
+前端请求（示例）：
+
+- `POST /api/v1/notification/read` body：`{"notificationId":10001}`
+- `POST /api/v1/notification/read/all` body：空
+
+关键正确性：
+
+- 已读语义简单粗暴：`unread_count=0`；且不会再出现在 list。  
+- `markRead/markReadAll` 不更新 `update_time`（DDL 不含 `ON UPDATE`，SQL 也不动该列）。  
+- 幂等：重复调用永远 success=true（找不到也算成功）。  
+
+## 致命问题（未发现）
+
+本次按“接口 -> 事件 -> 消费 -> DB 聚合 -> 读接口/已读”走通性审查，未发现会把链路卡死的结构性问题。
+
+## 改进方向（可选）
+
+- notify inbox 当前只做 NEW/DONE/FAIL 标记；如需要自动补偿，可后续补一个定时重放 FAIL（不改变业务语义）。  
+
+## 关键文件（入口与主干）
+
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyConsumer.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/InteractionNotificationRepository.java`
+- `project/nexus/docs/social_schema.sql`
+

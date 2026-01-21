@@ -1,22 +1,30 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.ICommentEventPort;
+import cn.nexus.domain.social.adapter.port.IInteractionNotifyEventPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.ICommentHotRankRepository;
 import cn.nexus.domain.social.adapter.repository.ICommentPinRepository;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
+import cn.nexus.domain.social.adapter.repository.IInteractionNotificationRepository;
+import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.*;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
+import cn.nexus.types.event.interaction.EventType;
+import cn.nexus.types.event.interaction.InteractionNotifyEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 互动服务实现。
@@ -33,6 +41,9 @@ public class InteractionService implements IInteractionService {
     private final ICommentHotRankRepository commentHotRankRepository;
     private final IContentRepository contentRepository;
     private final ICommentEventPort commentEventPort;
+    private final IInteractionNotifyEventPort interactionNotifyEventPort;
+    private final IInteractionNotificationRepository interactionNotificationRepository;
+    private final IUserBaseRepository userBaseRepository;
 
     @Override
     public ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action, String requestId) {
@@ -52,7 +63,7 @@ public class InteractionService implements IInteractionService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public CommentResultVO comment(Long userId, Long postId, Long parentId, String content, List<Long> mentions) {
+    public CommentResultVO comment(Long userId, Long postId, Long parentId, String content) {
         requireNonNull(userId, "userId");
         requireNonNull(postId, "postId");
 
@@ -80,11 +91,13 @@ public class InteractionService implements IInteractionService {
         commentRepository.insert(commentId, postId, userId, rootId, parentIdToSave, replyToId, content, nowMs);
 
         publishCreated(commentId, postId, rootId, userId, nowMs);
+        publishNotifyCommentCreated(commentId, postId, rootId, parentIdToSave, userId, nowMs);
+        publishNotifyCommentMentioned(commentId, postId, rootId, parentIdToSave, userId, nowMs, content);
         if (rootId != null) {
             publishReplyCountChanged(rootId, postId, +1L, nowMs);
         }
 
-        // mentions 当前仅透传占位；真正通知在通知子系统完成（见 notification-business-implementation.md）
+        // @提及：后端从 content 解析 @username 并发布 COMMENT_MENTIONED（旁路，不允许影响评论创建）。
         return CommentResultVO.builder().commentId(commentId).createTime(nowMs).build();
     }
 
@@ -161,15 +174,46 @@ public class InteractionService implements IInteractionService {
 
     @Override
     public NotificationListVO notifications(Long userId, String cursor) {
-        NotificationVO notification = NotificationVO.builder()
-                .title("占位通知")
-                .content("您有新的互动")
-                .createTime(socialIdPort.now())
-                .build();
-        return NotificationListVO.builder()
-                .notifications(List.of(notification))
-                .nextCursor("next-" + socialIdPort.nextId())
-                .build();
+        requireNonNull(userId, "userId");
+        int limit = 20;
+        List<NotificationVO> raw = interactionNotificationRepository.pageByUser(userId, cursor, limit);
+        if (raw == null || raw.isEmpty()) {
+            return NotificationListVO.builder().notifications(List.of()).nextCursor(null).build();
+        }
+
+        List<NotificationVO> items = new ArrayList<>(raw.size());
+        for (NotificationVO n : raw) {
+            if (n == null) {
+                continue;
+            }
+            String bizType = n.getBizType();
+            long unread = n.getUnreadCount() == null ? 0L : n.getUnreadCount();
+            n.setTitle(renderTitle(bizType));
+            n.setContent(renderContent(bizType, unread));
+            items.add(n);
+        }
+
+        String nextCursor = null;
+        if (items.size() >= limit) {
+            NotificationVO last = items.get(items.size() - 1);
+            nextCursor = formatCursor(last);
+        }
+        return NotificationListVO.builder().notifications(items).nextCursor(nextCursor).build();
+    }
+
+    @Override
+    public OperationResultVO readNotification(Long userId, Long notificationId) {
+        requireNonNull(userId, "userId");
+        requireNonNull(notificationId, "notificationId");
+        interactionNotificationRepository.markRead(userId, notificationId);
+        return ok(notificationId, "READ", "已读");
+    }
+
+    @Override
+    public OperationResultVO readAllNotifications(Long userId) {
+        requireNonNull(userId, "userId");
+        interactionNotificationRepository.markReadAll(userId);
+        return ok(userId, "READ_ALL", "已全部已读");
     }
 
     @Override
@@ -251,6 +295,139 @@ public class InteractionService implements IInteractionService {
         }
     }
 
+    private void publishNotifyCommentCreated(Long commentId,
+                                           Long postId,
+                                           Long rootId,
+                                           Long parentId,
+                                           Long fromUserId,
+                                           Long nowMs) {
+        try {
+            InteractionNotifyEvent event = new InteractionNotifyEvent();
+            event.setEventType(EventType.COMMENT_CREATED);
+            event.setEventId(commentId == null ? null : String.valueOf(commentId));
+            event.setFromUserId(fromUserId);
+            event.setTargetType(rootId == null ? "POST" : "COMMENT");
+            event.setTargetId(rootId == null ? postId : parentId);
+            event.setPostId(postId);
+            event.setRootCommentId(rootId);
+            event.setCommentId(commentId);
+            event.setTsMs(nowMs);
+            interactionNotifyEventPort.publish(event);
+        } catch (Exception e) {
+            log.warn("publish InteractionNotifyEvent failed, commentId={}, postId={}, rootId={}, parentId={}", commentId, postId, rootId, parentId, e);
+        }
+    }
+
+    private void publishNotifyCommentMentioned(Long commentId,
+                                              Long postId,
+                                              Long rootId,
+                                              Long parentId,
+                                              Long fromUserId,
+                                              Long nowMs,
+                                              String content) {
+        try {
+            Set<String> usernames = extractMentionedUsernames(content);
+            if (usernames.isEmpty()) {
+                return;
+            }
+            List<UserBriefVO> users = userBaseRepository.listByUsernames(new ArrayList<>(usernames));
+            if (users == null || users.isEmpty()) {
+                return;
+            }
+            Set<Long> mentionedUserIds = new HashSet<>();
+            for (UserBriefVO u : users) {
+                if (u == null || u.getUserId() == null) {
+                    continue;
+                }
+                if (fromUserId != null && fromUserId.equals(u.getUserId())) {
+                    continue;
+                }
+                mentionedUserIds.add(u.getUserId());
+            }
+            if (mentionedUserIds.isEmpty()) {
+                return;
+            }
+
+            String targetType = rootId == null ? "POST" : "COMMENT";
+            Long targetId = rootId == null ? postId : parentId;
+            if (targetId == null) {
+                return;
+            }
+
+            for (Long toUserId : mentionedUserIds) {
+                InteractionNotifyEvent event = new InteractionNotifyEvent();
+                event.setEventType(EventType.COMMENT_MENTIONED);
+                event.setEventId(commentId + ":" + toUserId);
+                event.setFromUserId(fromUserId);
+                event.setToUserId(toUserId);
+                event.setTargetType(targetType);
+                event.setTargetId(targetId);
+                event.setPostId(postId);
+                event.setRootCommentId(rootId);
+                event.setCommentId(commentId);
+                event.setTsMs(nowMs);
+                interactionNotifyEventPort.publish(event);
+            }
+        } catch (Exception e) {
+            log.warn("publish COMMENT_MENTIONED failed, commentId={}, postId={}, rootId={}, parentId={}", commentId, postId, rootId, parentId, e);
+        }
+    }
+
+    private Set<String> extractMentionedUsernames(String content) {
+        if (content == null || content.isBlank()) {
+            return Set.of();
+        }
+        Set<String> res = new HashSet<>();
+        int n = content.length();
+        for (int i = 0; i < n; i++) {
+            if (content.charAt(i) != '@') {
+                continue;
+            }
+            int start = i + 1;
+            if (start >= n) {
+                continue;
+            }
+            int j = start;
+            while (j < n && (j - start) < 64) {
+                char ch = content.charAt(j);
+                if (Character.isWhitespace(ch) || ch == '@') {
+                    break;
+                }
+                j++;
+            }
+            if (j <= start) {
+                continue;
+            }
+            String raw = content.substring(start, j);
+            String username = trimTrailingPunct(raw);
+            if (username != null) {
+                username = username.trim();
+            }
+            if (username == null || username.isBlank()) {
+                continue;
+            }
+            res.add(username);
+        }
+        return res;
+    }
+
+    private String trimTrailingPunct(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return raw;
+        }
+        int end = raw.length();
+        while (end > 0) {
+            char c = raw.charAt(end - 1);
+            if (c == ',' || c == '.' || c == ';' || c == ':' || c == '!' || c == '?' || c == ')' || c == ']' || c == '}'
+                    || c == '，' || c == '。' || c == '！' || c == '？' || c == '）' || c == '】' || c == '》') {
+                end--;
+                continue;
+            }
+            break;
+        }
+        return end <= 0 ? "" : raw.substring(0, end);
+    }
+
     private void publishReplyCountChanged(Long rootCommentId, Long postId, Long delta, Long nowMs) {
         try {
             cn.nexus.types.event.interaction.RootReplyCountChangedEvent changed = new cn.nexus.types.event.interaction.RootReplyCountChangedEvent();
@@ -262,6 +439,42 @@ public class InteractionService implements IInteractionService {
         } catch (Exception e) {
             log.warn("publish RootReplyCountChangedEvent failed, rootCommentId={}, postId={}, delta={}", rootCommentId, postId, delta, e);
         }
+    }
+
+    private String renderTitle(String bizType) {
+        if (bizType == null) {
+            return "通知";
+        }
+        return switch (bizType) {
+            case "POST_LIKED" -> "帖子获赞";
+            case "COMMENT_LIKED" -> "评论获赞";
+            case "POST_COMMENTED" -> "帖子被评论";
+            case "COMMENT_REPLIED" -> "评论被回复";
+            case "COMMENT_MENTIONED" -> "提及你";
+            default -> "通知";
+        };
+    }
+
+    private String renderContent(String bizType, long unreadCount) {
+        long n = Math.max(0L, unreadCount);
+        if (bizType == null) {
+            return "你有新的互动";
+        }
+        return switch (bizType) {
+            case "POST_LIKED" -> "你的帖子新增 " + n + " 个赞";
+            case "COMMENT_LIKED" -> "你的评论新增 " + n + " 个赞";
+            case "POST_COMMENTED" -> "你的帖子新增 " + n + " 条评论";
+            case "COMMENT_REPLIED" -> "你的评论新增 " + n + " 条回复";
+            case "COMMENT_MENTIONED" -> "有人在评论里提及你 " + n + " 次";
+            default -> "你有新的互动";
+        };
+    }
+
+    private String formatCursor(NotificationVO last) {
+        if (last == null || last.getCreateTime() == null || last.getNotificationId() == null) {
+            return null;
+        }
+        return last.getCreateTime() + ":" + last.getNotificationId();
     }
 
     private void requireNonNull(Object v, String name) {

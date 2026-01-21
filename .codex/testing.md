@@ -81,3 +81,48 @@
 
 说明：HotKey 系统不可用时会自动退化为“全部冷 key”（不影响主链路正确性）。
 
+---
+
+# 追加：通知业务最小自测（不跑 Maven）
+
+日期：2026-01-21  
+执行者：Codex（Linus-mode）
+
+目标：按 `.codex/notification-business-implementation.md` 第 11 章验证通知链路能走通（事件 -> 聚合写 -> 读 -> 已读）。
+
+## 0. 前置条件
+
+1) MySQL：已执行 `project/nexus/docs/social_schema.sql` 中新增的两张表 DDL：`interaction_notification`、`interaction_notify_inbox`。  
+2) RabbitMQ：可连接，且已声明队列 `interaction.notify.queue`（由 Spring 配置自动声明）。  
+3) 应用启动：HTTP 请求携带 Header `X-User-Id: <Long>`（由 `UserContext` 注入）。  
+
+## 1. 点赞通知（只统计新增）
+
+1) 用户 A 对用户 B 的 post 连续点两次赞（ADD）：  
+   - 期望：只产生 1 次 `LIKE_ADDED`（delta=+1 才发），`POST_LIKED.unread_count` 只 +1。  
+2) 用户 A 再取消赞（REMOVE）：  
+   - 期望：不产生通知（只统计新增）。  
+
+## 2. 评论通知（direct/reply 不重复）
+
+1) 用户 A 直接评论用户 B 的 post（parentId=null）：  
+   - 期望：用户 B 收到 `POST_COMMENTED.unread_count +1`。  
+2) 用户 A 回复用户 B 的评论（parentId!=null）：  
+   - 期望：只通知“被回复的评论作者”，不再同时通知 post 作者（消除重复）。  
+
+## 3. @提及通知（去重）
+
+1) 用户 A 评论内容包含 `@username`：  
+   - 期望：被提及用户收到 `COMMENT_MENTIONED.unread_count +1`。  
+2) 若被提及用户本来就是主收件人（post 作者或被回复评论作者）：  
+   - 期望：消费端丢弃提及事件，不产生双通知。  
+
+## 4. 列表 + 已读
+
+1) 调用 `GET /api/v1/notification/list`：  
+   - 期望：按 `update_time DESC, notification_id DESC`；`nextCursor` = `{updateTimeMs}:{notificationId}`。  
+2) 调用 `POST /api/v1/notification/read` body：`{"notificationId":<id>}`：  
+   - 期望：该条 `unread_count=0` 且不会再出现在 list。  
+3) 调用 `POST /api/v1/notification/read/all`：  
+   - 期望：该用户所有通知 `unread_count=0`，list 返回空。  
+

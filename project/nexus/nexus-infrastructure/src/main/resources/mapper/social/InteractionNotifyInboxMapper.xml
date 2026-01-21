@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IInteractionNotifyInboxDao">
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.InteractionNotifyInboxPO">
+        INSERT IGNORE INTO interaction_notify_inbox(event_id, event_type, payload, status, create_time, update_time)
+        VALUES(#{eventId}, #{eventType}, #{payload}, #{status}, NOW(), NOW())
+    </insert>
+
+    <update id="updateStatus">
+        UPDATE interaction_notify_inbox
+        SET status = #{status}, update_time = NOW()
+        WHERE event_id = #{eventId}
+    </update>
+
+</mapper>

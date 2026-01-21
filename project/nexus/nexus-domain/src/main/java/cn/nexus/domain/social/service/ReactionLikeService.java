@@ -2,11 +2,14 @@ package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionDelayPort;
+import cn.nexus.domain.social.adapter.port.IInteractionNotifyEventPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.*;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
+import cn.nexus.types.event.interaction.EventType;
+import cn.nexus.types.event.interaction.InteractionNotifyEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,6 +39,7 @@ public class ReactionLikeService implements IReactionLikeService {
     private final IReactionDelayPort reactionDelayPort;
     private final IReactionRepository reactionRepository;
     private final ISocialIdPort socialIdPort;
+    private final IInteractionNotifyEventPort interactionNotifyEventPort;
 
     /**
      * 在线写：只做 Redis 原子更新 + 必要时投递延迟消息 + 打结构化日志。
@@ -58,6 +62,11 @@ public class ReactionLikeService implements IReactionLikeService {
         if (firstPending) {
             long delayMs = reactionCachePort.getWindowMs(target, DEFAULT_WINDOW_MS);
             reactionDelayPort.sendDelay(target, delayMs);
+        }
+
+        // 仅 delta=+1 才代表“真的新增点赞”，通知旁路只吃这个黄金信号。
+        if (delta == 1) {
+            publishNotifyLikeAdded(rid, userId, target);
         }
 
         log.info(buildEventJson(rid, userId, target, action, desiredState, delta, currentCount, firstPending));
@@ -186,5 +195,24 @@ public class ReactionLikeService implements IReactionLikeService {
             return "";
         }
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private void publishNotifyLikeAdded(String requestId, Long fromUserId, ReactionTargetVO target) {
+        try {
+            InteractionNotifyEvent event = new InteractionNotifyEvent();
+            event.setEventType(EventType.LIKE_ADDED);
+            event.setEventId(requestId);
+            event.setRequestId(requestId);
+            event.setFromUserId(fromUserId);
+            event.setTargetType(target == null || target.getTargetType() == null ? null : target.getTargetType().getCode());
+            event.setTargetId(target == null ? null : target.getTargetId());
+            if (target != null && target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
+                event.setPostId(target.getTargetId());
+            }
+            event.setTsMs(socialIdPort.now());
+            interactionNotifyEventPort.publish(event);
+        } catch (Exception e) {
+            log.warn("publish InteractionNotifyEvent LIKE_ADDED failed, requestId={}, fromUserId={}, target={}", requestId, fromUserId, target, e);
+        }
     }
 }

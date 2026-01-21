@@ -20,5 +20,14 @@ public interface IUserBaseRepository {
      * @return 用户基础信息列表
      */
     List<UserBriefVO> listByUserIds(List<Long> userIds);
-}
 
+    /**
+     * 批量按 username 查询用户基础信息（不存在的 username 直接忽略）。
+     *
+     * <p>用于 @username 提及解析：由后端回表映射到 userId。</p>
+     *
+     * @param usernames 用户名列表
+     * @return 用户基础信息列表
+     */
+    List<UserBriefVO> listByUsernames(List<String> usernames);
+}

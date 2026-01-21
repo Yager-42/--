@@ -10,5 +10,13 @@
             #{id}
         </foreach>
     </select>
-</mapper>
 
+    <select id="selectByUsernames" resultType="cn.nexus.infrastructure.dao.social.po.UserBasePO">
+        SELECT user_id, username, avatar_url
+        FROM user_base
+        WHERE username IN
+        <foreach collection="usernames" item="u" open="(" separator="," close=")">
+            #{u}
+        </foreach>
+    </select>
+</mapper>

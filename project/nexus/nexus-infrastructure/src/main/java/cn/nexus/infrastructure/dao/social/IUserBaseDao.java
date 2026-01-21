@@ -8,5 +8,6 @@ import org.apache.ibatis.annotations.Param;
 @Mapper
 public interface IUserBaseDao {
     List<UserBasePO> selectByUserIds(@Param("userIds") List<Long> userIds);
-}
 
+    List<UserBasePO> selectByUsernames(@Param("usernames") List<String> usernames);
+}

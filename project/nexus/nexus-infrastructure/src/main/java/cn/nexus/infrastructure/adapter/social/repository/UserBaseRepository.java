@@ -43,5 +43,27 @@ public class UserBaseRepository implements IUserBaseRepository {
         }
         return res;
     }
-}
 
+    @Override
+    public List<UserBriefVO> listByUsernames(List<String> usernames) {
+        if (usernames == null || usernames.isEmpty()) {
+            return List.of();
+        }
+        List<UserBasePO> list = userBaseDao.selectByUsernames(usernames);
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        List<UserBriefVO> res = new ArrayList<>(list.size());
+        for (UserBasePO po : list) {
+            if (po == null || po.getUserId() == null) {
+                continue;
+            }
+            res.add(UserBriefVO.builder()
+                    .userId(po.getUserId())
+                    .nickname(po.getUsername())
+                    .avatarUrl(po.getAvatarUrl())
+                    .build());
+        }
+        return res;
+    }
+}

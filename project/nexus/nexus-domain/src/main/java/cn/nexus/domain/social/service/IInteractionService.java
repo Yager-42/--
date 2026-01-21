@@ -11,13 +11,23 @@ public interface IInteractionService {
 
     ReactionStateVO reactionState(Long userId, Long targetId, String targetType, String type);
 
-    CommentResultVO comment(Long userId, Long postId, Long parentId, String content, java.util.List<Long> mentions);
+    CommentResultVO comment(Long userId, Long postId, Long parentId, String content);
 
     OperationResultVO pinComment(Long userId, Long commentId, Long postId);
 
     OperationResultVO deleteComment(Long userId, Long commentId);
 
     NotificationListVO notifications(Long userId, String cursor);
+
+    /**
+     * 标记单条通知已读（幂等）。
+     */
+    OperationResultVO readNotification(Long userId, Long notificationId);
+
+    /**
+     * 全部通知标记已读（幂等）。
+     */
+    OperationResultVO readAllNotifications(Long userId);
 
     TipResultVO tip(Long toUserId, java.math.BigDecimal amount, String currency, Long postId);
 

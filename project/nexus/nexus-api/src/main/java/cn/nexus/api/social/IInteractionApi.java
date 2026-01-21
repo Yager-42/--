@@ -19,6 +19,10 @@ public interface IInteractionApi {
 
     Response<NotificationListResponseDTO> notifications(NotificationListRequestDTO requestDTO);
 
+    Response<OperationResultDTO> readNotification(NotificationReadRequestDTO requestDTO);
+
+    Response<OperationResultDTO> readAllNotifications();
+
     Response<TipResponseDTO> tip(TipRequestDTO requestDTO);
 
     Response<PollCreateResponseDTO> createPoll(PollCreateRequestDTO requestDTO);

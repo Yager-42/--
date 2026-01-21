@@ -1,0 +1,29 @@
+{
+  "date": "2026-01-21",
+  "executor": "Codex (Linus-mode)",
+  "cwd": "C:\\\\Users\\\\Administrator\\\\Desktop\\\\文档",
+  "repo": {
+    "type": "git",
+    "language": "Java",
+    "build": "Maven (multi-module)",
+    "javaVersion": 17,
+    "modules": [
+      "project/nexus/nexus-api",
+      "project/nexus/nexus-app",
+      "project/nexus/nexus-domain",
+      "project/nexus/nexus-infrastructure",
+      "project/nexus/nexus-trigger",
+      "project/nexus/nexus-types"
+    ]
+  },
+  "focus": {
+    "feature": "notification business (aggregate inbox + MQ consumer)",
+    "docSource": ".codex/notification-business-implementation.md#10"
+  },
+  "observations": [
+    "Existing API: GET /api/v1/notification/list existed but domain implementation was placeholder.",
+    "Project already has RabbitMQ + JSON message converter, and existing inbox pattern (relation_event_inbox).",
+    "Comment system supports two-level threads; like system provides delta (+1/-1/0) as the idempotency signal."
+  ]
+}
+

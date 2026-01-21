@@ -148,7 +148,21 @@ createComment(postId, userId, parentId, content, mentions):
     mq.publish(RootReplyCountChangedEvent(rootId, postId, delta=+1, nowMs))
   mentionedUserIds = mentions
   if mentionedUserIds not empty:
-    mq.publish(MentionedUsersEvent(commentId, postId, rootId, mentionedUserIds, nowMs))
+    // @提及：上线版不要再发 MentionedUsersEvent，直接复用“通知统一事件”（见 .codex/notification-business-implementation.md）
+    // 注意：这里只负责“发事件”；幂等去重与“主收件人不再额外提及通知”的过滤在通知侧完成
+    for each toUserId in unique(mentionedUserIds):
+      mq.publish(InteractionNotifyEvent(
+        eventType='COMMENT_MENTIONED',
+        eventId=commentId + ':' + toUserId,
+        fromUserId=userId,
+        toUserId=toUserId,
+        targetType=(parentId == null) ? 'POST' : 'COMMENT',
+        targetId=(parentId == null) ? postId : parentId,
+        postId=postId,
+        rootCommentId=rootId,
+        commentId=commentId,
+        tsMs=nowMs
+      ))
 
   return commentId
 ```
@@ -337,6 +351,42 @@ WHERE comment_id = :pinnedId
 - 一级评论 `reply_count` 变化
 - 一级评论删除完成（从 ZSET 移除）
 
+### 4.5 冷启动 / 重建（必补，不然你会上线后看到“热榜空”）
+
+热榜 ZSET（`comment:hot:{postId}`）默认只靠 **事件增量** 维护：有人发一级评论/有人点赞/有人回复/有人删除，才会更新。
+
+这意味着一个很现实的问题：
+
+- 如果你在“评论热榜”功能上线前，库里已经有存量评论，那么 Redis ZSET 里一开始可能是空的（产品会以为你写挂了，但其实你只是缺了初始化）。
+
+最小可用策略（二选一；别在读路径写复杂 fallback）：
+
+1) 一次性脚本：按 `postId` 重建热榜（推荐，上线前跑一次就够）
+2) 定时重建：夜间跑（用于覆盖历史脏数据/Redis 被清空的情况）
+
+pseudocode（重建某个 post 的热榜）：
+
+```pseudocode
+rebuildHotRankForPost(postId, scanLimit=5000, keepTop=200):
+  // 只扫描一级评论（root_id IS NULL）且 status=1
+  roots = commentRepo.listRecentRoots(postId, scanLimit) // 返回 {commentId, likeCount, replyCount}
+  key = "comment:hot:" + postId
+
+  // 先清空再重建（简单粗暴，且不需要复杂兼容）
+  redis.del(key)
+  for each r in roots:
+    score = safe(r.likeCount) * 10 + safe(r.replyCount) * 20
+    redis.zadd(key, score, r.commentId)
+
+  // 可选：只保留 topK，避免 key 无限长
+  redis.zremrangeByRank(key, 0, -(keepTop + 1)) // 仅示意；按你 Redis 客户端 API 调整
+```
+
+注意：
+
+- 重建使用 MySQL 的 `like_count/reply_count` 作为真值；它们是“最终一致”的，重建会把热榜拉回可用状态。
+- pinned 不需要特殊处理：读热榜时按 3.4 规则“剔除 pinnedId”即可避免重复展示。
+
 ---
 
 ## 5. MQ 事件契约（应用内必须固定）
@@ -350,7 +400,7 @@ WHERE comment_id = :pinnedId
   - `comment.created` → `interaction.comment.created.queue`
   - `comment.reply_count.changed` → `interaction.comment.reply_count.changed.queue`
   - `comment.like.changed` → `interaction.comment.like.changed.queue`（可选：如果你把点赞也接进热榜）
-  - `comment.mentioned` → `interaction.comment.mentioned.queue`
+备注：`@提及` 不再走 `comment.mentioned` 单独事件；统一走通知子系统的 `InteractionNotifyEvent(eventType=COMMENT_MENTIONED)`（见 `.codex/notification-business-implementation.md`）。
 - 消息体：建议用 `nexus-types` 的事件类（继承 `cn.nexus.types.event.BaseEvent`，天然 Serializable），生产端直接 `rabbitTemplate.convertAndSend(exchange, routingKey, event)`
 
 ### 5.1 CommentCreatedEvent
@@ -396,17 +446,22 @@ WHERE comment_id = :pinnedId
 
 > 本仓库已存在点赞链路（targetType=COMMENT）。建议在“点赞在线写入产生 delta”后立刻投递该事件（delta=0 不投），由本消费者回写 `interaction_comment.like_count` 并刷新 `comment:hot:{postId}`。
 
-### 5.4 MentionedUsersEvent
+### 5.4 CommentMentioned（@提及 -> 通知统一事件）
 
-字段：
-- `commentId`
-- `postId`
-- `rootId`
-- `mentionedUserIds`（数组）
-- `tsMs`
+上线版结论：不要再定义 `MentionedUsersEvent` 这种“数组事件”。直接复用 `.codex/notification-business-implementation.md` 的统一事件 `InteractionNotifyEvent`。
+
+字段（最小可用）：
+
+- `eventType='COMMENT_MENTIONED'`
+- `eventId=commentId:toUserId`（幂等键；RabbitMQ 重试不允许重复 +1）
+- `fromUserId`（评论作者）
+- `toUserId`（被 @ 的用户）
+- `targetType/targetId`：直接评论 -> `POST/postId`；回复评论 -> `COMMENT/parentId`
+- `postId/rootCommentId/commentId/tsMs`：用于跳转定位
 
 消费者职责：
-- 通知服务消费并发送站内信/Push（不要阻塞“发评论”接口）
+
+- 通知服务消费并写入站内通知（聚合 UPSERT），并做 `eventId` 幂等去重（见通知文档 6.4）。
 
 ---
 
@@ -429,6 +484,43 @@ WHERE comment_id = :pinnedId
 }
 ```
 
+### 6.0.1 错误码口径（必须固定，不然前端没法写）
+
+> 这些不是“实现细节”，是接口契约。你不钉死，最后就是每个接口各玩各的。
+
+约定：所有接口都用 `Response<T>` 包装；业务失败不抛给前端看堆栈，返回对应 `ResponseCode`。
+
+| 场景 | 返回 | 备注 |
+| --- | --- | --- |
+| 缺少 Header `X-User-Id` | `ILLEGAL_PARAMETER` | 当前仓库通常由拦截器统一拦；如果没拦，Controller 也必须兜住（见 7.6） |
+| 缺少必填参数（`postId/rootId/commentId` 等） | `ILLEGAL_PARAMETER` | Controller 直接返回即可，别往下跑 |
+| 发回复：`parentId` 不存在 / 跨 `postId` 串楼 / `parent.status=2` 已删 | `ILLEGAL_PARAMETER` | 见 2.1：不允许回复已删评论 |
+| 置顶：帖子不存在 | `NOT_FOUND` | 见 2.3：`contentRepository.findPost(postId)` |
+| 置顶：非帖子作者 | `NO_PERMISSION` | 见 2.3：权限必须卡死 |
+| 置顶：评论不存在 / 非本帖评论 / 非一级评论 / 已删 | `ILLEGAL_PARAMETER` | 见 2.3：只能置顶一级且 status=1 |
+| 删除：评论不存在 | `SUCCESS` + `OperationResultDTO.success=true` | 幂等：不存在视为“已经删掉了” |
+| 删除：非帖子作者且非评论作者 | `NO_PERMISSION` | 见 2.2：当前无管理员 |
+
+### 6.0.2 参数默认值与归一化（必须写死，不然线上会被打爆）
+
+约定：`limit/preloadReplyLimit` 不合法时**归一化**（而不是报错），避免用户端写错导致“全链路失败”。
+
+- `GET /comment/list`
+  - `limit`：默认 20，范围 `[1, 50]`
+  - `preloadReplyLimit`：默认 3，范围 `[0, 10]`（0 表示不预加载）
+- `GET /comment/reply/list`
+  - `limit`：默认 50，范围 `[1, 100]`
+- `GET /comment/hot`
+  - `limit`：默认 20，范围 `[1, 50]`
+  - `preloadReplyLimit`：默认 3，范围 `[0, 10]`
+
+游标口径（必须固定）：
+
+- cursor/nextCursor 统一格式：`"{timeMs}:{commentId}"`
+- cursor 非法（解析失败）：按“空游标”处理
+  - 一级评论列表：从最新开始
+  - 楼内回复列表：从最早开始
+
 ### 6.1 新增读接口的 DTO 结构（最小可用，不然前端没法用）
 
 > 你现在的文档只有 `items(List)` 这种“空气契约”，实现时一定会各写各的，最后互相对不上。下面给一份最小可用结构，先跑起来再扩展字段。
@@ -438,7 +530,7 @@ WHERE comment_id = :pinnedId
 - `nickname`、`avatarUrl`（必须返回；从用户基础信息批量补全，不建议落进评论表做冗余）
 - `rootId`（一级为 null；回复为所属一级 commentId）
 - `parentId`、`replyToId`
-- `content`、`status`（1=正常；2=删除；上线版读接口只返回 1，删除的不会返回）
+- `content`（上线版读接口只返回正常评论，删除的不会返回）
 - `likeCount`（仅一级评论有意义；回复恒为 0/不返回均可）
 - `replyCount`（仅一级评论有意义）
 - `createTime`
@@ -643,34 +735,11 @@ public class CommentLikeChangedEvent extends BaseEvent {
 }
 ```
 
-#### 7.2.4 `MentionedUsersEvent.java`（可选）
+#### 7.2.4 `@提及` 事件（上线版）
 
-文件：`project/nexus/nexus-types/src/main/java/cn/nexus/types/event/interaction/MentionedUsersEvent.java`
+不要再新增 `MentionedUsersEvent.java`。
 
-```java
-package cn.nexus.types.event.interaction;
-
-import cn.nexus.types.event.BaseEvent;
-import java.util.List;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-
-/**
- * @ 提及事件：异步通知，不阻塞“发评论”接口。
- *
- * @author codex
- * @since 2026-01-14
- */
-@Data
-@EqualsAndHashCode(callSuper = true)
-public class MentionedUsersEvent extends BaseEvent {
-    private Long commentId;
-    private Long postId;
-    private Long rootId;
-    private List<Long> mentionedUserIds;
-    private Long tsMs;
-}
-```
+直接使用通知文档里的统一事件 `InteractionNotifyEvent`（`eventType=COMMENT_MENTIONED`，并按收件人逐条发布，字段映射见 `.codex/notification-business-implementation.md` 的 6.1）。
 
 ### 7.3 Step 2：domain（仓储接口 + 值对象）
 
@@ -726,7 +795,7 @@ import lombok.NoArgsConstructor;
 /**
  * 评论展示 VO（读侧用）。
  *
- * <p>注意：nickname/avatarUrl 不在这里，读侧由 IUserBaseRepository 批量补全。</p>
+ * <p>注意：nickname/avatarUrl 不在评论表（interaction_comment）里，读侧由 IUserBaseRepository 批量补全后写入本 VO。</p>
  *
  * @author codex
  * @since 2026-01-20
@@ -1793,38 +1862,15 @@ public class CommentLikeChangedConsumer {
 }
 ```
 
-#### 7.5.2.4 `MentionedUsersConsumer.java`（可选）
+#### 7.5.2.4 `@提及`（上线版）
 
-文件：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/MentionedUsersConsumer.java`
-```java
-package cn.nexus.trigger.mq.consumer;
+不再新增 `MentionedUsersConsumer`。
 
-import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
-import cn.nexus.types.event.interaction.MentionedUsersEvent;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.stereotype.Component;
+上线版口径（照抄就行）：
 
-/**
- * @ 提及事件消费者：占位实现（只记录日志）。
- *
- * @author codex
- * @since 2026-01-14
- */
-@Slf4j
-@Component
-public class MentionedUsersConsumer {
-
-    @RabbitListener(queues = InteractionCommentMqConfig.Q_MENTIONED)
-    public void onMessage(MentionedUsersEvent event) {
-        if (event == null) {
-            return;
-        }
-        log.info("mentioned users event, commentId={}, postId={}, rootId={}, mentionedUserIds={}",
-                event.getCommentId(), event.getPostId(), event.getRootId(), event.getMentionedUserIds());
-    }
-}
-```
+- 评论写入只负责发布通知统一事件 `InteractionNotifyEvent(eventType=COMMENT_MENTIONED)`（字段映射见 `.codex/notification-business-implementation.md`）。
+- 真正的“让用户看见 @ 提及”由通知子系统的 MQ consumer 完成：`eventId` 幂等去重（notify inbox）+ 聚合 UPSERT 写入 `interaction_notification`。
+- 任何失败都不允许影响“发评论”接口：让 MQ 走死信/报警即可，别在主链路加回退。
 
 ### 7.6 Step 5：trigger（HTTP：从 UserContext 注入 userId）
 
@@ -2035,6 +2081,7 @@ public interface ICommentApi {
 ```java
 package cn.nexus.api.social.interaction.dto;
 
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -2484,6 +2531,127 @@ public class CommentController implements cn.nexus.api.social.ICommentApi {
 }
 ```
 
+#### 7.9.3 Controller DTO 映射（把 TODO 干掉，不然你接口永远返回 null）
+
+你在 7.9.2 里留了 `/*dto*/ null`，那是“写了一半”。下面给最小可用的映射规则与实现骨架。
+
+映射规则（必须固定）：
+
+- `nickname/avatarUrl`：必须返回；为 `null` 时返回空字符串 `""`
+- `items/repliesPreview`：必须返回数组；为 `null` 时返回空数组
+- `pinned`：允许为 `null`
+- `pinned` 永远不进入 `items`，且 `nextCursor` 只基于 `items`
+
+可照抄实现片段（示意：把 vo 直译成 DTO；别在 Controller 写业务）：
+
+```java
+import cn.nexus.api.social.common.OperationResultDTO;
+import cn.nexus.api.social.interaction.dto.*;
+import cn.nexus.domain.social.model.valobj.*;
+import java.util.ArrayList;
+import java.util.List;
+
+private CommentViewDTO toDto(CommentViewVO vo) {
+    if (vo == null) {
+        return null;
+    }
+    return CommentViewDTO.builder()
+            .commentId(vo.getCommentId())
+            .postId(vo.getPostId())
+            .userId(vo.getUserId())
+            .nickname(vo.getNickname() == null ? "" : vo.getNickname())
+            .avatarUrl(vo.getAvatarUrl() == null ? "" : vo.getAvatarUrl())
+            .rootId(vo.getRootId())
+            .parentId(vo.getParentId())
+            .replyToId(vo.getReplyToId())
+            .content(vo.getContent() == null ? "" : vo.getContent())
+            .likeCount(vo.getLikeCount() == null ? 0L : vo.getLikeCount())
+            .replyCount(vo.getReplyCount() == null ? 0L : vo.getReplyCount())
+            .createTime(vo.getCreateTime())
+            .build();
+}
+
+private RootCommentViewDTO toDto(RootCommentViewVO vo) {
+    if (vo == null) {
+        return null;
+    }
+    List<CommentViewDTO> preview = new ArrayList<>();
+    if (vo.getRepliesPreview() != null) {
+        for (CommentViewVO c : vo.getRepliesPreview()) {
+            CommentViewDTO dto = toDto(c);
+            if (dto != null) {
+                preview.add(dto);
+            }
+        }
+    }
+    return RootCommentViewDTO.builder()
+            .root(toDto(vo.getRoot()))
+            .repliesPreview(preview)
+            .build();
+}
+
+private CommentListResponseDTO toDto(RootCommentPageVO vo) {
+    List<RootCommentViewDTO> items = new ArrayList<>();
+    if (vo != null && vo.getItems() != null) {
+        for (RootCommentViewVO v : vo.getItems()) {
+            RootCommentViewDTO dto = toDto(v);
+            if (dto != null) {
+                items.add(dto);
+            }
+        }
+    }
+    return CommentListResponseDTO.builder()
+            .pinned(vo == null ? null : toDto(vo.getPinned()))
+            .items(items)
+            .nextCursor(vo == null ? null : vo.getNextCursor())
+            .build();
+}
+
+private CommentReplyListResponseDTO toDto(ReplyCommentPageVO vo) {
+    List<CommentViewDTO> items = new ArrayList<>();
+    if (vo != null && vo.getItems() != null) {
+        for (CommentViewVO v : vo.getItems()) {
+            CommentViewDTO dto = toDto(v);
+            if (dto != null) {
+                items.add(dto);
+            }
+        }
+    }
+    return CommentReplyListResponseDTO.builder()
+            .items(items)
+            .nextCursor(vo == null ? null : vo.getNextCursor())
+            .build();
+}
+
+private CommentHotResponseDTO toDto(CommentHotVO vo) {
+    List<RootCommentViewDTO> items = new ArrayList<>();
+    if (vo != null && vo.getItems() != null) {
+        for (RootCommentViewVO v : vo.getItems()) {
+            RootCommentViewDTO dto = toDto(v);
+            if (dto != null) {
+                items.add(dto);
+            }
+        }
+    }
+    return CommentHotResponseDTO.builder()
+            .pinned(vo == null ? null : toDto(vo.getPinned()))
+            .items(items)
+            .build();
+}
+
+private OperationResultDTO toDto(OperationResultVO vo) {
+    if (vo == null) {
+        return OperationResultDTO.builder().success(false).status("FAILED").message("").build();
+    }
+    return OperationResultDTO.builder()
+            .success(vo.isSuccess())
+            .id(vo.getId())
+            .status(vo.getStatus() == null ? "" : vo.getStatus())
+            .message(vo.getMessage() == null ? "" : vo.getMessage())
+            .build();
+}
+```
+
 ### 7.10 必验收（不跑这些，你实现等于没实现）
 
 1) 发一级评论：`root_id IS NULL`，热榜 `comment:hot:{postId}` 里出现该 `commentId`
@@ -2504,3 +2672,51 @@ public class CommentController implements cn.nexus.api.social.ICommentApi {
 10) 楼内回复列表：按时间正序分页；重复翻页不重复不漏
 11) 热榜接口：返回 `pinned + items`，且 pinned 不会在 items 里重复出现
 > 重要提醒：SQL 里判断 NULL 必须用 `IS NULL`，不要写 `= NULL`（那是永远 false 的）。
+
+### 7.11 可执行验收（最小脚本：别只写清单）
+
+> 你要的是“能一键复现”，不是“看起来很认真”。
+
+下面命令默认在 bash 跑（Git Bash 也行）。把变量换成你自己的。
+
+```bash
+BASE_URL="http://localhost:8080"
+POST_ID="123"
+USER_ID="10001"
+
+# 1) 发一级评论
+curl -s -X POST "${BASE_URL}/api/v1/interact/comment" \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: ${USER_ID}" \
+  -d "{\"postId\":${POST_ID},\"parentId\":null,\"content\":\"hello\",\"mentions\":[]}"
+
+# 2) 拉一级评论列表（含 pinned + repliesPreview）
+curl -s -G "${BASE_URL}/api/v1/comment/list" \
+  -H "X-User-Id: ${USER_ID}" \
+  --data-urlencode "postId=${POST_ID}" \
+  --data-urlencode "limit=20" \
+  --data-urlencode "preloadReplyLimit=3"
+
+# 3) 热榜（只排一级评论）
+curl -s -G "${BASE_URL}/api/v1/comment/hot" \
+  -H "X-User-Id: ${USER_ID}" \
+  --data-urlencode "postId=${POST_ID}" \
+  --data-urlencode "limit=20" \
+  --data-urlencode "preloadReplyLimit=3"
+```
+
+Redis 快速检查（可选）：
+
+```bash
+redis-cli ZREVRANGE "comment:hot:${POST_ID}" 0 10 WITHSCORES
+```
+
+MySQL 快速检查（可选）：
+
+```sql
+SELECT comment_id, post_id, root_id, parent_id, status, like_count, reply_count
+FROM interaction_comment
+WHERE post_id = 123
+ORDER BY create_time DESC
+LIMIT 20;
+```

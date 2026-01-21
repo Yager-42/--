@@ -84,17 +84,38 @@ public class InteractionController implements IInteractionApi {
     @PostMapping("/interact/comment")
     @Override
     public Response<CommentResponseDTO> comment(@RequestBody CommentRequestDTO requestDTO) {
-        Long userId = UserContext.requireUserId();
-        CommentResultVO vo = interactionService.comment(userId, requestDTO.getPostId(), requestDTO.getParentId(), requestDTO.getContent(), requestDTO.getMentions());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).build());
+        try {
+            Long userId = UserContext.requireUserId();
+            CommentResultVO vo = interactionService.comment(userId, requestDTO.getPostId(), requestDTO.getParentId(), requestDTO.getContent(), requestDTO.getMentions());
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
+                    CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).build());
+        } catch (AppException e) {
+            return Response.<CommentResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("comment api failed, req={}", requestDTO, e);
+            return Response.<CommentResponseDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
     }
 
     @PostMapping("/interact/comment/pin")
     @Override
     public Response<OperationResultDTO> pinComment(@RequestBody PinCommentRequestDTO requestDTO) {
-        OperationResultVO vo = interactionService.pinComment(requestDTO.getCommentId(), requestDTO.getPostId());
-        return toOperationResult(vo);
+        try {
+            Long userId = UserContext.requireUserId();
+            OperationResultVO vo = interactionService.pinComment(userId, requestDTO.getCommentId(), requestDTO.getPostId());
+            return toOperationResult(vo);
+        } catch (AppException e) {
+            return Response.<OperationResultDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("pin comment api failed, req={}", requestDTO, e);
+            return Response.<OperationResultDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
     }
 
     @GetMapping("/notification/list")

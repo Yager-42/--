@@ -13,7 +13,9 @@ public interface IInteractionService {
 
     CommentResultVO comment(Long userId, Long postId, Long parentId, String content, java.util.List<Long> mentions);
 
-    OperationResultVO pinComment(Long commentId, Long postId);
+    OperationResultVO pinComment(Long userId, Long commentId, Long postId);
+
+    OperationResultVO deleteComment(Long userId, Long commentId);
 
     NotificationListVO notifications(Long userId, String cursor);
 

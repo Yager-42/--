@@ -36,7 +36,7 @@
 | `root_id` | BIGINT NULL | 一级评论为 NULL；回复为一级评论 ID |
 | `parent_id` | BIGINT NULL | 直接回复的评论 ID（仅展示/定位） |
 | `reply_to_id` | BIGINT NULL | 显示“回复@谁”的目标评论 ID（仅展示） |
-| `content` | LONGTEXT NOT NULL | 可包含结构化 @ 片段 |
+| `content` | LONGTEXT NOT NULL | 可包含 `@username` 文本提及（由后端解析） |
 | `status` | TINYINT NOT NULL | 1=正常；2=删除（软删） |
 | `like_count` | BIGINT NOT NULL | 一级评论点赞数（最终一致即可） |
 | `reply_count` | BIGINT NOT NULL | 一级评论回复数（最终一致即可） |
@@ -120,7 +120,7 @@ CREATE TABLE `interaction_comment_pin` (
 pseudocode（领域服务，保持一层 if/else）：
 
 ```
-createComment(postId, userId, parentId, content, mentions):
+createComment(postId, userId, parentId, content):
   nowMs = clock.nowMs()
   commentId = idPort.nextId()
 
@@ -146,7 +146,9 @@ createComment(postId, userId, parentId, content, mentions):
   mq.publish(CommentCreatedEvent(commentId, postId, rootId, userId, nowMs))
   if parentId != null:
     mq.publish(RootReplyCountChangedEvent(rootId, postId, delta=+1, nowMs))
-  mentionedUserIds = mentions
+  // @提及（拍板）：后端从评论文本解析 `@username`，并回表 user_base 做 username -> userId 映射
+  // 不要让前端传 userId 列表来凑合：两套来源会把语义搞崩，最终还是要以后端解析为准
+  mentionedUserIds = mentionParser.parseMentionedUserIds(content) // 规则见 .codex/notification-business-implementation.md 6.1；去重 + 查不到的忽略
   if mentionedUserIds not empty:
     // @提及：上线版不要再发 MentionedUsersEvent，直接复用“通知统一事件”（见 .codex/notification-business-implementation.md）
     // 注意：这里只负责“发事件”；幂等去重与“主收件人不再额外提及通知”的过滤在通知侧完成

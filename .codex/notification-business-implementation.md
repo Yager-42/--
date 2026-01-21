@@ -31,6 +31,9 @@
 6) **必须支持 `@提及`**：评论里提及某用户时，对该用户产生站内通知（见 5.2/6.1/11）。  
 7) **上线必做幂等**：RabbitMQ 至少一次投递；通知消费者必须对 `eventId` 去重，否则 `unread_count` 会被重复 +1（见 6.4）。  
 8) **`@提及` 不双通知（拍板）**：如果被 @ 的用户本来就会收到该评论触发的 `POST_COMMENTED/COMMENT_REPLIED`（主收件人），则不再额外发送 `COMMENT_MENTIONED`（见 7.1）。  
+9) **只返回未读（拍板）**：`/notification/list` **只返回** `unread_count > 0` 的通知行。  
+10) **createTime 口径（拍板）**：`NotificationDTO.createTime` 返回 `update_time`（最后一次发生时间，毫秒）。  
+11) **@username 解析口径（拍板）**：`@提及` 由**后端**从评论文本解析，语法固定为 `@username`，不允许 `@{userId}`（见 6.1 / 6.2 / 7.1）。  
 
 ---
 
@@ -147,7 +150,7 @@
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `notification_id` | BIGINT PK | 通知行 ID（用于分页游标） |
+| `notification_id` | BIGINT PK | 通知行 ID（Snowflake，由 `socialIdPort.nextId()` 生成，用于分页游标） |
 | `to_user_id` | BIGINT NOT NULL | 收件人 |
 | `biz_type` | VARCHAR(32) NOT NULL | 业务类型（见 5.2） |
 | `target_type` | VARCHAR(16) NOT NULL | 目标类型：POST/COMMENT |
@@ -158,12 +161,14 @@
 | `last_comment_id` | BIGINT NULL | 最近一次产生的 commentId（用于点击进入定位） |
 | `unread_count` | BIGINT NOT NULL | 未读新增次数（赞/评论的增量） |
 | `create_time` | DATETIME NOT NULL | 创建时间 |
-| `update_time` | DATETIME NOT NULL | 最近更新时间（用于列表排序） |
+| `update_time` | DATETIME NOT NULL | 最后一次发生时间（用于列表排序/游标；对应 DTO 的 createTime） |
 
 核心约束（用唯一键保证，不要在代码里写补丁逻辑）：
 
 - 同一条“聚合通知”的唯一键：`(to_user_id, biz_type, target_type, target_id)`  
 - 作用：实现 `INSERT ... ON DUPLICATE KEY UPDATE unread_count = unread_count + 1`  
+
+注意（别写错，不然上线必出鬼）：`update_time` 表示“最后一次发生时间”，不是“最后一次修改时间”。  \n因此 DDL **禁止** `ON UPDATE CURRENT_TIMESTAMP`，避免 `markRead/markReadAll` 把已读顶到最前面，也避免 `createTime` 口径被“读操作”污染。
 
 可复制 DDL（最小可用）：
 
@@ -180,7 +185,7 @@ CREATE TABLE `interaction_notification` (
   `last_comment_id` BIGINT NULL,
   `unread_count` BIGINT NOT NULL DEFAULT 0,
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`notification_id`),
   UNIQUE KEY `uk_user_biz_target` (`to_user_id`, `biz_type`, `target_type`, `target_id`),
   KEY `idx_user_time_id` (`to_user_id`, `update_time`, `notification_id`)
@@ -234,7 +239,15 @@ CREATE TABLE `interaction_notification` (
    - 回复评论（parentId!=null）：`targetType=COMMENT, targetId=parentId, postId=postId, rootCommentId=rootId, commentId=新commentId`
 
 3) 评论提及（COMMENT_MENTIONED）（上线必须）：
-   - 触发：创建评论时解析出 `mentionedUserIds`
+   - 触发：创建评论时，从评论文本按 `@username` 解析出 `mentionedUserIds`（userId 列表）
+     - 前置（必须拍死）：`username` 在系统里必须全局唯一；否则 `@username` 没法确定“到底 @ 了谁”
+     - 落地（必须做）：`user_base` 增加唯一键 `UNIQUE KEY uk_username(username)`，用数据约束保证“不重复”，别在代码里写补丁
+     - 解析规则（后端实现，别让前端传 userId 列表来凑合）：
+       - 从 `content` 中扫描所有 `@`，取其后连续的用户名片段（最长 64 个字符）
+       - 用户名在遇到“空白/换行/Tab/再次出现 @”时结束；结尾如果带 `, . ; : ! ? ) ] } ，。！？）】》` 这类标点，先裁掉再查
+       - 去重：同一条评论里重复 @ 同一 username，只算一次（忽略大小写与否由 username 的数据库比较规则决定）
+       - 批量回表：`SELECT user_id, username FROM user_base WHERE username IN (...)` 得到 `mentionedUserIds`
+       - 查不到的 username 直接忽略（不要因为 @ 不存在就让评论创建失败）
    - 过滤（拍板，消除重复通知）：
      - 去重：同一条评论里重复 @ 同一用户，只算一次
      - 排除自提及：`mentionedUserId == fromUserId` 直接丢弃
@@ -369,7 +382,7 @@ upsertIncrement(toUserId, bizType, targetType, targetId, postId, rootCommentId, 
 ### 8.1 游标协议（复用现有范式）
 
 参考内容 profile 的游标：`{createTimeMs}:{postId}`。  
-通知用：`{updateTimeMs}:{notificationId}`，排序：`update_time DESC, notification_id DESC`。  
+通知用：`{updateTimeMs}:{notificationId}`，查询只取 `unread_count > 0`，排序：`update_time DESC, notification_id DESC`。  
 
 ### 8.2 List API 输出（在不破坏现有字段前提下扩展）
 
@@ -378,6 +391,8 @@ upsertIncrement(toUserId, bizType, targetType, targetId, postId, rootCommentId, 
 - `title`
 - `content`
 - `createTime`
+
+其中 `createTime` 固定取 `update_time`（最后一次发生时间，毫秒），不要取 `create_time`。
 
 建议新增字段（都可选，不破坏兼容）：
 
@@ -438,12 +453,20 @@ renderContent(bizType, unreadCount):
 
 建议新增两个最小接口（不影响现有接口）：
 
-- `POST /v1/notification/read`：标记单条已读（把 `unread_count` 置 0）  
-- `POST /v1/notification/read/all`：全部标记已读（对 `to_user_id` 批量置 0）  
+- `POST /api/v1/notification/read`：标记单条已读（把 `unread_count` 置 0；已读后该行不会再出现在 `/notification/list`）  
+- `POST /api/v1/notification/read/all`：全部标记已读（对 `to_user_id` 批量置 0）  
+
+接口契约（最小可用，别再发明新 DTO）：
+
+- 返回统一复用 `OperationResultDTO`（已有通用结构）。
+- `/notification/read` 请求体：`{ "notificationId": 123 }`。
+- `/notification/read/all`：空请求体即可。
+- 幂等语义：重复调用永远返回 success=true（该用户没有对应通知也算成功，别给前端造麻烦）。
 
 实现策略（简单粗暴）：
 
 - 已读就是 `unread_count=0`，不引入额外“已读表”。  
+- 标记已读**不得**修改 `update_time`（它是“最后一次发生时间”，不是“最后一次修改时间”）。  
 
 ---
 

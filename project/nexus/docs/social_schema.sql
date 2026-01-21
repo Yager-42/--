@@ -1,5 +1,16 @@
 -- 社交领域数据库（基于《社交领域数据库.md》，结合当前实现的轻微补充）
 
+-- 用户基础表：用于评论/通知读侧补全 nickname/avatar，以及 @username -> userId 映射
+CREATE TABLE IF NOT EXISTS `user_base` (
+  `user_id` BIGINT NOT NULL COMMENT '用户ID (Sharding Key)',
+  `username` VARCHAR(64) NOT NULL COMMENT '全局唯一用户名（用于 @username 提及）',
+  `avatar_url` VARCHAR(255) DEFAULT '' COMMENT '头像URL',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`user_id`),
+  UNIQUE KEY `uk_username` (`username`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户基础信息表';
+
 -- 用户关系表（正向：我关注/好友/屏蔽谁）
 CREATE TABLE IF NOT EXISTS `user_relation` (
   `id` BIGINT NOT NULL,

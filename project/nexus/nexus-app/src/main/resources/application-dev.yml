@@ -45,6 +45,8 @@ feed:
   outbox:
     maxSize: 1000
     ttlDays: 30
+  corefans:
+    ttlDays: 30
   fanout:
     batchSize: 200
   rebuild:

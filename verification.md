@@ -30,3 +30,15 @@
 - [x] 代码审查报告：`.codex/review-report.md`。
 - [x] 最小自测清单：`.codex/testing.md`（不依赖 Maven）。
 
+---
+
+日期：2026-01-22  
+执行者：Codex（Linus-mode）
+
+## 分发/Feed 缺口补齐验收（不做 Phase 3 推荐）
+
+- [x] unfollow：新增 `POST /api/v1/relation/unfollow`，并通过 `RelationFollowEvent(status=UNFOLLOW)` 驱动 Feed 侧立刻生效（在线用户强制重建 inbox）
+- [x] 铁粉集合生成：消费 `interaction.notify`（`LIKE_ADDED(仅 POST)`/`COMMENT_CREATED`）自动写入 `feed:corefans:{authorId}`，并刷新 TTL
+- [x] 热点回表 L1：`ContentRepository` 对热点 postId 启用 `JD HotKey + Caffeine` 短 TTL 缓存；写路径会 invalidate
+- [x] 本地编译验证：`project/nexus` 下执行 `mvn -DskipTests package` 通过
+

@@ -69,6 +69,8 @@ public class RelationEventListener {
         }
         if ("ACTIVE".equalsIgnoreCase(event.status())) {
             feedFollowCompensationService.onFollow(event.sourceId(), event.targetId());
+        } else if ("UNFOLLOW".equalsIgnoreCase(event.status())) {
+            feedFollowCompensationService.onUnfollow(event.sourceId(), event.targetId());
         }
         NotificationListVO list = interactionService.notifications(event.targetId(), null);
         riskService.userStatus(event.sourceId());

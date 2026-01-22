@@ -64,7 +64,18 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
         if (feedTimelineRepository.inboxExists(userId)) {
             return;
         }
+        doRebuild(userId);
+    }
 
+    @Override
+    public void forceRebuild(Long userId) {
+        if (userId == null) {
+            return;
+        }
+        doRebuild(userId);
+    }
+
+    private void doRebuild(Long userId) {
         List<Long> targets = buildRebuildTargets(userId);
         if (targets.isEmpty()) {
             feedTimelineRepository.replaceInbox(userId, List.of());

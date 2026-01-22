@@ -16,4 +16,13 @@ public interface IFeedInboxRebuildService {
      * @param userId 用户 ID {@link Long}
      */
     void rebuildIfNeeded(Long userId);
+
+    /**
+     * 强制重建用户 InboxTimeline（不判断 inboxExists）。
+     *
+     * <p>典型场景：取消关注/屏蔽等导致关注图发生变化，希望在线用户立刻看到新的时间线。</p>
+     *
+     * @param userId 用户 ID {@link Long}
+     */
+    void forceRebuild(Long userId);
 }

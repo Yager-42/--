@@ -6,6 +6,9 @@ import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
 import cn.nexus.infrastructure.dao.social.IContentDraftDao;
 import cn.nexus.infrastructure.dao.social.IContentHistoryDao;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
@@ -17,9 +20,11 @@ import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostTypePO;
 import cn.nexus.infrastructure.dao.social.po.ContentSchedulePO;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -31,6 +36,7 @@ import java.util.stream.Collectors;
 /**
  * 内容/媒体仓储 MyBatis 实现。
  */
+@Slf4j
 @Repository
 @RequiredArgsConstructor
 @Transactional(rollbackFor = Exception.class, propagation = org.springframework.transaction.annotation.Propagation.REQUIRED)
@@ -41,6 +47,20 @@ public class ContentRepository implements IContentRepository {
     private final IContentPostTypeDao contentPostTypeDao;
     private final IContentHistoryDao contentHistoryDao;
     private final IContentScheduleDao contentScheduleDao;
+
+    private static final String HOTKEY_PREFIX = "post__";
+    private static final int L1_MAX_SIZE = 100_000;
+    private static final Duration L1_TTL = Duration.ofSeconds(2);
+
+    /**
+     * Feed 回表热点优化：只缓存热点 postId，短 TTL。
+     *
+     * <p>注意：缓存对象必须做快照，且对外返回时必须 copy，避免调用方修改污染缓存。</p>
+     */
+    private final Cache<Long, ContentPostEntity> postCache = Caffeine.newBuilder()
+            .maximumSize(L1_MAX_SIZE)
+            .expireAfterWrite(L1_TTL)
+            .build();
 
     @Override
     public ContentDraftEntity saveDraft(ContentDraftEntity draft) {
@@ -59,6 +79,7 @@ public class ContentRepository implements IContentRepository {
     @Override
     public ContentPostEntity savePost(ContentPostEntity post) {
         contentPostDao.insert(toPostPO(post));
+        invalidatePostCache(post == null ? null : post.getPostId());
         return post;
     }
 
@@ -67,6 +88,7 @@ public class ContentRepository implements IContentRepository {
         if (postId == null) {
             return;
         }
+        invalidatePostCache(postId);
         contentPostTypeDao.deleteByPostId(postId);
         if (postTypes == null || postTypes.isEmpty()) {
             return;
@@ -77,8 +99,23 @@ public class ContentRepository implements IContentRepository {
     @Override
     @Transactional(readOnly = true)
     public ContentPostEntity findPost(Long postId) {
+        if (postId == null) {
+            return null;
+        }
+
+        boolean hot = isHotKeySafe(hotkeyKey(postId));
+        if (hot) {
+            ContentPostEntity cached = postCache.getIfPresent(postId);
+            if (cached != null) {
+                return copyPost(cached);
+            }
+        }
+
         ContentPostEntity post = toPostEntity(contentPostDao.selectById(postId));
         fillPostTypes(post == null ? List.of() : List.of(post));
+        if (hot && post != null) {
+            postCache.put(postId, copyPost(post));
+        }
         return post;
     }
 
@@ -96,26 +133,60 @@ public class ContentRepository implements IContentRepository {
         if (postIds == null || postIds.isEmpty()) {
             return List.of();
         }
-        List<ContentPostPO> list = contentPostDao.selectByIds(postIds);
-        if (list == null || list.isEmpty()) {
-            return List.of();
-        }
-        Map<Long, ContentPostEntity> map = new HashMap<>();
-        for (ContentPostPO po : list) {
-            ContentPostEntity entity = toPostEntity(po);
-            if (entity == null || entity.getPostId() == null) {
+
+        // L1 只服务“热点 postId”：先查缓存，miss 的再批量回源 DB。
+        Map<Long, ContentPostEntity> resultById = new HashMap<>();
+        List<Long> missIds = new ArrayList<>(postIds.size());
+        for (Long id : postIds) {
+            if (id == null) {
                 continue;
             }
-            map.put(entity.getPostId(), entity);
+            boolean hot = isHotKeySafe(hotkeyKey(id));
+            if (hot) {
+                ContentPostEntity cached = postCache.getIfPresent(id);
+                if (cached != null) {
+                    resultById.put(id, copyPost(cached));
+                    continue;
+                }
+            }
+            missIds.add(id);
         }
+
+        if (!missIds.isEmpty()) {
+            // 去重：避免 IN(...) 出现大量重复值（返回顺序由调用方重排，不依赖 DAO）。
+            java.util.LinkedHashSet<Long> dedup = new java.util.LinkedHashSet<>(missIds);
+            List<Long> queryIds = new ArrayList<>(dedup);
+            List<ContentPostPO> list = contentPostDao.selectByIds(queryIds);
+            if (list != null && !list.isEmpty()) {
+                List<ContentPostEntity> dbEntities = new ArrayList<>(list.size());
+                for (ContentPostPO po : list) {
+                    ContentPostEntity entity = toPostEntity(po);
+                    if (entity == null || entity.getPostId() == null) {
+                        continue;
+                    }
+                    dbEntities.add(entity);
+                }
+                fillPostTypes(dbEntities);
+                for (ContentPostEntity entity : dbEntities) {
+                    Long id = entity.getPostId();
+                    if (id == null) {
+                        continue;
+                    }
+                    resultById.put(id, entity);
+                    if (isHotKeySafe(hotkeyKey(id))) {
+                        postCache.put(id, copyPost(entity));
+                    }
+                }
+            }
+        }
+
         List<ContentPostEntity> ordered = new java.util.ArrayList<>(postIds.size());
         for (Long id : postIds) {
-            ContentPostEntity entity = map.get(id);
+            ContentPostEntity entity = resultById.get(id);
             if (entity != null) {
                 ordered.add(entity);
             }
         }
-        fillPostTypes(ordered);
         return ordered;
     }
 
@@ -154,7 +225,11 @@ public class ContentRepository implements IContentRepository {
                 status,
                 visibility,
                 expectedVersion);
-        return rows > 0;
+        boolean updated = rows > 0;
+        if (updated) {
+            invalidatePostCache(postId);
+        }
+        return updated;
     }
 
     @Override
@@ -181,7 +256,11 @@ public class ContentRepository implements IContentRepository {
         if (userId == null) {
             return false;
         }
-        return contentPostDao.updateStatusWithUser(postId, userId, 6) > 0;
+        boolean deleted = contentPostDao.updateStatusWithUser(postId, userId, 6) > 0;
+        if (deleted) {
+            invalidatePostCache(postId);
+        }
+        return deleted;
     }
 
     @Override
@@ -232,6 +311,49 @@ public class ContentRepository implements IContentRepository {
     @Override
     public boolean updateSchedule(Long taskId, Long userId, Long scheduleTime, String contentData, String idempotentToken, String reason) {
         return contentScheduleDao.updateSchedule(taskId, userId, scheduleTime == null ? null : new Date(scheduleTime), contentData, idempotentToken, reason) > 0;
+    }
+
+    private void invalidatePostCache(Long postId) {
+        if (postId == null) {
+            return;
+        }
+        postCache.invalidate(postId);
+    }
+
+    private ContentPostEntity copyPost(ContentPostEntity post) {
+        if (post == null) {
+            return null;
+        }
+        List<String> types = post.getPostTypes();
+        List<String> safeTypes = (types == null || types.isEmpty()) ? List.of() : List.copyOf(types);
+        return ContentPostEntity.builder()
+                .postId(post.getPostId())
+                .userId(post.getUserId())
+                .contentText(post.getContentText())
+                .postTypes(safeTypes)
+                .mediaType(post.getMediaType())
+                .mediaInfo(post.getMediaInfo())
+                .locationInfo(post.getLocationInfo())
+                .status(post.getStatus())
+                .visibility(post.getVisibility())
+                .versionNum(post.getVersionNum())
+                .edited(post.getEdited())
+                .createTime(post.getCreateTime())
+                .build();
+    }
+
+    private String hotkeyKey(Long postId) {
+        return HOTKEY_PREFIX + postId;
+    }
+
+    private boolean isHotKeySafe(String hotkey) {
+        try {
+            return JdHotKeyStore.isHotKey(hotkey);
+        } catch (Exception e) {
+            // 外部依赖不可用时，热点治理直接关闭（不影响主链路）。
+            log.warn("jd-hotkey isHotKey failed, hotkey={}", hotkey, e);
+            return false;
+        }
     }
 
 

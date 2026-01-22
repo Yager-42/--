@@ -90,6 +90,33 @@ public class RelationService implements IRelationService {
     }
 
     /**
+     * 取消关注：删除关注边与粉丝反向表记录，更新邻接缓存，并发布 UNFOLLOW 事件。
+     * 
+     * <p>语义：幂等。未关注时返回 NOT_FOLLOWING，不发布事件。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public FollowResultVO unfollow(Long sourceId, Long targetId) {
+        if (invalidPair(sourceId, targetId)) {
+            return FollowResultVO.builder().status("INVALID").build();
+        }
+
+        RelationEntity existFollow = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
+        if (existFollow == null) {
+            // best-effort：尽量把缓存清理干净，避免脏数据导致重建关注列表不一致
+            adjacencyCachePort.removeFollow(sourceId, targetId);
+            relationRepository.deleteFollower(targetId, sourceId);
+            return FollowResultVO.builder().status("NOT_FOLLOWING").build();
+        }
+
+        relationRepository.deleteRelation(sourceId, targetId, RELATION_FOLLOW);
+        relationRepository.deleteFollower(targetId, sourceId);
+        adjacencyCachePort.removeFollow(sourceId, targetId);
+        relationEventPort.onFollow(sourceId, targetId, "UNFOLLOW");
+        return FollowResultVO.builder().status("UNFOLLOWED").build();
+    }
+
+    /**
      * 好友申请：校验参数与屏蔽，检查已是好友或存在待处理记录；使用幂等键防重复写，保存待审批申请并返回请求号和当前状态。
      */
     @Override

@@ -27,6 +27,7 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IContentRepository contentRepository;
     private final IFeedNegativeFeedbackRepository feedNegativeFeedbackRepository;
+    private final IFeedInboxRebuildService feedInboxRebuildService;
 
     /**
      * 刚关注后回填的“最近内容条数”（默认 20）。
@@ -69,6 +70,23 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
             }
             feedTimelineRepository.addToInbox(followerId, post.getPostId(), post.getCreateTime());
         }
+    }
+
+    /**
+     * 取消关注补偿：对在线用户强制重建 inbox，确保下一次刷新不再返回已取消关注者内容。
+     *
+     * <p>说明：当前 inbox 索引里没有 authorId，无法按作者做精确删除；强制重建是最简单可行的做法。</p>
+     */
+    @Override
+    public void onUnfollow(Long followerId, Long followeeId) {
+        if (followerId == null || followeeId == null || followerId.equals(followeeId)) {
+            return;
+        }
+        // 离线用户下次首页会走 rebuildIfNeeded；这里只处理在线用户的“立刻生效”体验。
+        if (!feedTimelineRepository.inboxExists(followerId)) {
+            return;
+        }
+        feedInboxRebuildService.forceRebuild(followerId);
     }
 
     private boolean hitNegativePostTypes(ContentPostEntity post, Set<String> negativeTypes) {

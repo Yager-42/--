@@ -36,6 +36,15 @@ public class RelationController implements IRelationApi {
                 FollowResponseDTO.builder().status(vo.getStatus()).build());
     }
 
+    @PostMapping("/unfollow")
+    @Override
+    public Response<FollowResponseDTO> unfollow(@RequestBody FollowRequestDTO requestDTO) {
+        Long userId = UserContext.requireUserId();
+        FollowResultVO vo = relationService.unfollow(userId, requestDTO.getTargetId());
+        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
+                FollowResponseDTO.builder().status(vo.getStatus()).build());
+    }
+
     @PostMapping("/friend/request")
     @Override
     public Response<FriendRequestResponseDTO> friendRequest(@RequestBody FriendRequestDTO requestDTO) {

@@ -2,9 +2,11 @@ package cn.nexus.infrastructure.adapter.social.repository;
 
 import cn.nexus.domain.social.adapter.repository.IFeedCoreFansRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -24,6 +26,22 @@ public class FeedCoreFansRepository implements IFeedCoreFansRepository {
     private static final String KEY_CORE_FANS_PREFIX = "feed:corefans:";
 
     private final StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * 铁粉集合过期天数（默认 30）。{@code int}
+     */
+    @Value("${feed.corefans.ttlDays:30}")
+    private int ttlDays;
+
+    @Override
+    public void addCoreFan(Long authorId, Long followerId) {
+        if (authorId == null || followerId == null) {
+            return;
+        }
+        String key = coreFansKey(authorId);
+        stringRedisTemplate.opsForSet().add(key, followerId.toString());
+        stringRedisTemplate.expire(key, Duration.ofDays(Math.max(1, ttlDays)));
+    }
 
     @Override
     public boolean isCoreFan(Long authorId, Long followerId) {
@@ -75,4 +93,3 @@ public class FeedCoreFansRepository implements IFeedCoreFansRepository {
         }
     }
 }
-

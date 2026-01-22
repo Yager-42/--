@@ -9,6 +9,15 @@ public interface IRelationService {
 
     FollowResultVO follow(Long sourceId, Long targetId);
 
+    /**
+     * 取消关注。
+     *
+     * @param sourceId 发起方用户 ID {@link Long}
+     * @param targetId 目标用户 ID {@link Long}
+     * @return 结果 {@link FollowResultVO}
+     */
+    FollowResultVO unfollow(Long sourceId, Long targetId);
+
     FriendRequestResultVO friendRequest(Long sourceId, Long targetId, String verifyMsg, String sourceChannel);
 
     FriendDecisionResultVO friendDecision(java.util.List<Long> requestIds, String action);

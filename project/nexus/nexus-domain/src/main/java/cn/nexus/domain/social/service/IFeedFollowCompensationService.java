@@ -17,5 +17,12 @@ public interface IFeedFollowCompensationService {
      * @param followeeId 被关注者用户 ID {@link Long}
      */
     void onFollow(Long followerId, Long followeeId);
-}
 
+    /**
+     * 处理取消关注事件：使关注者的 InboxTimeline 立刻反映最新关注图。
+     *
+     * @param followerId 关注者用户 ID {@link Long}
+     * @param followeeId 被取消关注者用户 ID {@link Long}
+     */
+    void onUnfollow(Long followerId, Long followeeId);
+}

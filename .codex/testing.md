@@ -126,3 +126,31 @@
 3) 调用 `POST /api/v1/notification/read/all`：  
    - 期望：该用户所有通知 `unread_count=0`，list 返回空。  
 
+---
+
+# 追加：分发/Feed 缺口最小自测（不做 Phase 3 推荐）
+
+日期：2026-01-22  
+执行者：Codex（Linus-mode）
+
+## 0. 本地编译验证（已执行）
+
+在 `project/nexus` 下执行：`mvn -DskipTests package`。
+
+## 1. 铁粉集合生成（interaction.notify -> feed:corefans）
+
+1) 用户 A 先关注用户 B（确保 relation ACTIVE）。  
+2) 用户 A 对用户 B 的 post 点赞（ADD）或发表评论。  
+3) 期望：Redis `SISMEMBER feed:corefans:{B} A == 1`，且 key TTL 被刷新（`feed.corefans.ttlDays`）。  
+
+## 2. unfollow 立刻生效（事件驱动强制重建）
+
+1) 用户 A 关注用户 B，并确保 A 在线（inbox key 存在）。  
+2) 用户 A 调用 `POST /api/v1/relation/unfollow` 取消关注 B。  
+3) 期望：A 的 inbox 被强制重建；下一次拉取 timeline 不再包含 B 的内容。  
+
+## 3. HotKey + L1 回表缓存（热点 postId）
+
+前置：启动 etcd + HotKey worker + dashboard，并配置规则 `prefix=post__`。  
+验证点：对同一个 postId 高频拉 timeline 时，`JdHotKeyStore.isHotKey(\"post__<postId>\")` 变为 true 后，回表会开始命中本地 L1（Caffeine，短 TTL）。  
+

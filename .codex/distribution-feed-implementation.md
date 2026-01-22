@@ -82,7 +82,7 @@
 - [x] 10.5.1 fanout 大任务切片（规模化）
 - [x] 10.5.2 follow/unfollow 最小补偿（体验补偿）
 - [x] 10.5.3 Outbox + 大 V 隔离（推拉结合）
-- [x] 10.5.4 粉丝分层（铁粉推 / 路人拉；铁粉集合生成也未实现）
+- [x] 10.5.4 粉丝分层（铁粉推 / 路人拉；铁粉集合生成已实现）
 - [x] 10.5.5 大 V 聚合池（关注大 V 过多的拉取兜底）
 - [x] 10.5.6 Max_ID（瀑布流）分页
 - [x] 10.5.7 读时修复后的索引清理（懒清理/异步清理）
@@ -91,7 +91,7 @@
 
 - [x] MQ 消息序列化统一为 JSON
 - [x] timeline 读侧批量 postId 负反馈过滤（减少 `SISMEMBER` 次数）
-- [ ] 热点探测 + L1 本地缓存：`JD HotKey` + Caffeine（短 TTL，只缓存 hot key；落地清单见 `.codex/interaction-like-pipeline-implementation.md` 的 2.2.6）(按用户要求：当前不做)
+- [x] 热点探测 + L1 本地缓存：JD HotKey + Caffeine（短 TTL，只缓存 hot key；落地：`ContentRepository.findPost/listPostsByIds`）
 - [x] fanout 补齐 DLQ/重试与监控指标（DLQ + 最小指标日志）
 - [x] fanout 的 `inboxExists` 使用 Redis pipeline（减少 1:1 round-trip）
 - [x] 负反馈维度扩展：使用 postTypes（业务类目/主题），来源 `content_post_type`；发布接口支持用户提交 postTypes（最多 5 个）并落库
@@ -1144,16 +1144,12 @@ consume(FeedFanoutTask t):
 
 来源标注：《从小白到架构师(4): Feed 流系统实战》
 
-> ✅ 已落地（2026-01-14）：follow 的在线补偿已实现；unfollow 仍保持“文档预留”。  
+> ✅ 已落地（2026-01-22）：follow/unfollow 的在线补偿已实现（unfollow 事件触发在线用户强制重建 inbox）。  
 > 落点文件：  
-> - domain：`IFeedFollowCompensationService` / `FeedFollowCompensationService`  
-> - trigger：`RelationEventListener.handleFollow`（status=ACTIVE 时触发补偿）  
+> - feed：`IFeedFollowCompensationService` / `FeedFollowCompensationService`（`onFollow/onUnfollow`）  
+> - trigger：`RelationEventListener`（status=ACTIVE/UNFOLLOW 时触发补偿）  
+> - MQ 拓扑：`RelationMqConfig`（补齐 social.relation 的队列绑定）  
 > 配置：`feed.follow.compensate.recentPosts`（默认 20）
-
-当前仓库现状：只有 follow 接口（`/api/v1/relation/follow`），**没有 unfollow**。
-因此这里给出两件事：
-1) follow 的体验补偿（可直接实现）
-2) unfollow 如果未来补齐接口/事件，该怎么接（实现级说明先写好）
 
 ##### 10.5.2.1 follow：在线用户立刻回填“新关注的人”的最近 K 条
 
@@ -1207,22 +1203,15 @@ feed:
       recentPosts: 20
 ```
 
-##### 10.5.2.2 unfollow：当前缺口与最小实现方案（先写文档，等关系域补接口）
+##### 10.5.2.2 unfollow：已落地策略（在线用户立刻生效）
 
-缺口：
-- `RelationController` 没有 `/unfollow`
-- `IRelationService` 没有 `unfollow(sourceId, targetId)`
-- MQ 没有 unfollow 事件（`RelationFollowEvent.status` 目前只有 `ACTIVE/PENDING/...`）
+关键约束：
+- inbox 索引只有 `postId/publishTimeMs`，没有 `authorId`，因此无法按作者精确删除“已取消关注者”的历史内容。
 
-一旦关系域补齐 unfollow（推荐直接复用 `RelationFollowEvent`，status 取 `UNFOLLOW` 或 `CANCELLED`），Feed 侧有两种策略：
-
-策略 A（最小成本，推荐）：不回收历史
-- 什么都不做，让 inbox TTL 自然过期
-
-策略 B（更准但更重）：evict follower inbox
-- 触发点：收到 unfollow 事件
-- 动作：提供 `timelineRepo.evictInbox(followerId)`（`DEL feed:inbox:{userId}`）
-- 结果：用户下一次首页会走 Phase2 rebuild，只回填当前关注列表
+当前实现（最小可落地，且用户体验立刻生效）：
+- 触发点：收到 `RelationFollowEvent.status=UNFOLLOW`
+- 动作：如果 follower 在线（`inboxExists(followerId)=true`），直接 `forceRebuild(followerId)`，用“当前关注列表”重建 inbox
+- 结果：unfollow 立刻生效；离线用户仍在下次首页走 Phase2 rebuild
 
 #### 10.5.3 大 V 隔离：Outbox + 混合读取（推拉结合）
 
@@ -1392,9 +1381,9 @@ timeline(userId, cursor, limit):
 
 来源标注：同上
 
-> ✅ 已落地（2026-01-14）：铁粉集合仓储 + 写侧“只推铁粉”已落地。  
-> 落点文件：`IFeedCoreFansRepository` / `FeedCoreFansRepository` / `FeedFanoutDispatcherConsumer` / `FeedDistributionService`  
-> 关键配置：`feed.bigv.coreFanMaxPush`（默认 2000）
+> ✅ 已落地（2026-01-22）：铁粉集合仓储 + 生成消费者 + 写侧“只推铁粉”已落地。  
+> 落点文件：`IFeedCoreFansRepository` / `FeedCoreFansRepository` / `FeedCoreFansConsumer` / `FeedFanoutDispatcherConsumer` / `FeedDistributionService`  
+> 关键配置：`feed.bigv.coreFanMaxPush`（默认 2000）、`feed.corefans.ttlDays`（默认 30）
 
 在 10.5.3 的基础上进一步分层：
 - 铁粉（高频互动/高活跃）：即使是大 V 也推送到 Inbox（体验优先）
@@ -1415,12 +1404,13 @@ timeline(userId, cursor, limit):
 
 ```java
 public interface IFeedCoreFansRepository {
+    void addCoreFan(Long authorId, Long followerId);
     boolean isCoreFan(Long authorId, Long followerId);
     java.util.List<Long> listCoreFans(Long authorId, int limit);
 }
 ```
 
-对应 Redis 实现放在 infrastructure：`FeedCoreFansRepository`（SET isMember/members）。
+对应 Redis 实现放在 infrastructure：`FeedCoreFansRepository`（SET：SADD/isMember/members + EXPIRE）。
 
 ##### 10.5.4.3 写侧策略（修改 fanout）
 
@@ -1435,13 +1425,15 @@ if isBigV(authorId):
   return
 ```
 
-##### 10.5.4.4 铁粉集合如何产生（不在本阶段实现，但要把接口留出来）
+##### 10.5.4.4 铁粉集合如何产生（已落地：复用 interaction.notify 旁路）
 
-最简单的近似（无需新系统）：
-- 把“铁粉”近似为“最近 N 天在线的粉丝”：可以在大 V 发布时把“写入过 inbox 的粉丝”追加进 `feed:corefans:{authorId}` 并设置 TTL（会逐渐收敛出活跃粉丝）
+当前实现（足够用，且不引入新系统）：
+- 复用通知旁路事件 `interaction.notify`：`LIKE_ADDED(仅 POST)` 与 `COMMENT_CREATED`。
+- Consumer：`FeedCoreFansConsumer`。
+- 规则：如果 `fromUserId` 当前仍关注该 post 的作者，则 `SADD feed:corefans:{authorId} followerId` 并刷新 TTL（避免集合永远膨胀）。
 
-更精确的版本（推荐复用现有规划，不要自研新组件）：
-- 直接复用 `.codex/interaction-like-pipeline-implementation.md` 产出的互动计数/亲密度：按互动强度选 TopN 写入 `feed:corefans:{authorId}`。
+后续可演进（按需，不属于本阶段）：
+- 复用点赞/评论的互动计数，按亲密度 TopN 重算写入 `feed:corefans:{authorId}`（避免简单规则误判）。
 
 #### 10.5.5 大 V 聚合池（解决关注大 V 过多导致的拉取慢）
 

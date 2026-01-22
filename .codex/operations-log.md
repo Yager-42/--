@@ -30,3 +30,18 @@
 - 热榜重建：新增 `CommentHotRankRebuildService.rebuildForPost`（清空并重建 ZSET，支持 trim topK）；`ICommentRepository` 新增 `listRecentRootBriefs`；`ICommentHotRankRepository` 新增 `clear/trimToTop`
 - 手动触发：新增 `CommentHotRankRebuildRunner`，仅在启动参数 `--comment.hot.rebuild.postId=<postId>` 时执行一次
 - 本地验证：下载 Maven 3.9.6 到 `.codex/tools/apache-maven-3.9.6`，执行 `mvn -DskipTests package` 通过
+
+---
+
+日期：2026-01-22  \\
+执行者：Codex（Linus-mode）
+
+## 分发/Feed 缺口补齐（HotKey L1 + 铁粉生成 + unfollow）
+
+- unfollow 全链路：新增 `POST /api/v1/relation/unfollow` + `IRelationService.unfollow`，并复用 `RelationFollowEvent(status=UNFOLLOW)` 触发 Feed 侧生效
+- relation MQ 拓扑补齐：新增 `RelationMqConfig`，声明 `social.relation` 与 `relation.*.queue` 的绑定，保证 trigger listener 能收到事件
+- unfollow 立刻生效策略：收到 `UNFOLLOW` 后对在线用户执行 `IFeedInboxRebuildService.forceRebuild`（原因：inbox 索引没有 authorId，无法精确删除）
+- 铁粉集合生成：新增 `FeedCoreFansMqConfig`（独立队列绑定 `interaction.notify`）+ `FeedCoreFansConsumer`，消费 `LIKE_ADDED(仅 POST)`/`COMMENT_CREATED` 并在“仍关注作者”时写入 `feed:corefans:{authorId}`
+- 热点回表 L1：`ContentRepository` 接入 `JD HotKey + Caffeine`，对热点 postId 的 `findPost/listPostsByIds` 启用短 TTL L1；写路径更新/删帖/改类型会 invalidate
+- 文档同步：更新 `.codex/distribution-feed-implementation.md` 的 checklist 与 10.5.2/10.5.4 说明
+- 本地验证：下载 Maven 3.9.6 到 `.codex/tools/apache-maven-3.9.6`（gitignore），执行 `project/nexus` 下 `mvn -DskipTests package` 通过

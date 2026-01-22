@@ -10,6 +10,14 @@ public interface IRelationApi {
 
     Response<FollowResponseDTO> follow(FollowRequestDTO requestDTO);
 
+    /**
+     * 取消关注用户。
+     *
+     * @param requestDTO 请求 {@link FollowRequestDTO}
+     * @return 结果 {@link FollowResponseDTO}
+     */
+    Response<FollowResponseDTO> unfollow(FollowRequestDTO requestDTO);
+
     Response<FriendRequestResponseDTO> friendRequest(FriendRequestDTO requestDTO);
 
     Response<FriendDecisionResponseDTO> friendDecision(FriendDecisionRequestDTO requestDTO);

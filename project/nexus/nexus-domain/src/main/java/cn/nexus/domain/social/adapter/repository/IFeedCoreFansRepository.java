@@ -5,12 +5,20 @@ import java.util.List;
 /**
  * Feed 铁粉仓储接口：用于“大 V 写扩散降级”时，只推送给铁粉集合（Redis SET）。
  *
- * <p>铁粉集合的生成策略不在本阶段实现；这里只定义查询契约，保证后续可插拔演进。</p>
+ * <p>铁粉集合的生成策略可以演进；本接口提供写入/判断/查询的最小契约（写入幂等）。</p>
  *
  * @author codex
  * @since 2026-01-14
  */
 public interface IFeedCoreFansRepository {
+
+    /**
+     * 将某个用户加入作者的铁粉集合（幂等）。
+     *
+     * @param authorId   作者用户 ID {@link Long}
+     * @param followerId 粉丝用户 ID {@link Long}
+     */
+    void addCoreFan(Long authorId, Long followerId);
 
     /**
      * 判断某个粉丝是否属于某个作者的铁粉集合。
@@ -30,4 +38,3 @@ public interface IFeedCoreFansRepository {
      */
     List<Long> listCoreFans(Long authorId, int limit);
 }
-

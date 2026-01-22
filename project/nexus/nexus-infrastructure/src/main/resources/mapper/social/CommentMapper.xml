@@ -37,13 +37,13 @@
 
     <update id="addReplyCount">
         UPDATE interaction_comment
-        SET reply_count = reply_count + #{delta}, update_time = NOW()
+        SET reply_count = GREATEST(0, reply_count + #{delta}), update_time = NOW()
         WHERE comment_id = #{commentId}
     </update>
 
     <update id="addLikeCount">
         UPDATE interaction_comment
-        SET like_count = like_count + #{delta}, update_time = NOW()
+        SET like_count = GREATEST(0, like_count + #{delta}), update_time = NOW()
         WHERE comment_id = #{commentId}
     </update>
 

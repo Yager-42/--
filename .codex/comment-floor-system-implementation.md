@@ -420,26 +420,30 @@ rebuildHotRankForPost(postId, scanLimit=5000, keepTop=200):
 ### 5.2 RootReplyCountChangedEvent
 
 字段：
+- `eventId`（BaseEvent 自带，幂等键；MQ 重投必须能去重）
 - `rootCommentId`
 - `postId`
 - `delta`（+1=新增回复；-1=删除回复）
 - `tsMs`
 
 消费者职责：
-- MySQL：`reply_count = reply_count + delta`（只更新一级评论那行）
-- Redis：重算该一级评论 score 并 `ZADD` 更新
+- 幂等：先写 `interaction_comment_inbox(event_id)`，插入成功才继续；重复直接 return
+- MySQL：`reply_count = GREATEST(0, reply_count + delta)`（只更新一级评论那行）
+- Redis：在事务提交后 best-effort 重算 score 并 `ZADD` 更新（失败只打日志；热榜可通过重建拉回）
 
 ### 5.3 CommentLikeChangedEvent（一级评论点赞 -> like_count -> 热榜）
 
 字段：
+- `eventId`（BaseEvent 自带，幂等键；MQ 重投必须能去重）
 - `rootCommentId`
 - `postId`
 - `delta`（+1/-1）
 - `tsMs`
 
 消费者职责：
-- MySQL：`like_count = like_count + delta`
-- Redis：重算 score 并更新 ZSet
+- 幂等：先写 `interaction_comment_inbox(event_id)`，插入成功才继续；重复直接 return
+- MySQL：`like_count = GREATEST(0, like_count + delta)`
+- Redis：在事务提交后 best-effort 重算 score 并更新 ZSet（失败只打日志；热榜可通过重建拉回）
 
 约束（已拍板）：
 
@@ -447,6 +451,30 @@ rebuildHotRankForPost(postId, scanLimit=5000, keepTop=200):
 - `rootCommentId` 就是一级评论 ID（不要发“楼内回复点赞”的事件）
 
 > 本仓库已存在点赞链路（targetType=COMMENT）。建议在“点赞在线写入产生 delta”后立刻投递该事件（delta=0 不投），由本消费者回写 `interaction_comment.like_count` 并刷新 `comment:hot:{postId}`。
+
+### 5.3.1 评论计数事件幂等（上线必做）
+
+RabbitMQ 的投递语义是“至少一次”。不做幂等，你的 `reply_count/like_count` 一定会在重试/重投时被重复累加。
+
+最小做法：给评论计数消费者加一个 MySQL 收件箱表，用 `event_id` 做唯一键，插入成功才继续处理。
+
+DDL（最小可用）：
+
+```sql
+CREATE TABLE `interaction_comment_inbox` (
+  `event_id` VARCHAR(128) NOT NULL,
+  `event_type` VARCHAR(32) NOT NULL,
+  `payload` TEXT NULL,
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评论事件收件箱（幂等去重）';
+```
+
+仓库代码落点（以代码为准）：
+- domain 端口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/port/IInteractionCommentInboxPort.java`
+- infrastructure 实现：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/InteractionCommentInboxPort.java`
+- MyBatis：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/IInteractionCommentInboxDao.java`
+- Mapper XML：`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/InteractionCommentInboxMapper.xml`
 
 ### 5.4 CommentMentioned（@提及 -> 通知统一事件）
 

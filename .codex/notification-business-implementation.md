@@ -322,6 +322,20 @@ handleNotify(event):
 - 这套模式在仓库里已经有同款实现（`relation_event_inbox`）；通知照抄即可。
 - `eventId` 生成规则见 6.1（LIKE 用 requestId；COMMENT 用 commentId；MENTION 用 commentId:toUserId）。
 
+MQ 失败处理（上线必做）：
+
+- 通知消费者异常会抛 `AmqpRejectAndDontRequeueException`（不重回队列）。
+- 因此主队列必须绑定 DLX/DLQ，否则消息会直接丢。
+
+当前仓库落地的命名（以代码为准）：
+- Queue：`interaction.notify.queue`
+- DLX Exchange：`social.interaction.notify.dlx`
+- DLQ Queue：`interaction.notify.dlq.queue`
+- DLX RoutingKey：`interaction.notify.dlx`
+
+对应配置类：
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/InteractionNotifyMqConfig.java`
+
 ---
 
 ## 7. 通知写入链路（核心：聚合 UPSERT）

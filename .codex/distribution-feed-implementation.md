@@ -27,10 +27,14 @@
 
 你的工作是：**不改 Controller/DTO，不改 API 契约，把 FeedService 换成真实实现**。
 
-### 0.3 内容发布成功后已经会触发分发端口（这是接入点）
+### 0.3 内容发布成功后会触发分发端口（这是接入点）
 
-`ContentService.publish` 在成功分支已经调用：
+`ContentService.publish` 在成功分支会触发：
 - `IContentDispatchPort.onPublished(postId, userId)`
+
+上线约束（必须遵守）：
+- 必须在事务提交后（after-commit）再触发 `onPublished`，否则 MQ 可能读到未提交数据，导致 feed 读侧误判并清理索引（“刚发布就消失”）。
+- 当前代码已按 after-commit 落地（参考 `ContentService.publish` 内的 `dispatchAfterCommit(...)`），不要改回“事务内直接发事件”。
 
 相关文件：
 - 调用点：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java`
@@ -308,6 +312,11 @@ public class ContentDispatchPort implements IContentDispatchPort {
     }
 }
 ```
+
+事务边界（上线必做）：
+
+- `ContentDispatchPort` 只负责“发 MQ”，不负责事务边界。
+- 调用方（`ContentService.publish`）必须 after-commit 才能触发 `onPublished`（已在代码落地），不要在事务内直接发事件。
 
 注意：`authorId` 就是发布者 `userId`（不要再造一个“作者服务”去查）。
 

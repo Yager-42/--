@@ -184,3 +184,88 @@
 - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/InteractionNotificationRepository.java`
 - `project/nexus/docs/social_schema.sql`
 
+---
+
+# 追加：分发/评论/跨域联通性 CR
+
+日期：2026-01-22  
+执行者：Codex（Linus-mode）
+
+## 范围
+
+- 分发/Feed：`PostPublishedEvent -> fanout -> inbox/outbox -> /feed/timeline`
+- 点赞：在线写入 + 延迟落库 + 通知旁路
+- 评论：两级盖楼写入 + 读侧列表/热榜 + 计数/热榜异步更新
+- 通知：统一事件消费 + 聚合收件箱 + 读接口/已读接口
+
+## 结论（走通性）
+
+- 领域内链路：分发/点赞/评论/通知主链路都“能跑通”。  
+- 领域间交互：点赞/评论 -> 通知（InteractionNotifyEvent）能走通；内容发布 -> 分发（PostPublishedEvent）能走通。  
+- 但存在 2 个“上线会炸”的风险点（见下方致命问题 1/2），以及 2 个“会悄悄算错/丢消息”的高风险点。
+
+## Linus Review（问题清单，按严重程度）
+
+### 致命问题 1：发布事件在事务提交前发送，可能导致 Feed 索引被“读侧误删”
+
+现状：
+
+- `ContentService.publish` 在事务内直接调用 `contentDispatchPort.onPublished(...)`：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java:250`
+- `ContentDispatchPort` 立即 `convertAndSend`：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:29`
+
+风险：
+
+- MQ 消费者（fanout）可能先写入 inbox/outbox，再被读侧回表时发现 `content_post` 还没提交（查不到），触发“懒清理”把索引删掉，最终用户看不到刚发布的内容（秒级概率问题，线上最难排）。
+
+建议：
+
+- 把发布事件改为“事务提交后再发”（after-commit），不要让 MQ 读到未提交数据。
+
+### 致命问题 2：点赞延迟队列依赖 RabbitMQ x-delayed-message 插件，缺插件会直接启动失败
+
+- `ReactionSyncDelayConfig` 声明 `CustomExchange(..., "x-delayed-message", ...)`：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/ReactionSyncDelayConfig.java:33`
+
+建议：
+
+- 部署前把“插件是否安装”写进环境验收清单；否则应用启动就会在声明 exchange/queue 阶段炸掉。
+
+### 高风险 1：通知消费者失败直接 reject 且队列无 DLX，消息会丢
+
+- `InteractionNotifyConsumer` catch 后 `throw new AmqpRejectAndDontRequeueException(...)`：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyConsumer.java:58`
+- `InteractionNotifyMqConfig` 的队列未配置 `x-dead-letter-exchange`：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/InteractionNotifyMqConfig.java:27`
+
+结果：
+
+- 任何一次瞬时依赖故障（DB/Redis 抖动）会导致通知事件被标记 FAIL 且从 MQ 直接消失，需要人工补偿/重放。
+
+### 高风险 2：评论计数/热榜消费不做幂等，MQ 重投会把 like_count/reply_count 算飞（甚至负数）
+
+- `CommentLikeChangedConsumer` 直接 `addLikeCount(delta)`：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentLikeChangedConsumer.java:32`
+- `RootReplyCountChangedConsumer` 直接 `addReplyCount(delta)`：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RootReplyCountChangedConsumer.java:32`
+- MyBatis SQL 无负数保护：`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/CommentMapper.xml:40`、`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/CommentMapper.xml:46`
+
+结果：
+
+- RabbitMQ 至少一次投递下，计数和热榜分数会漂移；极端情况下会出现负数，排序与展示都不可信。
+
+## 跨域交互链路（代码层面）
+
+- 内容发布 -> 分发：`ContentService.publish` -> `ContentDispatchPort.onPublished` -> `FeedFanoutDispatcherConsumer` -> `FeedFanoutTaskConsumer` -> `FeedDistributionService.fanoutSlice` -> `IFeedTimelineRepository.addToInbox`
+- 点赞 -> 通知：`InteractionController.react` -> `InteractionService.react` -> `ReactionLikeService.applyReaction(delta==1)` -> `InteractionNotifyEventPort.publish` -> `InteractionNotifyConsumer` -> `InteractionNotificationRepository.upsertIncrement`
+- 评论 -> 热榜/计数：`InteractionController.comment` -> `InteractionService.comment` -> `CommentEventPort.publish` -> `CommentCreatedConsumer/RootReplyCountChangedConsumer/CommentLikeChangedConsumer`
+- 评论 -> 通知：`InteractionService.comment` -> `InteractionNotifyEventPort.publish(EventType.COMMENT_CREATED/COMMENT_MENTIONED)` -> `InteractionNotifyConsumer`
+
+## 品味评分（主观但诚实）
+
+- 分发/Feed：🟡 凑合（核心链路清晰，但“事务内发事件”是低级错误，会让线上出现鬼故事）
+- 点赞：🟢 好品味（数据结构驱动幂等，delta 信号清晰，延迟落库范式正确）
+- 评论：🟡 凑合（读写分离与两级盖楼做对了，但消费幂等/计数负数保护没做）
+- 通知：🟢 好品味（收件箱幂等 + 聚合写入方向正确，但 MQ 失败策略需要补 DLX 或补偿）
+
+## 修复落地（2026-01-22）
+
+- 已修复 致命问题 1：发布事件改为事务提交后发送（`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java:252`、`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java:760`）。
+- 已修复 高风险 1：通知队列补 DLX/DLQ，reject 不再“直接丢”（`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/InteractionNotifyMqConfig.java:28`、`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/InteractionNotifyMqConfig.java:40`）。
+- 已修复 高风险 2：评论计数消费加幂等 + 计数防负数（`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentLikeChangedConsumer.java:35`、`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RootReplyCountChangedConsumer.java:35`、`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/CommentMapper.xml:40`）。
+- 未修复 致命问题 2：x-delayed-message 插件依赖仍保留（按你的要求）；上线前请在环境验收清单里确认插件已安装。
+

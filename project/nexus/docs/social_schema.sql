@@ -150,6 +150,15 @@ CREATE TABLE IF NOT EXISTS `interaction_notify_inbox` (
   KEY `idx_status_time` (`status`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通知事件收件箱（幂等去重）';
 
+-- 评论事件收件箱（MQ 幂等去重）：用于 comment.like.changed / comment.reply_count.changed 等计数派生链路
+CREATE TABLE IF NOT EXISTS `interaction_comment_inbox` (
+  `event_id` VARCHAR(128) NOT NULL,
+  `event_type` VARCHAR(32) NOT NULL,
+  `payload` TEXT NULL,
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评论事件收件箱（幂等去重）';
+
 -- 互动-评论表：两级盖楼（一级评论 root_id=NULL；回复 root_id=所属一级评论ID）
 CREATE TABLE IF NOT EXISTS `interaction_comment` (
   `comment_id` BIGINT NOT NULL COMMENT '评论ID',

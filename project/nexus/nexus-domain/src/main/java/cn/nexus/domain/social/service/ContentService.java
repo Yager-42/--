@@ -19,6 +19,7 @@ import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
@@ -247,7 +248,8 @@ public class ContentService implements IContentService {
                 contentRepository.replacePostTypes(targetPostId, normalizedPostTypes);
             }
 
-            contentDispatchPort.onPublished(targetPostId, userId);
+            // 事务提交后再发 MQ：避免消费者读到未提交数据导致“索引误删”等线上鬼故事。
+            dispatchAfterCommit(targetPostId, userId);
             return OperationResultVO.builder()
                     .success(true)
                     .id(targetPostId)
@@ -753,6 +755,28 @@ public class ContentService implements IContentService {
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("事务未开启，禁止在非事务环境下调用 " + scene);
         }
+    }
+
+    private void dispatchAfterCommit(Long postId, Long userId) {
+        if (postId == null || userId == null) {
+            return;
+        }
+        // 理论上 publish() 必须在事务内；这里做防御，避免未来改动把事件又发回“事务外”。
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            contentDispatchPort.onPublished(postId, userId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    contentDispatchPort.onPublished(postId, userId);
+                } catch (Exception e) {
+                    // afterCommit 失败不会回滚业务事务：只能记录，后续再补偿（如需要可引入 outbox）。
+                    log.error("post published dispatch failed after commit, postId={}, userId={}", postId, userId, e);
+                }
+            }
+        });
     }
 
     private OperationResultVO toPublishResultFromAttempt(ContentPublishAttemptEntity attempt) {

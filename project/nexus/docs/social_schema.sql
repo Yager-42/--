@@ -149,3 +149,32 @@ CREATE TABLE IF NOT EXISTS `interaction_notify_inbox` (
   PRIMARY KEY (`event_id`),
   KEY `idx_status_time` (`status`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通知事件收件箱（幂等去重）';
+
+-- 互动-评论表：两级盖楼（一级评论 root_id=NULL；回复 root_id=所属一级评论ID）
+CREATE TABLE IF NOT EXISTS `interaction_comment` (
+  `comment_id` BIGINT NOT NULL COMMENT '评论ID',
+  `post_id` BIGINT NOT NULL COMMENT '归属帖子ID',
+  `user_id` BIGINT NOT NULL COMMENT '评论作者',
+  `root_id` BIGINT NULL COMMENT '一级评论为NULL；回复为所属一级评论ID',
+  `parent_id` BIGINT NULL COMMENT '直接回复的评论ID（用于展示/定位）',
+  `reply_to_id` BIGINT NULL COMMENT '显示“回复@谁”的目标评论ID（用于展示）',
+  `content` LONGTEXT NOT NULL COMMENT '评论内容',
+  `status` TINYINT NOT NULL COMMENT '1正常；2删除（软删）',
+  `like_count` BIGINT NOT NULL DEFAULT 0 COMMENT '一级评论点赞数（最终一致）',
+  `reply_count` BIGINT NOT NULL DEFAULT 0 COMMENT '一级评论回复数（最终一致）',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`comment_id`),
+  KEY `idx_post_root_time` (`post_id`, `root_id`, `create_time`, `comment_id`),
+  KEY `idx_root_time` (`root_id`, `create_time`, `comment_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='互动-评论表（两级盖楼）';
+
+-- 互动-评论置顶表：一帖一条置顶（置顶不参与分页，读侧单独返回 pinned）
+CREATE TABLE IF NOT EXISTS `interaction_comment_pin` (
+  `post_id` BIGINT NOT NULL COMMENT '帖子ID（唯一：一帖一条置顶）',
+  `comment_id` BIGINT NOT NULL COMMENT '被置顶的一级评论ID',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`post_id`),
+  KEY `idx_comment_id` (`comment_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='互动-评论置顶表（一帖一条）';

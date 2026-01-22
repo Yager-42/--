@@ -64,8 +64,32 @@ public class CommentHotRankRepository implements ICommentHotRankRepository {
         return ids;
     }
 
+    @Override
+    public void clear(Long postId) {
+        if (postId == null) {
+            return;
+        }
+        stringRedisTemplate.delete(key(postId));
+    }
+
+    @Override
+    public void trimToTop(Long postId, int keepTop) {
+        if (postId == null || keepTop <= 0) {
+            return;
+        }
+        Long size = stringRedisTemplate.opsForZSet().zCard(key(postId));
+        if (size == null || size <= keepTop) {
+            return;
+        }
+        long stop = size - keepTop - 1;
+        if (stop < 0) {
+            return;
+        }
+        // ZREMRANGEBYRANK：按 score 从低到高的 rank 删除，保留最高的 topK。
+        stringRedisTemplate.opsForZSet().removeRange(key(postId), 0, stop);
+    }
+
     private String key(Long postId) {
         return KEY_PREFIX + postId;
     }
 }
-

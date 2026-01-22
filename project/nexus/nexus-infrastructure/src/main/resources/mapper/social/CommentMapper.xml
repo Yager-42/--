@@ -74,5 +74,14 @@
         ORDER BY create_time ASC, comment_id ASC
         LIMIT #{limit}
     </select>
-</mapper>
 
+    <select id="selectRecentRootBriefs" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
+        SELECT comment_id, post_id, user_id, root_id, status, like_count, reply_count
+        FROM interaction_comment
+        WHERE post_id = #{postId}
+          AND root_id IS NULL
+          AND status = 1
+        ORDER BY create_time DESC, comment_id DESC
+        LIMIT #{limit}
+    </select>
+</mapper>

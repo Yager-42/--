@@ -70,7 +70,12 @@ public class ReactionLikeService implements IReactionLikeService {
         }
 
         log.info(buildEventJson(rid, userId, target, action, desiredState, delta, currentCount, firstPending));
-        return ReactionResultVO.builder().requestId(rid).currentCount(currentCount).success(true).build();
+        return ReactionResultVO.builder()
+                .requestId(rid)
+                .currentCount(currentCount)
+                .delta(delta)
+                .success(true)
+                .build();
     }
 
     /**

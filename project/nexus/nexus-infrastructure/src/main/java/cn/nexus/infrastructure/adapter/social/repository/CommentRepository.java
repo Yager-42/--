@@ -151,6 +151,34 @@ public class CommentRepository implements ICommentRepository {
                 normalizedLimit);
     }
 
+    @Override
+    public List<CommentBriefVO> listRecentRootBriefs(Long postId, int limit) {
+        if (postId == null) {
+            return List.of();
+        }
+        int normalizedLimit = Math.max(1, limit);
+        List<CommentPO> list = commentDao.selectRecentRootBriefs(postId, normalizedLimit);
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        List<CommentBriefVO> res = new ArrayList<>(list.size());
+        for (CommentPO po : list) {
+            if (po == null) {
+                continue;
+            }
+            res.add(CommentBriefVO.builder()
+                    .commentId(po.getCommentId())
+                    .postId(po.getPostId())
+                    .userId(po.getUserId())
+                    .rootId(po.getRootId())
+                    .status(po.getStatus())
+                    .likeCount(po.getLikeCount())
+                    .replyCount(po.getReplyCount())
+                    .build());
+        }
+        return res;
+    }
+
     private static final class Cursor {
         private final Date cursorTime;
         private final Long cursorId;
@@ -178,4 +206,3 @@ public class CommentRepository implements ICommentRepository {
         }
     }
 }
-

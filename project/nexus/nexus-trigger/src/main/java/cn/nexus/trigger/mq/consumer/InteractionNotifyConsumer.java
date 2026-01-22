@@ -49,7 +49,8 @@ public class InteractionNotifyConsumer {
         }
 
         try {
-            process(event);
+            String targetType = validateOrThrow(event);
+            process(event, targetType);
             inboxPort.markDone(eventId);
         } catch (Exception e) {
             inboxPort.markFail(eventId);
@@ -58,15 +59,32 @@ public class InteractionNotifyConsumer {
         }
     }
 
-    private void process(InteractionNotifyEvent event) {
+    private String validateOrThrow(InteractionNotifyEvent event) {
+        // 通知旁路必须“坏数据就爆炸”：否则你只会得到一堆“悄悄丢了”的假成功。
         EventType et = event.getEventType();
+        if (et == null) {
+            throw new IllegalArgumentException("eventType is null");
+        }
         String targetType = normalizeType(event.getTargetType());
+        if (targetType == null) {
+            throw new IllegalArgumentException("targetType is invalid");
+        }
+        if (event.getTargetId() == null) {
+            throw new IllegalArgumentException("targetId is null");
+        }
+        if (event.getFromUserId() == null) {
+            throw new IllegalArgumentException("fromUserId is null");
+        }
+        if (et == EventType.COMMENT_MENTIONED && event.getToUserId() == null) {
+            throw new IllegalArgumentException("toUserId is required for COMMENT_MENTIONED");
+        }
+        return targetType;
+    }
+
+    private void process(InteractionNotifyEvent event, String targetType) {
+        EventType et = event.getEventType();
         Long targetId = event.getTargetId();
         Long fromUserId = event.getFromUserId();
-
-        if (et == null || targetType == null || targetId == null || fromUserId == null) {
-            return;
-        }
 
         Long targetOwnerUserId = null;
         CommentBriefVO brief = null;
@@ -134,9 +152,18 @@ public class InteractionNotifyConsumer {
         try {
             return objectMapper.writeValueAsString(event);
         } catch (Exception ignored) {
-            // JSON 序列化失败也不能影响幂等入库：payload 只是辅助信息。
-            return null;
+            // JSON 序列化失败也不能影响幂等入库：payload 只是辅助信息，但至少要保证它是 JSON 且不为空。
+            return "{\"eventId\":\"" + escapeJson(event.getEventId()) + "\",\"eventType\":\""
+                    + escapeJson(event.getEventType() == null ? "" : event.getEventType().name())
+                    + "\",\"_error\":\"SERIALIZE_FAILED\"}";
         }
+    }
+
+    private String escapeJson(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private String deriveBizType(EventType eventType, String targetType) {

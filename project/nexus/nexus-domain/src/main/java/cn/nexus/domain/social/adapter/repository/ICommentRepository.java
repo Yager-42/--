@@ -54,5 +54,15 @@ public interface ICommentRepository {
      * 楼内回复分页（时间正序，游标分页）。cursor 为空表示从最早开始。
      */
     List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit);
-}
 
+    /**
+     * 扫描某帖最近的一级评论（用于热榜冷启动/重建）。
+     *
+     * <p>只返回 status=1 且 root_id IS NULL 的评论。</p>
+     *
+     * @param postId 帖子 ID
+     * @param limit  扫描上限（建议 5000）
+     * @return 一级评论简要信息列表（包含 like_count/reply_count）
+     */
+    List<CommentBriefVO> listRecentRootBriefs(Long postId, int limit);
+}

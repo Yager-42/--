@@ -32,5 +32,6 @@ public interface ICommentDao {
                             @Param("cursorTime") java.util.Date cursorTime,
                             @Param("cursorId") Long cursorId,
                             @Param("limit") Integer limit);
-}
 
+    List<CommentPO> selectRecentRootBriefs(@Param("postId") Long postId, @Param("limit") Integer limit);
+}

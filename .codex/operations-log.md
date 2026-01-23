@@ -45,3 +45,41 @@
 - 热点回表 L1：`ContentRepository` 接入 `JD HotKey + Caffeine`，对热点 postId 的 `findPost/listPostsByIds` 启用短 TTL L1；写路径更新/删帖/改类型会 invalidate
 - 文档同步：更新 `.codex/distribution-feed-implementation.md` 的 checklist 与 10.5.2/10.5.4 说明
 - 本地验证：下载 Maven 3.9.6 到 `.codex/tools/apache-maven-3.9.6`（gitignore），执行 `project/nexus` 下 `mvn -DskipTests package` 通过
+
+---
+
+日期：2026-01-23  
+执行者：Codex（Linus-mode）
+
+## Phase 3 推荐系统方案（参考 scooter-WSVA / Gorse）
+
+- 代码检索：`.codex/_repos/scooter-WSVA` 确认推荐系统采用 Gorse（`docker-compose.yml` + `scripts/gorse/config.toml`），Feed 侧拉取 `/api/recommend`/`/api/popular`/`/api/item/*/neighbors`，Favorite/Comment 侧写入 `/api/feedback`，MQ 侧写入 `/api/item`（labels）
+- 方案文档：补齐 `.codex/distribution-feed-implementation.md` 第 11 章（Gorse 接口、数据映射、写入链路、读链路、分页 token、global latest 兜底）
+- 文档上线化：补齐第 11 章的“上线必补契约”（RECOMMEND token=scanIndex、scanBudget、session cache 数据结构、降级契约、冷启动回灌、超时/预算、配置项、指标与验收用例），并同步修正 11.7 的分页描述避免自相矛盾
+
+---
+
+日期：2026-01-23
+执行者：Codex（Linus-mode）
+
+## Phase 3 上线口径定稿（按用户选择定死）
+
+- 北极星指标：点赞率（Like Rate）
+- Labels：选 B（业务类目/标签），真值来源 `content_post_type` / `ContentPostEntity.postTypes`，并写死 label 归一化规则
+- Feedback 入口：选 A + C（复用 `PostPublishedEvent` 与 `interaction.notify` 的正向事件 + 新增推荐专用事件承接撤销/扩展）
+- 撤销语义：选 B（反向 feedbackType：`unlike` / `unstar`）
+- 强规则：选 A（推荐页“每页作者去重”）
+- 部署：选 A（Gorse 单实例 + 持久化 volume）
+- 文档同步：更新 `.codex/distribution-feed-implementation.md` 第 11 章，新增 11.0“上线口径”，并补齐写入链路/分页伪代码的硬约束
+
+---
+
+日期：2026-01-23
+执行者：Codex（Linus-mode）
+
+## Phase 3 口径补充：read/排序/postTypes（用户确认）
+
+- Read（曝光）写入：选 1B（不使用 `write-back-type=read` 自动回写；只对最终下发 items 写 `read` feedback）
+- 排序：选 2A（本次上线不做本地重排；返回顺序=候选扫描顺序）
+- postTypes：固定一级类字典（每帖必须且只能选 1 个）：`game_news/general_news/guide/review/deal_trade/qa/lfg/showcase/discussion/life/emotion/meta`
+- 文档同步：更新 `.codex/distribution-feed-implementation.md` 的 11.0/11.2/11.5/11.6/11.9，写死上述口径与字典

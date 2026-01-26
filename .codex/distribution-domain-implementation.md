@@ -2,7 +2,7 @@
 
 面向对象：新入职同学（不要求你先懂 DDD；你只要能顺着“从哪里进、往哪里走、数据存在哪”把链路跑通即可）。
 
-一句话版本：**发帖成功后，系统把 `postId` 变成一条“索引卡片”写进很多人的 Redis 时间线；读时间线主要读 Redis，缺的再去 MySQL 补；大 V 不做全量写扩散，改成读侧拉 Outbox/聚合池；离线用户首次打开首页会触发“重建 inbox”。**
+一句话版本：**发帖成功后，系统把 `postId` 变成一条“索引卡片”写进很多人的 Redis 时间线；读时间线主要读 Redis，缺的再去 MySQL 补；大 V 不做全量写扩散，改成读侧拉 Outbox/聚合池；离线用户首次打开首页会触发“重建 inbox”；推荐流（RECOMMEND/POPULAR/NEIGHBORS）走推荐系统，RECOMMEND 失败时用全站 latest 兜底。**
 
 > 本文只写“当前项目里真的存在的实现”。每个结论都给出对应代码位置（文件 + 类/方法）。
 
@@ -40,7 +40,7 @@
 
 ---
 
-## 2. 核心数据结构（最重要的 6 个概念）
+## 2. 核心数据结构（最重要的 8 个概念）
 
 下面每个概念，你都能在代码里找到它“长什么样、存哪里、谁写谁读”。
 
@@ -139,6 +139,40 @@
 - Redis 实现：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedNegativeFeedbackRepository.java`
 - 写入与撤销：`FeedService#negativeFeedback` / `FeedService#cancelNegativeFeedback`
 
+### 2.7 GlobalLatest（全站 latest，Redis ZSET）
+
+你可以把它当成“推荐系统挂了时的兜底候选池”：只存全站最新已发布内容的 `postId` 索引。
+
+- Key：`feed:global:latest`
+- member：`postId`
+- score：`publishTimeMs`
+
+谁写：
+- 发布事件消费（旁路）：`FeedFanoutDispatcherConsumer#dispatch` → `IFeedGlobalLatestRepository#addToLatest`
+
+谁读：
+- RECOMMEND 候选补齐：`FeedService#ensureRecommendCandidates` → `IFeedGlobalLatestRepository#pageLatest`
+
+相关代码：
+- 接口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedGlobalLatestRepository.java`
+- Redis 实现：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedGlobalLatestRepository.java`
+
+### 2.8 Recommend Session Cache（推荐会话缓存，Redis LIST/SET/STRING）
+
+RECOMMEND 流的 cursor 不是 `postId`，而是一个 token（`REC:{sessionId}:{scanIndex}`）。为了让“同一个 cursor 重试结果稳定”，项目把候选 `postId` 先写入一个 session cache。
+
+- 候选列表（顺序）：`feed:rec:session:{userId}:{sessionId}`（LIST）
+- 去重集合：`feed:rec:seen:{userId}:{sessionId}`（SET）
+- latest 内部游标：`feed:rec:latestCursor:{userId}:{sessionId}`（STRING：`{publishTimeMs}:{postId}`）
+
+谁写/谁读：
+- `FeedService#recommendTimeline` / `FeedService#ensureRecommendCandidates` ↔ `IFeedRecommendSessionRepository`
+
+相关代码：
+- 接口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedRecommendSessionRepository.java`
+- Redis 实现：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedRecommendSessionRepository.java`
+- token 格式：`FeedRecommendCursor`（见下文 3.1）
+
 ---
 
 ## 3. HTTP 接口（用户真正能看到的行为）
@@ -153,6 +187,15 @@
 DTO（契约层）：
 - `FeedTimelineRequestDTO`：`cursor` / `limit` / `feedType`（里面虽然有 userId 字段，但会被忽略）
 - `FeedTimelineResponseDTO`：`items` + `nextCursor`
+
+feedType 分支（在 `FeedService#timeline` 里硬编码）：
+- `FOLLOW`：默认；cursor=上一页最后一个 `postId`
+- `RECOMMEND`：推荐流；cursor=`REC:{sessionId}:{scanIndex}`（注意：走独立链路，不读 inbox/outbox）
+- `POPULAR`：热门流；cursor=`POP:{offset}`（需要推荐系统）
+- `NEIGHBORS`：相关推荐；cursor=`NEI:{seedPostId}:{offset}`（需要推荐系统；首次请求必须带 seedPostId）
+
+cursor/token 解析代码：
+- `FeedRecommendCursor` / `FeedPopularCursor` / `FeedNeighborsCursor`
 
 相关代码：
 - API 契约：`project/nexus/nexus-api/src/main/java/cn/nexus/api/social/IFeedApi.java`
@@ -208,7 +251,21 @@ DTO（契约层）：
 相关代码：
 - MQ 发布：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java`
 - 事件类型：`project/nexus/nexus-types/src/main/java/cn/nexus/types/event/PostPublishedEvent.java`
-- 交换机/路由键（字符串常量）：`ContentDispatchPort` 内 `EXCHANGE` / `ROUTING_KEY`
+- 交换机/路由键（字符串常量）：`ContentDispatchPort` 内 `EXCHANGE` / `ROUTING_KEY` / `ROUTING_KEY_DELETED`
+
+### 4.3 删帖/下架：事务提交后再发 PostDeletedEvent（旁路）
+
+`ContentService.delete(...)` 删除成功后，也会 after-commit 调用 `IContentDispatchPort#onDeleted`，最终发 MQ（routingKey=`post.deleted`）。
+
+当前项目里它主要用于：让推荐系统把 item 从池里删掉（Feed 侧不会做“扫所有 inbox/outbox/pool”这种昂贵清理）。Feed 索引的清理策略是**读时修复**：timeline 回表发现 postId 已不存在/不可见，就从 inbox/outbox/pool 懒清掉（`FeedService#cleanupMissingIndexes`）。
+
+相关代码：
+- after-commit 删除事件：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java`（`dispatchDeleteAfterCommit`）
+- 端口定义：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/port/IContentDispatchPort.java`（`onDeleted`）
+- MQ 发布：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java`（`ROUTING_KEY_DELETED`）
+- 事件类型：`project/nexus/nexus-types/src/main/java/cn/nexus/types/event/PostDeletedEvent.java`
+- 推荐 delete 队列绑定：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedRecommendItemMqConfig.java`
+- 推荐 delete 消费者：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteConsumer.java`
 
 ---
 
@@ -235,7 +292,8 @@ DTO（契约层）：
 关键逻辑（按代码顺序）：
 - 永远写 Outbox：`feedOutboxRepository.addToOutbox(...)`
 - 作者自己 inbox 保底：`feedTimelineRepository.addToInbox(authorId, ...)`
-- 判断大 V：粉丝数太多就跳过全量 fanout
+- 写入全站 latest：`feedGlobalLatestRepository.addToLatest(postId, publishTimeMs)`（推荐系统不可用时的兜底候选源）
+- 判断大 V：粉丝数 >= 阈值则不投递全量 fanout（同时写入 bigV pool，并推送 corefans）
 - 非大 V：按 `batchSize` 切片，投递 `FeedFanoutTask(offset, limit)`
 
 相关代码：
@@ -255,6 +313,34 @@ worker 很“傻”，只负责执行一片：
 - 粉丝分页：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IRelationRepository.java`
 - MyBatis SQL：`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/FollowerMapper.xml`
 
+### 5.4 推荐 Item 同步（PostPublishedEvent/PostDeletedEvent）
+
+同一个 exchange `social.feed` 上，除了 fanout 还有两条“推荐旁路”队列（独立，不和 fanout 抢消息）：  
+（它们复用同一个发布事件，但各自有自己的队列/死信策略）
+
+- upsert：`feed.recommend.item.upsert.queue`（routingKey=`post.published`）
+- delete：`feed.recommend.item.delete.queue`（routingKey=`post.deleted`）
+
+相关代码：
+- MQ 拓扑：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedRecommendItemMqConfig.java`
+- upsert consumer：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertConsumer.java`（回表读 `postTypes` 作为 labels，调用 `IRecommendationPort#upsertItem`；失败抛 `AmqpRejectAndDontRequeueException` 进 DLQ）
+- delete consumer：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteConsumer.java`（best-effort 调 `IRecommendationPort#deleteItem`，失败只打日志）
+- 推荐端口（方法签名）：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/port/IRecommendationPort.java`
+
+### 5.5 推荐 Feedback 同步（A/C 两条通道）
+
+推荐系统需要“用户行为反馈”。这里做了两条来源（都不允许影响主链路）：  
+
+- A 通道（复用通知事件）：消费 `interaction.notify`（LIKE_ADDED / COMMENT_CREATED）→ `IRecommendationPort#insertFeedback`（`like`/`comment`）
+- C 通道（撤销/反向语义）：消费 `RecommendFeedbackEvent`（例如 `unlike`）→ `IRecommendationPort#insertFeedback`
+
+相关代码：
+- A 通道 MQ：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedRecommendFeedbackAMqConfig.java`
+- A 通道 consumer：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackAConsumer.java`
+- C 通道 MQ：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedRecommendFeedbackMqConfig.java`
+- C 通道 consumer：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackConsumer.java`
+- 事件类型：`project/nexus/nexus-types/src/main/java/cn/nexus/types/event/recommend/RecommendFeedbackEvent.java`
+
 ---
 
 ## 6. 读链路：timeline 是怎么拼出来的？
@@ -273,6 +359,12 @@ worker 很“傻”，只负责执行一片：
 - 首页 timeline：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java`
 - inbox 读取：`FeedTimelineRepository#pageInboxEntries`
 - 回表热点优化：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ContentRepository.java`
+
+补充：回表热点 L1（短 TTL）
+- 只缓存“热点 postId”（用 `JdHotKeyStore.isHotKey("post__{postId}")` 判定），避免普通数据占内存
+- 缓存实现：Caffeine，本地 L1，TTL=2s，maxSize=100000（读快但不追求强一致）
+- 覆盖读方法：`ContentRepository#findPost` / `ContentRepository#listPostsByIds`
+- 写路径失效：保存/更新/删帖/改类型会 `invalidatePostCache(postId)`
 
 ### 6.2 cursor（游标）到底是什么？
 
@@ -306,6 +398,48 @@ worker 很“傻”，只负责执行一片：
 相关代码：
 - `FeedService#cleanupMissingIndexes`
 
+### 6.5 RECOMMEND / POPULAR / NEIGHBORS：不读 inbox/outbox 的三条“推荐链路”
+
+这三条链路都在 `FeedService#timeline` 里用 `feedType` 分支切出去，**不会复用 FOLLOW 的 inbox/outbox 读取**（代码里有明确注释）。
+
+#### RECOMMEND（推荐流：可降级）
+
+核心要点（按代码行为描述，不脑补）：
+- cursor/token：`REC:{sessionId}:{scanIndex}`（`FeedRecommendCursor`）
+- session cache：候选会写入 `feed:rec:session:*`（LIST+SET 去重），保证“同 cursor 重试稳定”（`IFeedRecommendSessionRepository`）
+- 候选补齐：优先调推荐系统 `IRecommendationPort#recommend`；失败/为空则用 `feed:global:latest` 兜底补齐（`FeedService#ensureRecommendCandidates`）
+- 过滤规则：负反馈（postId + postType）过滤；同页作者去重（一个 author 只留一条）
+- read feedback：最终下发 items 后 best-effort 异步写 `insertFeedback(userId, postId, "read", tsMs)`（不影响主链路）
+
+相关代码：
+- 主入口：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java`（`recommendTimeline` / `ensureRecommendCandidates`）
+- token：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/FeedRecommendCursor.java`
+- session cache：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedRecommendSessionRepository.java`
+- 兜底候选：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedGlobalLatestRepository.java`
+- 推荐端口实现：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/GorseRecommendationPort.java`
+
+#### POPULAR（热门流：依赖推荐系统）
+
+核心要点：
+- cursor/token：`POP:{offset}`（`FeedPopularCursor`，offset 是“扫描指针”，不是“已返回条数”）
+- 候选来源：`IRecommendationPort#popular(userId, n, offset)`（推荐系统不可用/未启用时会返回空）
+- 过滤规则：负反馈过滤；同页作者去重
+
+相关代码：
+- `FeedService#popularTimeline`
+- token：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/FeedPopularCursor.java`
+
+#### NEIGHBORS（相关推荐：依赖推荐系统；首次必须带 seedPostId）
+
+核心要点：
+- cursor/token：`NEI:{seedPostId}:{offset}`（`FeedNeighborsCursor`）
+- 首次请求必须带 seedPostId：因为服务端要先拿“这个 seed 的相似列表”，没有 seed 就没法算
+- 候选来源：`IRecommendationPort#neighbors(seedPostId, n)`，然后再用 offset+scanBudget 做切片扫描
+
+相关代码：
+- `FeedService#neighborsTimeline`
+- token：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/FeedNeighborsCursor.java`
+
 ---
 
 ## 7. 离线重建（inbox miss 时怎么补一份 inbox？）
@@ -316,6 +450,7 @@ worker 很“傻”，只负责执行一片：
 - 目标集合 = 自己 + 最近 N 个关注对象
 - 每个目标拉最近 K 条内容（从 MySQL）
 - 合并排序后，写入 inbox（上限 M 条）
+- 写入前会应用负反馈过滤（postId + postType），避免回填你明确点了“不想看”的内容
 - 写入时会加一个“重建锁”，并用临时 key + RENAME 做原子替换
 
 相关代码：
@@ -331,11 +466,12 @@ worker 很“傻”，只负责执行一片：
 
 解决（只对在线用户）：
 - 刚关注：立刻把对方最近 K 条内容写入你的 inbox（只补一点点，够体验）
+- 回填时也会应用负反馈过滤（postId + postType）
 - 取消关注：因为 inbox 里只有 postId 没有 authorId，没法精确删某个人的内容，所以直接强制重建
 
 相关代码：
 - 补偿服务：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedFollowCompensationService.java`
-- 关注事件来源：`RelationService#follow` / `RelationService#unfollow`
+- 关注事件来源：`RelationService#follow` / `RelationService#unfollow` → `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationEventPort.java`
 - 事件消费触达：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationEventListener.java`
 
 ---
@@ -370,6 +506,16 @@ worker 很“傻”，只负责执行一片：
 | `feed.bigv.pool.ttlDays` | 7 | 聚合池过期天数（通常比 inbox/outbox 更短） | `FeedBigVPoolProperties` → `FeedBigVPoolRepository#ttl` |
 | `feed.bigv.pool.fetchFactor` | 30 | 读侧从池里拉取的放大系数（池里有很多你不关注的人，需要多拉再过滤） | `FeedService#listPoolCandidates` |
 | `feed.bigv.pool.triggerFollowings` | 200 | 你关注的人很多时，才启用“从聚合池读”（否则直接拉 outbox） | `FeedService#shouldUseBigVPool` |
+| `feed.global.latest.maxSize` | 20000 | 全站 latest 最大保留条数（推荐系统不可用时的兜底候选池大小） | `FeedGlobalLatestProperties` → `FeedGlobalLatestRepository#trimToMaxSize` |
+| `feed.recommend.baseUrl` | `""` | 推荐系统地址（空=不启用 gorse；RECOMMEND 自动降级 global latest；POPULAR/NEIGHBORS 会返回空） | `FeedRecommendProperties`、`GorseRecommendationPort#baseUrl` |
+| `feed.recommend.connectTimeoutMs` | 200 | 推荐 HTTP 连接超时（毫秒） | `FeedRecommendProperties` → `GorseRecommendationPort#init` |
+| `feed.recommend.readTimeoutMs` | 500 | 推荐 HTTP 读取超时（毫秒） | `FeedRecommendProperties` → `GorseRecommendationPort#doRequest` |
+| `feed.recommend.sessionTtlMinutes` | 20 | RECOMMEND session cache 的 TTL（分钟）：保证 cursor 稳定一段时间 | `FeedRecommendProperties` → `FeedRecommendSessionRepository#ttl/touch` |
+| `feed.recommend.prefetchFactor` | 5 | 候选预取系数：appendBatch = limit * prefetchFactor | `FeedService`（`recommendPrefetchFactor`） |
+| `feed.recommend.scanFactor` | 10 | 扫描预算系数：scanBudget = limit * scanFactor | `FeedService`（`recommendScanFactor`） |
+| `feed.recommend.maxAppendRounds` | 3 | 最大追加轮数（避免无限拉取/死循环） | `FeedService`（`recommendMaxAppendRounds`） |
+| `feed.recommend.backfill.enabled` | false | 是否启用“推荐冷启动回灌” runner（启动时一次性扫表 upsertItem） | `FeedRecommendItemBackfillRunner` |
+| `feed.recommend.backfill.pageSize` | 500 | 回灌每页扫描多少条已发布内容 | `FeedRecommendItemBackfillRunner` |
 
 ### 9.2 Redis Key 一览表（按“写谁/读谁”来记）
 
@@ -380,6 +526,10 @@ worker 很“傻”，只负责执行一片：
 | `feed:inbox:rebuild:lock:{userId}` | String | `FeedTimelineRepository#tryAcquireRebuildLock` | 无 | TTL=`feed.rebuild.lockSeconds` |
 | `feed:outbox:{authorId}` | ZSET | `FeedOutboxRepository#addToOutbox` | `FeedOutboxRepository#pageOutbox` | TTL=`feed.outbox.ttlDays`；maxSize=`feed.outbox.maxSize` |
 | `feed:bigv:pool:{bucket}` | ZSET | `FeedBigVPoolRepository#addToPool`（需 enabled=true） | `FeedBigVPoolRepository#pagePool` | TTL=`feed.bigv.pool.ttlDays`；maxSize=`feed.bigv.pool.maxSizePerBucket` |
+| `feed:global:latest` | ZSET | `FeedGlobalLatestRepository#addToLatest` | `FeedGlobalLatestRepository#pageLatest` | maxSize=`feed.global.latest.maxSize`（当前未设置 TTL） |
+| `feed:rec:session:{userId}:{sessionId}` | LIST | `FeedRecommendSessionRepository#appendCandidates` | `FeedRecommendSessionRepository#range` | TTL=`feed.recommend.sessionTtlMinutes`（touch 刷新） |
+| `feed:rec:seen:{userId}:{sessionId}` | SET | `FeedRecommendSessionRepository#appendCandidates` |（内部去重集合）| 同上 |
+| `feed:rec:latestCursor:{userId}:{sessionId}` | String | `FeedRecommendSessionRepository#setLatestCursor` | `FeedRecommendSessionRepository#getLatestCursor` | 同上 |
 | `feed:corefans:{authorId}` | SET | `FeedCoreFansRepository#addCoreFan` | `FeedCoreFansRepository#listCoreFans` | TTL=`feed.corefans.ttlDays`（每次写会续期） |
 | `feed:neg:{userId}` | SET | `FeedNegativeFeedbackRepository#add`/`#remove` | `#contains`/`#listPostIds` | 当前实现未设置 TTL（会长期存在） |
 | `feed:neg:postType:{userId}` | SET | `FeedNegativeFeedbackRepository#addPostType`/`#removePostType` | `#listPostTypes` | 当前实现未设置 TTL |
@@ -414,6 +564,27 @@ curl -X POST "http://localhost:8080/api/v1/content/publish" -H "Content-Type: ap
 curl "http://localhost:8080/api/v1/feed/timeline?limit=20&feedType=FOLLOW" -H "X-User-Id: 1001"
 ```
 
+如果你想验证 RECOMMEND（推荐流）：
+- 不启用 gorse 也能跑：会用 `feed:global:latest` 兜底补齐候选
+
+```bash
+curl "http://localhost:8080/api/v1/feed/timeline?limit=20&feedType=RECOMMEND" -H "X-User-Id: 1001"
+```
+
+如果你想验证 POPULAR（热门流）：需要先配置 `feed.recommend.baseUrl` 指向 gorse（否则会返回空列表）
+
+```bash
+curl "http://localhost:8080/api/v1/feed/timeline?limit=20&feedType=POPULAR" -H "X-User-Id: 1001"
+```
+
+如果你想验证 NEIGHBORS（相关推荐）：首次必须带 seedPostId（cursor 形如 `NEI:{seedPostId}:0`）
+
+```bash
+curl "http://localhost:8080/api/v1/feed/timeline?limit=20&feedType=NEIGHBORS&cursor=NEI:10001:0" -H "X-User-Id: 1001"
+```
+
+如果你启用了 gorse 但库里已经有很多历史内容：可以临时打开 `feed.recommend.backfill.enabled=true` 启动一次应用做回灌（`FeedRecommendItemBackfillRunner`），跑完再关掉。
+
 如果你想验证“粉丝能收到分发”（fanout）：
 1) 先让粉丝用户打开一次首页（让 `feed:inbox:{userId}` key 存在，成为“在线”）
 2) 再关注作者
@@ -441,3 +612,5 @@ curl -X POST "http://localhost:8080/api/v1/relation/follow" -H "Content-Type: ap
 3) **DTO 里有 userId 但会被忽略**：以 `UserContext` 为准（`UserContextInterceptor` + `FeedController`）。
 4) **失败不自动重试**：多个 MQ consumer 在异常时直接 `AmqpRejectAndDontRequeueException`，消息会进 DLQ，需要人工/任务补偿（见 `FeedFanoutConfig` 的 DLQ 配置）。
 5) **读侧会做“懒清理”**：发现 postId 查不到，就把索引从 inbox/outbox/pool 清掉（`FeedService#cleanupMissingIndexes`）。
+6) **FOLLOW/RECOMMEND/POPULAR/NEIGHBORS 的 cursor 协议不一样**：FOLLOW 用 `postId`；RECOMMEND/POPULAR/NEIGHBORS 用 `REC:/POP:/NEI:` token（见 `FeedRecommendCursor`/`FeedPopularCursor`/`FeedNeighborsCursor`）。
+7) **POPULAR/NEIGHBORS 依赖推荐系统**：`feed.recommend.baseUrl` 为空时 gorse 未启用，这两条链路会返回空；RECOMMEND 会降级走 `feed:global:latest`。

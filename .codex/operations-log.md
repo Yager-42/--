@@ -100,3 +100,4 @@
 - M8：新增 `PostDeletedEvent`，`ContentService.delete` after-commit 发布 `post.deleted`；新增 `feed.recommend.item.delete.queue` + consumer 调用 `deleteItem`
 - M9：新增全站已发布分页 DAO（`selectPublishedPage`）与可开关回灌 runner：`FeedRecommendItemBackfillRunner`；dev 配置补齐 `feed.recommend.backfill.*`
 - 本地验证：`project/nexus` 下执行 `mvn -DskipTests package` 通过
+- 文档同步：补齐 `.codex/distribution-domain-implementation.md`（推荐流/GlobalLatest/session cache/MQ 旁路/配置与 Redis key）

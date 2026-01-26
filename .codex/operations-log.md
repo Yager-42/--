@@ -20,7 +20,7 @@
 
 ---
 
-日期：2026-01-22  \
+日期：2026-01-22  
 执行者：Codex（Linus-mode）
 
 ## 评论热榜/点赞回写补齐（按 .codex/comment-floor-system-implementation.md）
@@ -33,7 +33,7 @@
 
 ---
 
-日期：2026-01-22  \\
+日期：2026-01-22  
 执行者：Codex（Linus-mode）
 
 ## 分发/Feed 缺口补齐（HotKey L1 + 铁粉生成 + unfollow）
@@ -83,3 +83,20 @@
 - 排序：选 2A（本次上线不做本地重排；返回顺序=候选扫描顺序）
 - postTypes：固定一级类字典（每帖必须且只能选 1 个）：`game_news/general_news/guide/review/deal_trade/qa/lfg/showcase/discussion/life/emotion/meta`
 - 文档同步：更新 `.codex/distribution-feed-implementation.md` 的 11.0/11.2/11.5/11.6/11.9，写死上述口径与字典
+
+---
+
+日期：2026-01-26  
+执行者：Codex（Linus-mode）
+
+## Phase 3 推荐流落地（按 `.codex/distribution-feed-implementation.md#11.12`）
+
+- M0-M2：补齐推荐端口/仓储接口、global latest 写链路、RECOMMEND session cache + scanIndex 读链路（latest-only），并保持 FOLLOW 行为不变
+- M3：新增 `GorseRecommendationPort`（JDK `HttpClient` + Jackson）；RECOMMEND 追加候选改为“优先 gorse recommend，失败/为空降级 global latest”；落地关键日志字段（sessionId/scanIndex/scanned/returned/appendRounds/fallbackReason）
+- M4：新增独立队列 `feed.recommend.item.upsert.queue`（绑定 `social.feed` + `post.published`）与 `FeedRecommendItemUpsertConsumer` 写入 item（labels=postTypes，trim/去空/去重）
+- M5：read feedback：RECOMMEND 实际下发后 best-effort 异步写 `read`；like/comment：新增独立队列 `feed.recommend.feedback.a.queue` 绑定 `interaction.notify`，消费 `LIKE_ADDED/COMMENT_CREATED` 写 `like/comment`
+- M6：新增 `RecommendFeedbackEvent`（C 通道）+ `social.recommend` 拓扑；`ReactionLikeService` 在 `delta==-1` 发布 `unlike`；消费者写入推荐系统 feedback
+- M7：新增 `POP:{offset}` / `NEI:{seedPostId}:{offset}` token，并在 `FeedService.timeline` 增加 POPULAR/NEIGHBORS 分支（统一“候选->过滤->回表->组装”，offset 按扫描推进）
+- M8：新增 `PostDeletedEvent`，`ContentService.delete` after-commit 发布 `post.deleted`；新增 `feed.recommend.item.delete.queue` + consumer 调用 `deleteItem`
+- M9：新增全站已发布分页 DAO（`selectPublishedPage`）与可开关回灌 runner：`FeedRecommendItemBackfillRunner`；dev 配置补齐 `feed.recommend.backfill.*`
+- 本地验证：`project/nexus` 下执行 `mvn -DskipTests package` 通过

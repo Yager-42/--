@@ -70,3 +70,18 @@ feed:
       ttlDays: 7
       fetchFactor: 30
       triggerFollowings: 200
+  recommend:
+    # Gorse Base URL；为空表示不启用 gorse（读侧自动降级到 global latest）。
+    baseUrl: http://127.0.0.1:8087
+    connectTimeoutMs: 200
+    readTimeoutMs: 500
+    sessionTtlMinutes: 20
+    prefetchFactor: 5
+    scanFactor: 10
+    maxAppendRounds: 3
+    backfill:
+      enabled: false
+      pageSize: 500
+  global:
+    latest:
+      maxSize: 20000

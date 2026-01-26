@@ -52,11 +52,11 @@
 
 ### 0.5 实现进度 Checklist（合并版，自动更新）
 
-> 更新时间：2026-01-15  
+> 更新时间：2026-01-26  
 > 说明：
 > - `[x]` 代表“代码已实现并已合入仓库”
 > - `[ ]` 代表“未实现 / 仅方案（文档里写了，但代码还没落地）”
-> - 按用户要求：不运行 Maven 编译/测试；仅做静态一致性自检（搜索重复入口/依赖关系/文档落点），记录在 `.codex/testing.md` 与 `verification.md`
+> - 本次执行本地编译（`mvn -DskipTests package`）；不跑单测；验证记录在 `.codex/testing.md` 与 `verification.md`
 
 #### Phase 1（MVP：写扩散 + timeline + profile + 负反馈）
 
@@ -80,9 +80,9 @@
 - [x] 在线推：`FeedDistributionService.fanoutSlice`（fanout 内部复用同一逻辑）作者无条件写入 inbox；粉丝仅对 `inboxExists(userId)=true` 的用户写入 inbox
 - [x] 配置落地：`feed.rebuild.*` / `feed.inbox.ttlDays` / `feed.fanout.batchSize`（`application-dev.yml` 给出示例）
 
-#### 未完成（后续）
+#### 已落地（补齐项）
 
-- [ ] Phase 3：推荐与排序(当前不要实现)
+- [x] Phase 3：推荐与排序（按第 11 章与 11.12 M0~M9 已落地）
 - [x] 10.5.1 fanout 大任务切片（规模化）
 - [x] 10.5.2 follow/unfollow 最小补偿（体验补偿）
 - [x] 10.5.3 Outbox + 大 V 隔离（推拉结合）
@@ -2150,6 +2150,181 @@ recommendTimeline(userId, cursor, limit):
 2) 负反馈生效：对某 postId 做负反馈后，该 postId 以及其 postType（若选择了类型）不再出现
 3) 下架不穿透：把某条内容 status 改为非 2，推荐流不再返回（即使 gorse 仍吐出该 id）
 4) 推荐挂了不白屏：人为让 gorse 超时/不可达，仍返回 latest，且可翻页推进
+
+### 11.12 最小逐步实现步骤（给 Codex agent 的落地顺序）
+
+目标：把 11.1~11.11 的“方案”拆成可逐步合入的最小实现单元，避免实现者靠猜写出一堆 if。
+
+硬约束（每一步都必须满足）：
+1) 不破坏现有 FOLLOW 行为与 cursor 协议（FOLLOW 仍是 postId）。
+2) RECOMMEND 严格遵守 token 契约：`REC:{sessionId}:{scanIndex}`（见 11.11.1/11.11.2）。
+3) 推荐页必须支持：负反馈过滤（postId + postType）与“每页作者去重”（跨页不保证）。
+4) 推荐外部依赖不可用时，必须降级：不 500、不空白（见 11.11.4）。
+
+#### 11.12.1 M0：先把接口/配置/Key 名称定死（行为不变，可先合入）
+
+交付物：
+1) domain 端口与仓储接口（只定义，不落实现）：
+   - `IRecommendationPort`（按 11.3 的 5 个方法）
+   - `IFeedGlobalLatestRepository`（维护 `feed:global:latest`）
+   - `IFeedRecommendSessionRepository`（维护 session LIST/SET/游标 STRING）
+2) infrastructure 配置类（仿照 `FeedInboxProperties`）：
+   - `feed.recommend.*`（见 11.11.7）
+   - `feed.global.latest.maxSize`
+3) RECOMMEND cursor 的 parse/format 工具（cursor 非法一律当首页，见 11.11.1）。
+
+验证：
+- 静态自检：检索确认没有第二套 token 格式；配置 key 与 11.11.7 完全一致。
+
+#### 11.12.2 M1：落地全站 latest 兜底数据源（写链路）
+
+交付物：
+1) Redis ZSET：`feed:global:latest`（score=publishTimeMs，member=postId）。
+2) 发布事件消费处写入 latest：消费 `post.published` 时执行：
+   - `ZADD feed:global:latest {ts} {postId}`
+   - `ZREMRANGEBYRANK` 裁剪到 `feed.global.latest.maxSize`
+
+建议落点（现成入口，最少改动）：
+- `FeedFanoutDispatcherConsumer` 已消费 `PostPublishedEvent`，可在 dispatch 中追加写 latest（不影响 fanout 拆片语义）。
+
+验证：
+- 发布一条内容后，Redis 中 `feed:global:latest` 能查到该 postId，且超量会被裁剪。
+
+#### 11.12.3 M2：RECOMMEND 读链路最小可用（先不接 Gorse，只用 latest 生成候选）
+
+交付物：
+1) 修正分流：`timeline(userId, cursor, limit, feedType)` 必须对 `feedType=RECOMMEND` 走独立链路，
+   不能复用 FOLLOW 的 inbox/outbox 读取（否则会把关注流伪装成推荐流）。
+2) session cache（Redis）按 11.11.3 固化：
+   - LIST：`feed:rec:session:{userId}:{sessionId}`
+   - SET：`feed:rec:seen:{userId}:{sessionId}`
+   - STRING：`feed:rec:latestCursor:{userId}:{sessionId}`（用于 latest 补齐的 internal cursor）
+3) recommendTimeline 扫描逻辑完全按 11.11.2：
+   - `scanIndex` 是扫描指针，不是“已返回条数”
+   - `nextCursor` 必须推进到“扫描结束位置”（避免过滤后卡住）
+   - 过滤：负反馈 postId + postType；回表 miss/下架剔除；每页作者去重
+4) 候选补齐（无 gorse）：当 session 候选不足时，从 `feed:global:latest` 按 internal cursor 追加候选，
+   写入 session LIST/SET，并更新 latestCursor。
+
+验证（按 11.11.9，M2 阶段至少应满足 1/2/4）：
+1) `GET /api/v1/feed/timeline?feedType=RECOMMEND` 连续翻 5 页：不重复、不漏页；同 cursor 重试返回一致（TTL 内）。
+2) 提交负反馈后：对应 postId 与其 postType 均不再出现。
+3) 不启动/不可达 gorse：仍能返回 latest，且可翻页推进。
+
+#### 11.12.4 M3：接入 Gorse（候选优先来自 Gorse；失败立即降级 latest）
+
+交付物：
+1) infrastructure 实现 `IRecommendationPort`：`GorseRecommendationPort`（HTTP client 只选一种；建议 Spring `RestClient`）。
+2) session 候选追加策略（按 11.11.3/11.11.6 写死数字）：
+   - 需要追加时，优先调用 gorse recommend 拉 `appendBatch = limit * prefetchFactor`
+   - 超时/失败：不做复杂重试，直接走 11.11.4 降级（session 扫描优先，其次 latest 补齐）
+3) 关键日志：sessionId/scanIndex/returned/scanned/appendRounds/fallbackReason 必须落地（见 11.11.8）。
+
+验证：
+- gorse 可用：RECOMMEND 候选主要来自 gorse；gorse 不可达：fallbackReason 可见，仍不白屏可翻页。
+
+#### 11.12.5 M4：写入 Item（内容发布 → upsertItem，独立队列）
+
+交付物：
+1) 新增队列：`feed.recommend.item.upsert.queue`，绑定 `social.feed` + `post.published`（独立队列，不与 fanout 共用）。
+2) consumer：`FeedRecommendItemUpsertConsumer`
+   - 收到 `PostPublishedEvent` 后回表 `contentRepository.findPost(postId)` 取 `postTypes`
+   - labels 归一化按 11.2：trim/去空/去重；不拼前缀、不做 JSON
+   - 调 `recommendationPort.upsertItem(postId, labels, publishTime)`
+
+验证：
+- 发布新内容后，gorse 中能查询到对应 item 且 labels 符合 11.2.1。
+
+#### 11.12.6 M5：写入 Feedback（read + like/comment；A 复用但必须独立队列）
+
+交付物：
+1) Read（曝光，选 1B）：仅对 RECOMMEND 实际下发的 items 写 `read` feedback（best-effort，异步/允许丢）。
+2) Like/Comment（复用 A）：消费 `interaction.notify` 的 `LIKE_ADDED` / `COMMENT_CREATED`，
+   但必须创建“推荐专用队列”绑定 `interaction.notify`，不能复用 `interaction.notify.queue`（避免与通知消费者共用队列）。
+
+验证：
+- 触发点赞/评论后，gorse 能看到对应 feedback；同时通知链路不受影响（队列独立）。
+
+#### 11.12.7 M6：反馈通道 C（撤销 unlike/unstar 与未来扩展，独立事件与队列）
+
+背景（为什么要单独拆一步）：
+- 当前代码只会在“真的新增点赞”时发通知事件（`delta==+1` 才发 `LIKE_ADDED`），撤销不会产生任何事件：
+  - 参考：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
+- 但 Phase 3 的上线口径明确要求：撤销语义用反向 feedbackType 表达（`unlike` / `unstar`），并且走 C 通道，避免污染通知语义（见 11.0）。
+
+交付物：
+1) 新增推荐反馈专用事件（C 通道）：建议单独 event（不要复用 `InteractionNotifyEvent`）
+   - 名称建议：`RecommendFeedbackEvent`（继承 `BaseEvent`）
+   - 字段最小化（足够喂给 gorse）：`fromUserId`（或 `userId`）、`postId`、`feedbackType`、`tsMs`、`eventId`
+   - feedbackType 最少落地：`unlike`（取消点赞）
+   - 其它类型（预留，不要求一次做完）：`unstar` / `share` / `unshare`（将来有域事件再接）
+2) MQ 拓扑（推荐专用 routing key + 独立队列，不与通知共用）：
+   - 建议 exchange：`social.recommend`（Direct）
+   - routingKey：`recommend.feedback`
+   - queue：`feed.recommend.feedback.queue`（必须独立；不要复用 `interaction.notify.queue`）
+   - DLQ：照现有 MQ 配置风格补齐（避免“消费失败直接丢”）
+3) 生产端（撤销点在哪里写）：点赞撤销成功（`delta==-1`）后发布 `RecommendFeedbackEvent(feedbackType=\"unlike\")`
+   - 注意：必须以“状态真的变化”为准（靠 delta 判断），不要对幂等请求重复发事件。
+4) 消费端：`FeedRecommendFeedbackConsumer` 消费 `feed.recommend.feedback.queue`
+   - 调用：`IRecommendationPort.insertFeedback(userId, postId, feedbackType, tsMs)`（best-effort；失败打日志/指标；不阻断主链路）
+
+验证：
+- 用户取消点赞后，gorse 侧能看到 `unlike` feedback。
+- 通知链路不受影响（因为撤销不走 `interaction.notify`）。
+
+#### 11.12.8 M7：读链路扩展：POPULAR / NEIGHBORS（统一成“候选集 → 过滤 → 回表 → 组装”）
+
+说明：
+- 这两条不是 Phase 3 的“最小可交付”必需项（最小只要求 RECOMMEND），但属于 11.6 描述的完整能力，补齐后方案才算“全覆盖”。
+
+交付物：
+1) `IRecommendationPort` 补齐调用：
+   - POPULAR：`GET /api/popular?user-id={userId}&n=K&offset=O`
+   - NEIGHBORS：`GET /api/item/{postId}/neighbors?n=K`
+2) timeline 分支（不新增 Controller，仍复用 `GET /api/v1/feed/timeline`）：
+   - `feedType=POPULAR`：cursor 是不透明 token，格式：`POP:{offset}`（offset 是扫描指针，不是“已返回条数”）
+   - `feedType=NEIGHBORS`：cursor 是不透明 token，格式：`NEI:{seedPostId}:{offset}`（seedPostId 必填；offset 是扫描指针）
+3) 两者都必须复用同一套“过滤/组装”规则（见 11.6）：
+   - 负反馈：postId + postType
+   - 内容不存在/下架：回表 miss 直接剔除
+   - 组装顺序：按候选扫描顺序返回（不做本地重排，见 11.9）
+4) 翻页推进规则与 RECOMMEND 一致（见 11.11.2）：
+   - `nextCursor` 的 offset 以“扫描过的候选”为准，避免过滤后卡住
+   - 允许返回不足 limit，但必须能继续翻页推进
+
+验证：
+- POPULAR：连续翻页不重复、不漏页（允许过滤导致“每页不足”），offset 会持续推进。
+- NEIGHBORS：给定 seedPostId 后能翻页推进（或明确只支持单页并返回 nextCursor=null），且负反馈过滤生效。
+
+#### 11.12.9 M8：内容状态变更同步推荐池（删帖/封禁/撤回 → hide/delete item）
+
+现状风险：
+- 读侧可以靠回表过滤掉下架内容（`selectByIds` 只查 `status=2`），但推荐引擎仍可能反复吐出已删/下架 id，导致扫描浪费与体验抖动。
+- 当前删帖入口存在（软删），但没有任何 MQ 事件（参考：`ContentService.delete(...)`）。
+
+交付物：
+1) 定义“内容下架/删除”事件（二选一，别两套都做）：
+   - 选 A：`PostDeletedEvent(postId, operatorId, tsMs)`
+   - 选 B：`PostStatusChangedEvent(postId, fromStatus, toStatus, tsMs)`
+2) after-commit 发布事件（参考发布链路的 after-commit 写法，避免事务未提交导致消费者读到脏数据）：
+   - 发布成功：仍用 `PostPublishedEvent`
+   - 删除/下架成功：发布上面的删除/状态变更事件
+3) MQ 拓扑（建议复用 `social.feed` exchange，新增 routingKey）：
+   - routingKey：`post.deleted`（或 `post.status.changed`）
+   - queue：`feed.recommend.item.delete.queue`（独立队列）
+4) 推荐写入端口扩展（为 delete/hide 留一个口子）：
+   - 扩展 `IRecommendationPort`：增加 `deleteItem(postId)` 或 `hideItem(postId)`（二选一）
+5) consumer：消费删帖事件后调用端口 delete/hide（best-effort；失败打日志/指标；不阻断主流程）
+
+验证：
+- 删除内容后：推荐池不会继续返回该 postId（读侧过滤 + 推荐侧 hide/delete 双保险）。
+
+#### 11.12.10 M9：上线必补（冷启动回灌 + 可观测性 + 可重复验收）
+
+交付物：
+1) 冷启动回灌（必须，见 11.11.5）：扫描 `content_post(status=2)` 回灌 Item。
+2) 可观测性（见 11.11.8）：至少能判断是否在降级，以及降级原因。
+3) 全量验收用例（见 11.11.9）：四条都必须可复现通过。
 
 ---
 

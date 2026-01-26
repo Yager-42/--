@@ -1,27 +1,38 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
+import cn.nexus.domain.social.adapter.port.IRecommendationPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedNegativeFeedbackRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedRecommendSessionRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
+import cn.nexus.domain.social.model.valobj.FeedNeighborsCursor;
+import cn.nexus.domain.social.model.valobj.FeedPopularCursor;
+import cn.nexus.domain.social.model.valobj.FeedRecommendCursor;
 import cn.nexus.domain.social.model.valobj.FeedTimelineVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 分发与 Feed 服务实现：提供 timeline/profile 与负反馈能力。
@@ -29,6 +40,7 @@ import java.util.Set;
  * @author codex
  * @since 2026-01-12
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class FeedService implements IFeedService {
@@ -45,6 +57,9 @@ public class FeedService implements IFeedService {
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
     private final IFeedNegativeFeedbackRepository feedNegativeFeedbackRepository;
     private final IFeedInboxRebuildService feedInboxRebuildService;
+    private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
+    private final IFeedRecommendSessionRepository feedRecommendSessionRepository;
+    private final IRecommendationPort recommendationPort;
 
     /**
      * 大 V 判定阈值：粉丝数 >= 阈值则视为大 V（默认 500000）。 {@code int}
@@ -95,6 +110,24 @@ public class FeedService implements IFeedService {
     private int bigvPoolTriggerFollowings;
 
     /**
+     * 推荐候选预取系数：appendBatch = limit * prefetchFactor（默认 5）。 {@code int}
+     */
+    @Value("${feed.recommend.prefetchFactor:5}")
+    private int recommendPrefetchFactor;
+
+    /**
+     * 推荐扫描预算系数：scanBudget = limit * scanFactor（默认 10）。 {@code int}
+     */
+    @Value("${feed.recommend.scanFactor:10}")
+    private int recommendScanFactor;
+
+    /**
+     * 推荐候选追加最大轮数（默认 3）。 {@code int}
+     */
+    @Value("${feed.recommend.maxAppendRounds:3}")
+    private int recommendMaxAppendRounds;
+
+    /**
      * 获取关注页时间线（FOLLOW）：Redis InboxTimeline + 负反馈过滤 + MySQL 回表。
      *
      * <p>Phase 2：仅在首页（cursor 为空）且 inbox key miss 时触发离线重建。</p>
@@ -112,6 +145,18 @@ public class FeedService implements IFeedService {
         }
         int normalizedLimit = normalizeLimit(limit);
         String source = (feedType == null || feedType.isBlank()) ? "FOLLOW" : feedType;
+        String normalizedFeedType = source.trim();
+
+        // Phase 3：推荐流必须走独立链路，不能复用 FOLLOW 的 inbox/outbox 读取。
+        if ("RECOMMEND".equalsIgnoreCase(normalizedFeedType)) {
+            return recommendTimeline(userId, cursor, normalizedLimit);
+        }
+        if ("POPULAR".equalsIgnoreCase(normalizedFeedType)) {
+            return popularTimeline(userId, cursor, normalizedLimit);
+        }
+        if ("NEIGHBORS".equalsIgnoreCase(normalizedFeedType)) {
+            return neighborsTimeline(userId, cursor, normalizedLimit);
+        }
 
         boolean homePage = cursor == null || cursor.isBlank();
         if (homePage) {
@@ -137,6 +182,458 @@ public class FeedService implements IFeedService {
 
         List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit);
         return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
+    }
+
+    /**
+     * 推荐页时间线（RECOMMEND）：session cache + scanIndex 扫描推进 + 过滤/回表/组装。
+     *
+     * <p>注意：scanIndex 是扫描指针，不是“已返回条数”。nextCursor 必须推进到扫描结束位置。</p>
+     */
+    private FeedTimelineVO recommendTimeline(Long userId, String cursor, int normalizedLimit) {
+        FeedRecommendCursor.Parsed parsed = FeedRecommendCursor.parse(cursor);
+        String sessionId = parsed == null ? null : parsed.sessionId();
+        long scanIndex = parsed == null ? 0L : parsed.scanIndex();
+
+        boolean validSession = sessionId != null && feedRecommendSessionRepository.sessionExists(userId, sessionId);
+        if (!validSession) {
+            sessionId = newRecommendSessionId();
+            scanIndex = 0L;
+        }
+
+        int scanFactor = Math.max(1, recommendScanFactor);
+        int prefetchFactor = Math.max(1, recommendPrefetchFactor);
+        int maxRounds = Math.max(1, recommendMaxAppendRounds);
+        int scanBudget = Math.max(1, normalizedLimit) * scanFactor;
+        int appendBatch = Math.max(1, normalizedLimit) * prefetchFactor;
+
+        Set<Long> negativePostIds = feedNegativeFeedbackRepository.listPostIds(userId);
+        if (negativePostIds == null) {
+            negativePostIds = Set.of();
+        }
+        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
+        if (negativeTypes == null) {
+            negativeTypes = Set.of();
+        }
+
+        EnsureRecommendResult ensureResult = ensureRecommendCandidates(userId, sessionId, scanIndex, scanBudget, appendBatch, maxRounds);
+
+        List<FeedItemVO> items = new ArrayList<>(normalizedLimit);
+        Set<Long> seenAuthors = new HashSet<>();
+        long idx = Math.max(0L, scanIndex);
+        int scanned = 0;
+
+        // 小批量回表：减少 DB 次数，同时保证 scanIndex 只推进“实际扫描过的候选”。
+        final int chunkSize = 50;
+        while (items.size() < normalizedLimit && scanned < scanBudget) {
+            int remaining = scanBudget - scanned;
+            int take = Math.min(chunkSize, remaining);
+            if (take <= 0) {
+                break;
+            }
+            long endIndex = idx + take - 1;
+            List<Long> batch = feedRecommendSessionRepository.range(userId, sessionId, idx, endIndex);
+            if (batch.isEmpty()) {
+                break;
+            }
+
+            List<Long> toFetch = new ArrayList<>(batch.size());
+            for (Long candidateId : batch) {
+                if (candidateId == null || negativePostIds.contains(candidateId)) {
+                    continue;
+                }
+                toFetch.add(candidateId);
+            }
+            Map<Long, ContentPostEntity> postById = mapById(contentRepository.listPostsByIds(toFetch));
+
+            for (Long candidateId : batch) {
+                idx++;
+                scanned++;
+                if (scanned > scanBudget) {
+                    break;
+                }
+                if (candidateId == null) {
+                    continue;
+                }
+                if (negativePostIds.contains(candidateId)) {
+                    continue;
+                }
+                ContentPostEntity post = postById.get(candidateId);
+                if (post == null) {
+                    continue;
+                }
+                if (hitNegativePostTypes(post, negativeTypes)) {
+                    continue;
+                }
+                Long authorId = post.getUserId();
+                if (authorId == null || !seenAuthors.add(authorId)) {
+                    continue;
+                }
+                items.add(FeedItemVO.builder()
+                        .postId(post.getPostId())
+                        .authorId(authorId)
+                        .text(post.getContentText())
+                        .publishTime(post.getCreateTime())
+                        .source("RECOMMEND")
+                        .build());
+                if (items.size() >= normalizedLimit) {
+                    break;
+                }
+            }
+        }
+
+        String nextCursor = idx == scanIndex ? null : FeedRecommendCursor.format(sessionId, idx);
+        writeRecommendReadFeedbackAsync(userId, items);
+        log.info("feed recommend timeline, userId={}, sessionId={}, scanIndex={}, limit={}, scanned={}, returned={}, appendRounds={}, fallbackReason={}",
+                userId, sessionId, scanIndex, normalizedLimit, scanned, items.size(),
+                ensureResult == null ? 0 : ensureResult.appendRounds(),
+                ensureResult == null ? "" : ensureResult.fallbackReason());
+        return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
+    }
+
+    /**
+     * 热门页时间线（POPULAR）：以 offset 为扫描指针，按“候选 -> 过滤 -> 回表 -> 组装”输出。
+     */
+    private FeedTimelineVO popularTimeline(Long userId, String cursor, int normalizedLimit) {
+        FeedPopularCursor.Parsed parsed = FeedPopularCursor.parse(cursor);
+        long offset = parsed == null ? 0L : parsed.offset();
+
+        int scanFactor = Math.max(1, recommendScanFactor);
+        int prefetchFactor = Math.max(1, recommendPrefetchFactor);
+        int maxRounds = Math.max(1, recommendMaxAppendRounds);
+        int scanBudget = Math.max(1, normalizedLimit) * scanFactor;
+        int appendBatch = Math.max(1, normalizedLimit) * prefetchFactor;
+
+        Set<Long> negativePostIds = feedNegativeFeedbackRepository.listPostIds(userId);
+        if (negativePostIds == null) {
+            negativePostIds = Set.of();
+        }
+        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
+        if (negativeTypes == null) {
+            negativeTypes = Set.of();
+        }
+
+        List<FeedItemVO> items = new ArrayList<>(normalizedLimit);
+        Set<Long> seenAuthors = new HashSet<>();
+        long idx = Math.max(0L, offset);
+        int scanned = 0;
+        int rounds = 0;
+
+        while (items.size() < normalizedLimit && scanned < scanBudget && rounds < maxRounds) {
+            Integer safeOffset = toInt(idx);
+            if (safeOffset == null) {
+                break;
+            }
+            List<Long> candidates = recommendationPort.popular(userId, appendBatch, safeOffset);
+            if (candidates == null || candidates.isEmpty()) {
+                break;
+            }
+
+            List<Long> toFetch = new ArrayList<>(candidates.size());
+            for (Long candidateId : candidates) {
+                if (candidateId == null || negativePostIds.contains(candidateId)) {
+                    continue;
+                }
+                toFetch.add(candidateId);
+            }
+            Map<Long, ContentPostEntity> postById = mapById(contentRepository.listPostsByIds(toFetch));
+
+            for (Long candidateId : candidates) {
+                idx++;
+                scanned++;
+                if (scanned > scanBudget) {
+                    break;
+                }
+                if (candidateId == null || negativePostIds.contains(candidateId)) {
+                    continue;
+                }
+                ContentPostEntity post = postById.get(candidateId);
+                if (post == null) {
+                    continue;
+                }
+                if (hitNegativePostTypes(post, negativeTypes)) {
+                    continue;
+                }
+                Long authorId = post.getUserId();
+                if (authorId == null || !seenAuthors.add(authorId)) {
+                    continue;
+                }
+                items.add(FeedItemVO.builder()
+                        .postId(post.getPostId())
+                        .authorId(authorId)
+                        .text(post.getContentText())
+                        .publishTime(post.getCreateTime())
+                        .source("POPULAR")
+                        .build());
+                if (items.size() >= normalizedLimit) {
+                    break;
+                }
+            }
+            rounds++;
+        }
+
+        String nextCursor = idx == offset ? null : FeedPopularCursor.format(idx);
+        return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
+    }
+
+    /**
+     * 相关推荐时间线（NEIGHBORS）：seedPostId 必填，offset 为扫描指针。
+     */
+    private FeedTimelineVO neighborsTimeline(Long userId, String cursor, int normalizedLimit) {
+        FeedNeighborsCursor.Parsed parsed = FeedNeighborsCursor.parse(cursor);
+        if (parsed == null) {
+            return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
+        }
+        long seedPostId = parsed.seedPostId();
+        long offset = parsed.offset();
+
+        int scanFactor = Math.max(1, recommendScanFactor);
+        int scanBudget = Math.max(1, normalizedLimit) * scanFactor;
+
+        Set<Long> negativePostIds = feedNegativeFeedbackRepository.listPostIds(userId);
+        if (negativePostIds == null) {
+            negativePostIds = Set.of();
+        }
+        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
+        if (negativeTypes == null) {
+            negativeTypes = Set.of();
+        }
+
+        long idx = Math.max(0L, offset);
+        int needN = Math.max(1, safeNeighborsN(idx, scanBudget));
+        List<Long> all = recommendationPort.neighbors(seedPostId, needN);
+        if (all == null || all.isEmpty()) {
+            return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
+        }
+        Integer start = toInt(idx);
+        if (start == null || start >= all.size()) {
+            return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
+        }
+        int endExclusive = Math.min(all.size(), start + scanBudget);
+        List<Long> slice = all.subList(start, endExclusive);
+
+        List<Long> toFetch = new ArrayList<>(slice.size());
+        for (Long candidateId : slice) {
+            if (candidateId == null || negativePostIds.contains(candidateId)) {
+                continue;
+            }
+            toFetch.add(candidateId);
+        }
+        Map<Long, ContentPostEntity> postById = mapById(contentRepository.listPostsByIds(toFetch));
+
+        List<FeedItemVO> items = new ArrayList<>(normalizedLimit);
+        Set<Long> seenAuthors = new HashSet<>();
+        int scanned = 0;
+        for (Long candidateId : slice) {
+            idx++;
+            scanned++;
+            if (scanned > scanBudget) {
+                break;
+            }
+            if (candidateId == null || negativePostIds.contains(candidateId)) {
+                continue;
+            }
+            ContentPostEntity post = postById.get(candidateId);
+            if (post == null) {
+                continue;
+            }
+            if (hitNegativePostTypes(post, negativeTypes)) {
+                continue;
+            }
+            Long authorId = post.getUserId();
+            if (authorId == null || !seenAuthors.add(authorId)) {
+                continue;
+            }
+            items.add(FeedItemVO.builder()
+                    .postId(post.getPostId())
+                    .authorId(authorId)
+                    .text(post.getContentText())
+                    .publishTime(post.getCreateTime())
+                    .source("NEIGHBORS")
+                    .build());
+            if (items.size() >= normalizedLimit) {
+                break;
+            }
+        }
+
+        String nextCursor = idx == offset ? null : FeedNeighborsCursor.format(seedPostId, idx);
+        return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
+    }
+
+    private Integer toInt(long value) {
+        if (value < 0 || value > Integer.MAX_VALUE) {
+            return null;
+        }
+        return (int) value;
+    }
+
+    private int safeNeighborsN(long offset, int scanBudget) {
+        long n = Math.max(1L, offset + scanBudget);
+        if (n > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) n;
+    }
+
+    private Map<Long, ContentPostEntity> mapById(List<ContentPostEntity> posts) {
+        if (posts == null || posts.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, ContentPostEntity> map = new HashMap<>(posts.size());
+        for (ContentPostEntity post : posts) {
+            if (post == null || post.getPostId() == null) {
+                continue;
+            }
+            map.put(post.getPostId(), post);
+        }
+        return map;
+    }
+
+    /**
+     * 确保 session 候选足够：候选不足时，优先从 gorse 拉取；失败/为空则降级用全站 latest 补齐。
+     */
+    private EnsureRecommendResult ensureRecommendCandidates(Long userId,
+                                                           String sessionId,
+                                                           long scanIndex,
+                                                           int scanBudget,
+                                                           int appendBatch,
+                                                           int maxAppendRounds) {
+        if (userId == null || sessionId == null || sessionId.isBlank()) {
+            return new EnsureRecommendResult(0, "INVALID");
+        }
+        long needSize = Math.max(0L, scanIndex) + Math.max(1, scanBudget);
+
+        int rounds = 0;
+        boolean gorseFailed = false;
+        String fallbackReason = "NONE";
+
+        int maxRounds = Math.max(1, maxAppendRounds);
+        int batch = Math.max(1, appendBatch);
+        while (feedRecommendSessionRepository.size(userId, sessionId) < needSize && rounds < maxRounds) {
+            // 1) 优先从 gorse 拉候选，写入 session（LIST+SET 去重）。
+            if (!gorseFailed) {
+                try {
+                    List<Long> candidates = recommendationPort.recommend(userId, batch);
+                    if (candidates == null || candidates.isEmpty()) {
+                        if ("NONE".equals(fallbackReason)) {
+                            fallbackReason = "GORSE_EMPTY";
+                        }
+                    } else {
+                        int appended = feedRecommendSessionRepository.appendCandidates(userId, sessionId, candidates);
+                        if (appended <= 0 && "NONE".equals(fallbackReason)) {
+                            fallbackReason = "GORSE_EMPTY";
+                        }
+                    }
+                } catch (Exception e) {
+                    gorseFailed = true;
+                    fallbackReason = "GORSE_FAILED";
+                    log.warn("gorse recommend failed, userId={}, sessionId={}, scanIndex={}, batch={}",
+                            userId, sessionId, scanIndex, batch, e);
+                }
+            }
+
+            if (feedRecommendSessionRepository.size(userId, sessionId) >= needSize) {
+                rounds++;
+                break;
+            }
+
+            // 2) gorse 不可用或候选不足：降级用全站 latest 补齐（internal cursor：timeMs:postId）。
+            String latestCursor = feedRecommendSessionRepository.getLatestCursor(userId, sessionId);
+            LatestCursor parsed = LatestCursor.parse(latestCursor);
+            List<FeedInboxEntryVO> entries = feedGlobalLatestRepository.pageLatest(
+                    parsed == null ? null : parsed.timeMs,
+                    parsed == null ? null : parsed.postId,
+                    batch
+            );
+            if (entries == null || entries.isEmpty()) {
+                rounds++;
+                break;
+            }
+
+            List<Long> ids = new ArrayList<>(entries.size());
+            FeedInboxEntryVO last = null;
+            for (FeedInboxEntryVO entry : entries) {
+                if (entry == null || entry.getPostId() == null || entry.getPublishTimeMs() == null) {
+                    continue;
+                }
+                ids.add(entry.getPostId());
+                last = entry;
+            }
+
+            feedRecommendSessionRepository.appendCandidates(userId, sessionId, ids);
+            if (last != null) {
+                feedRecommendSessionRepository.setLatestCursor(userId, sessionId, LatestCursor.format(last.getPublishTimeMs(), last.getPostId()));
+            }
+            rounds++;
+        }
+        return new EnsureRecommendResult(rounds, fallbackReason);
+    }
+
+    private String newRecommendSessionId() {
+        String raw = UUID.randomUUID().toString().replace("-", "");
+        return raw.length() <= 12 ? raw : raw.substring(0, 12);
+    }
+
+    private record EnsureRecommendResult(int appendRounds, String fallbackReason) {
+    }
+
+    private void writeRecommendReadFeedbackAsync(Long userId, List<FeedItemVO> items) {
+        if (userId == null || items == null || items.isEmpty()) {
+            return;
+        }
+        List<Long> postIds = new ArrayList<>(items.size());
+        for (FeedItemVO item : items) {
+            if (item == null || item.getPostId() == null) {
+                continue;
+            }
+            postIds.add(item.getPostId());
+        }
+        if (postIds.isEmpty()) {
+            return;
+        }
+        long tsMs = System.currentTimeMillis();
+        CompletableFuture.runAsync(() -> {
+            for (Long postId : postIds) {
+                if (postId == null) {
+                    continue;
+                }
+                try {
+                    recommendationPort.insertFeedback(userId, postId, "read", tsMs);
+                } catch (Exception e) {
+                    // best-effort：失败不影响主链路
+                    log.warn("recommend read feedback failed, userId={}, postId={}", userId, postId, e);
+                }
+            }
+        });
+    }
+
+    private record LatestCursor(Long timeMs, Long postId) {
+
+        private static LatestCursor parse(String cursor) {
+            if (cursor == null || cursor.isBlank()) {
+                return null;
+            }
+            String[] parts = cursor.trim().split(":", -1);
+            if (parts.length != 2) {
+                return null;
+            }
+            try {
+                long time = Long.parseLong(parts[0]);
+                long id = Long.parseLong(parts[1]);
+                if (time < 0 || id < 0) {
+                    return null;
+                }
+                return new LatestCursor(time, id);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+
+        private static String format(Long timeMs, Long postId) {
+            if (timeMs == null || postId == null) {
+                return null;
+            }
+            return timeMs + ":" + postId;
+        }
     }
 
     private MaxIdCursor resolveMaxIdCursor(String cursor) {

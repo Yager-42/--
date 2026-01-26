@@ -48,4 +48,16 @@ public interface IContentPostDao {
                                                    @Param("cursorTime") java.util.Date cursorTime,
                                                    @Param("cursorPostId") Long cursorPostId,
                                                    @Param("limit") Integer limit);
+
+    /**
+     * 全站分页查询已发布内容（用于推荐冷启动回灌）。
+     *
+     * @param cursorTime    游标时间（create_time），为空表示从最新开始
+     * @param cursorPostId  游标 postId，需与 cursorTime 同时传入
+     * @param limit         单页数量
+     * @return 内容列表（按时间倒序）
+     */
+    java.util.List<ContentPostPO> selectPublishedPage(@Param("cursorTime") java.util.Date cursorTime,
+                                                      @Param("cursorPostId") Long cursorPostId,
+                                                      @Param("limit") Integer limit);
 }

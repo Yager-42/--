@@ -1,5 +1,5 @@
 {
-  "date": "2026-01-21",
+  "date": "2026-01-26",
   "executor": "Codex (Linus-mode)",
   "cwd": "C:\\\\Users\\\\Administrator\\\\Desktop\\\\文档",
   "repo": {
@@ -17,13 +17,13 @@
     ]
   },
   "focus": {
-    "feature": "notification business (aggregate inbox + MQ consumer)",
-    "docSource": ".codex/notification-business-implementation.md#10"
+    "feature": "distribution/feed Phase 3 recommend (RECOMMEND/POPULAR/NEIGHBORS + gorse + fallback latest)",
+    "docSource": ".codex/distribution-feed-implementation.md#11.12"
   },
   "observations": [
-    "Existing API: GET /api/v1/notification/list existed but domain implementation was placeholder.",
-    "Project already has RabbitMQ + JSON message converter, and existing inbox pattern (relation_event_inbox).",
-    "Comment system supports two-level threads; like system provides delta (+1/-1/0) as the idempotency signal."
+    "Existing follow feed (FOLLOW) is implemented in domain FeedService: inbox/outbox/pool merge with cursor=postId; must not break this userspace behavior.",
+    "Negative feedback repository already supports both postId and postType sets in Redis; RECOMMEND can reuse it for filtering.",
+    "RabbitMQ topology patterns already exist: feed fanout has DLQ; interaction.notify has DLQ; independent queues are required to avoid consumers stealing messages."
   ]
 }
 

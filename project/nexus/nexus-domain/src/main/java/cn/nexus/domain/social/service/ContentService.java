@@ -267,8 +267,12 @@ public class ContentService implements IContentService {
      * 软删内容：按 userId 校验后设置删除状态，返回是否删除成功及状态文案。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public OperationResultVO delete(Long userId, Long postId) {
         boolean ok = contentRepository.softDelete(postId, userId);
+        if (ok) {
+            dispatchDeleteAfterCommit(postId, userId);
+        }
         return OperationResultVO.builder()
                 .success(ok)
                 .id(postId)
@@ -774,6 +778,26 @@ public class ContentService implements IContentService {
                 } catch (Exception e) {
                     // afterCommit 失败不会回滚业务事务：只能记录，后续再补偿（如需要可引入 outbox）。
                     log.error("post published dispatch failed after commit, postId={}, userId={}", postId, userId, e);
+                }
+            }
+        });
+    }
+
+    private void dispatchDeleteAfterCommit(Long postId, Long operatorId) {
+        if (postId == null || operatorId == null) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            contentDispatchPort.onDeleted(postId, operatorId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    contentDispatchPort.onDeleted(postId, operatorId);
+                } catch (Exception e) {
+                    log.error("post deleted dispatch failed after commit, postId={}, operatorId={}", postId, operatorId, e);
                 }
             }
         });

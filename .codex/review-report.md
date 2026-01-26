@@ -269,3 +269,54 @@
 - 已修复 高风险 2：评论计数消费加幂等 + 计数防负数（`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentLikeChangedConsumer.java:35`、`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RootReplyCountChangedConsumer.java:35`、`project/nexus/nexus-infrastructure/src/main/resources/mapper/social/CommentMapper.xml:40`）。
 - 未修复 致命问题 2：x-delayed-message 插件依赖仍保留（按你的要求）；上线前请在环境验收清单里确认插件已安装。
 
+
+
+---
+
+# 追加：Phase 3 推荐流 CR
+
+日期：2026-01-26  
+执行者：Codex（Linus-mode）
+
+## 范围
+
+- 依据：`.codex/distribution-feed-implementation.md` 第 11 章与 `11.12 最小逐步实现步骤`（M0~M9）。
+- 目标：在不破坏 FOLLOW（cursor=postId）前提下，落地 RECOMMEND/POPULAR/NEIGHBORS + gorse + fallback + item/feedback 写入 + 删帖 deleteItem + 冷启动回灌。
+
+## Linus Review（走通性与品味）
+
+【品味评分】好品味  
+【综合评分】88/100（通过）
+
+### 好品味点（消除特殊情况）
+
+- cursor 不再硬绑 postId：FOLLOW 仍是 postId；推荐流改为不透明 token（REC/POP/NEI），避免“推荐流天然无序”导致的边界补丁。
+- 推荐统一成一条数据流：候选集 -> 过滤（负反馈 postId/postType + 回表 miss/下架 + 每页作者去重）-> 组装；`nextCursor` 以“扫描过的候选位置”推进，避免过滤后卡页。
+- 外部依赖失败策略够实用：gorse 超时/失败立即降级 latest（不 500、不白屏、仍可翻页推进）。
+
+### Never break userspace（零破坏性）
+
+- FOLLOW 行为隔离：`FeedService.timeline` 对 RECOMMEND/POPULAR/NEIGHBORS 走独立分支，FOLLOW 仍沿用 inbox/outbox 读取与原 cursor 协议。
+- MQ 不抢消息：推荐侧复用 `interaction.notify` 时使用独立队列绑定 routingKey，绝不复用 `interaction.notify.queue`。
+
+### 风险点（现实问题，不写假想补丁）
+
+- `read` feedback 当前用 `CompletableFuture.runAsync`（默认线程池）：高并发可能放大资源压力；后续如要收敛，建议改为受控线程池或消息化（不改变语义即可）。
+- 推荐写入/删帖 consumer 走 best-effort 且吞异常：DLQ 可能不触发，这属于“允许丢”的取舍；若将来要求必须送达，需要改变失败策略。
+
+## 本地编译
+
+- `project/nexus` 下执行 `mvn -DskipTests package`：BUILD SUCCESS（Finished at: 2026-01-26T12:18:19+08:00）。
+
+## 关键文件（Phase 3）
+
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/FeedRecommendCursor.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/FeedPopularCursor.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/FeedNeighborsCursor.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/GorseRecommendationPort.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedRecommendItemMqConfig.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedRecommendFeedbackAMqConfig.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedRecommendFeedbackMqConfig.java`
+- `project/nexus/nexus-types/src/main/java/cn/nexus/types/event/PostDeletedEvent.java`
+- `project/nexus/nexus-app/src/main/java/cn/nexus/config/FeedRecommendItemBackfillRunner.java`

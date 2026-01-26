@@ -3,6 +3,7 @@ package cn.nexus.domain.social.service;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionDelayPort;
 import cn.nexus.domain.social.adapter.port.IInteractionNotifyEventPort;
+import cn.nexus.domain.social.adapter.port.IRecommendFeedbackEventPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.*;
@@ -10,6 +11,7 @@ import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
 import cn.nexus.types.event.interaction.EventType;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
+import cn.nexus.types.event.recommend.RecommendFeedbackEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -40,6 +42,7 @@ public class ReactionLikeService implements IReactionLikeService {
     private final IReactionRepository reactionRepository;
     private final ISocialIdPort socialIdPort;
     private final IInteractionNotifyEventPort interactionNotifyEventPort;
+    private final IRecommendFeedbackEventPort recommendFeedbackEventPort;
 
     /**
      * 在线写：只做 Redis 原子更新 + 必要时投递延迟消息 + 打结构化日志。
@@ -67,6 +70,10 @@ public class ReactionLikeService implements IReactionLikeService {
         // 仅 delta=+1 才代表“真的新增点赞”，通知旁路只吃这个黄金信号。
         if (delta == 1) {
             publishNotifyLikeAdded(rid, userId, target);
+        }
+        // 撤销点赞：C 通道反馈（unlike），避免污染通知语义。
+        if (delta == -1) {
+            publishRecommendUnlike(rid, userId, target);
         }
 
         log.info(buildEventJson(rid, userId, target, action, desiredState, delta, currentCount, firstPending));
@@ -218,6 +225,24 @@ public class ReactionLikeService implements IReactionLikeService {
             interactionNotifyEventPort.publish(event);
         } catch (Exception e) {
             log.warn("publish InteractionNotifyEvent LIKE_ADDED failed, requestId={}, fromUserId={}, target={}", requestId, fromUserId, target, e);
+        }
+    }
+
+    private void publishRecommendUnlike(String requestId, Long fromUserId, ReactionTargetVO target) {
+        if (target == null || target.getTargetType() != ReactionTargetTypeEnumVO.POST) {
+            return;
+        }
+        try {
+            RecommendFeedbackEvent event = new RecommendFeedbackEvent();
+            // 用 rid 作为 eventId，便于排障与幂等去重（如需要）。
+            event.setEventId(requestId);
+            event.setFromUserId(fromUserId);
+            event.setPostId(target.getTargetId());
+            event.setFeedbackType("unlike");
+            event.setTsMs(socialIdPort.now());
+            recommendFeedbackEventPort.publish(event);
+        } catch (Exception e) {
+            log.warn("publish RecommendFeedbackEvent unlike failed, requestId={}, fromUserId={}, target={}", requestId, fromUserId, target, e);
         }
     }
 }

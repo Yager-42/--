@@ -2,6 +2,7 @@ package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCoreFansRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
@@ -42,6 +43,7 @@ public class FeedFanoutDispatcherConsumer {
     private final IFeedOutboxRepository feedOutboxRepository;
     private final IFeedCoreFansRepository feedCoreFansRepository;
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
+    private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private final IRelationRepository relationRepository;
 
     /**
@@ -97,6 +99,9 @@ public class FeedFanoutDispatcherConsumer {
 
         // 1) 作者自己无条件写入 inbox：发布者体验保底（且写入天然幂等）
         feedTimelineRepository.addToInbox(authorId, postId, publishTimeMs);
+
+        // 1.5) 写入全站 latest：推荐系统不可用时的兜底候选源（旁路，不影响 fanout 语义）
+        feedGlobalLatestRepository.addToLatest(postId, publishTimeMs);
 
         // 2) 大 V 默认不做“全量写扩散”，避免发布一条写入海量粉丝 inbox
         int followerCount = relationRepository.countFollowerIds(authorId);

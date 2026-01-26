@@ -42,3 +42,18 @@
 - [x] 热点回表 L1：`ContentRepository` 对热点 postId 启用 `JD HotKey + Caffeine` 短 TTL 缓存；写路径会 invalidate
 - [x] 本地编译验证：`project/nexus` 下执行 `mvn -DskipTests package` 通过
 
+
+
+---
+
+日期：2026-01-26  
+执行者：Codex（Linus-mode）
+
+## Phase 3 推荐流验收（RECOMMEND/POPULAR/NEIGHBORS + Gorse + fallback）
+
+- [x] 零破坏性：FOLLOW 用户可见行为保持不变（cursor 仍为 postId）；推荐流走独立分支与不透明 token。
+- [x] 本地编译验证：`project/nexus` 下执行 `mvn -DskipTests package`，BUILD SUCCESS（Finished at: 2026-01-26T12:18:19+08:00）。
+- [ ] 翻页稳定：RECOMMEND 连续翻 5 页，不重复、不漏页；同 cursor 重试返回一致（见 `.codex/testing.md`）。
+- [ ] 负反馈生效：postId 与 postType 均能过滤（见 `.codex/testing.md`）。
+- [ ] 下架不穿透：status!=2 的内容不返回（见 `.codex/testing.md`）。
+- [ ] 推荐挂了不白屏：gorse 不可达降级 latest 且可翻页（见 `.codex/testing.md`）。

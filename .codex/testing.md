@@ -154,3 +154,73 @@
 前置：启动 etcd + HotKey worker + dashboard，并配置规则 `prefix=post__`。  
 验证点：对同一个 postId 高频拉 timeline 时，`JdHotKeyStore.isHotKey(\"post__<postId>\")` 变为 true 后，回表会开始命中本地 L1（Caffeine，短 TTL）。  
 
+
+
+---
+
+# 追加：Phase 3 推荐流最小自测（按 11.11.9）
+
+日期：2026-01-26  
+执行者：Codex（Linus-mode）
+
+## 0. 本地编译验证（已执行）
+
+在 `project/nexus` 下执行：`mvn -DskipTests package`。  
+结果：BUILD SUCCESS（Finished at: 2026-01-26T12:18:19+08:00）。
+
+## 1. 前置条件（最小可跑）
+
+1) MySQL：`content_post` 至少有 30 条 `status=2` 的内容（否则翻 5 页没意义）。  
+2) Redis：可连接。  
+3) RabbitMQ：可连接（Phase 3 的 item/feedback 写入走 MQ）。  
+4) 应用启动：使用 `application-dev.yml`；HTTP 请求携带 Header `X-User-Id: <Long>`。  
+5) Gorse：可选；不可用也必须能降级（用例 4）。
+
+## 2. RECOMMEND 翻页稳定（用例 1）
+
+接口：GET `/api/v1/feed/timeline?feedType=RECOMMEND&limit=10&cursor=<可选>`。
+
+1) 首页：不传 cursor（或传空字符串）。保存返回的 `nextCursor`（应为 `REC:{sessionId}:{scanIndex}`）。  
+2) 连续翻 5 页：用上一页的 `nextCursor` 作为下一页 cursor。  
+   - 期望：不重复、不漏页（cursor 持续推进，接口不会“卡住”）。  
+   - 期望：每页作者去重（同一页里 `items[].authorId` 不重复）。  
+3) 幂等重试：对任意一页，用同一个 cursor 重试 2 次。  
+   - 期望：在 session TTL 内返回一致（items 与 nextCursor 保持一致）。  
+4) 非法 cursor：传入一个明显不合法的 cursor（例如 `REC:bad`）。  
+   - 期望：当作首页处理（不 500、能正常返回）。
+
+## 3. 负反馈生效（用例 2）
+
+1) 从 RECOMMEND 结果中挑一个 `postId` 作为 targetId。  
+2) 提交负反馈：POST `/api/v1/feed/feedback/negative`，body 示例：
+
+```json
+{"targetId":123,"type":"game_news","reasonCode":"not_interested","extraTags":[]}
+```
+
+说明：
+- `type` 可选：如果你知道该帖的 postType（来自 `content_post_type.type`），填入后会触发“postType 级过滤”；填空字符串则只验证 postId 过滤。  
+3) 继续拉 RECOMMEND 翻页。  
+   - 期望：该 postId 不再出现；若填写了合法 type，该 type 的内容也不再出现。  
+4) 撤销负反馈：DELETE `/api/v1/feed/feedback/negative/{targetId}`（请求体可传 `{}`，服务端忽略）。  
+   - 期望：success=true；后续该 postId 有机会再次出现（只要数据还在且能被扫到）。
+
+## 4. 下架不穿透（用例 3）
+
+1) 选择一个曾出现在 RECOMMEND 的 postId。  
+2) 将 DB 中该记录的 `content_post.status` 改为非 2（例如 6：删除）。  
+3) 同用户继续拉 RECOMMEND 翻页。  
+   - 期望：该 postId 不再返回（回表过滤生效，即使推荐候选仍吐出该 id）。
+
+## 5. gorse 不可用仍不白屏（用例 4）
+
+1) 让 gorse 不可达：停止 gorse 或把 `feed.recommend.baseUrl` 配成不可达地址。  
+2) 同用户拉 RECOMMEND 首页并连续翻页。  
+   - 期望：接口仍返回内容（不 500、不空白），并且 cursor 可推进翻页（降级到全站 latest）。  
+   - 期望：日志里能看到 `fallbackReason`（例如 GORSE_FAILED/GORSE_EMPTY）。
+
+## 6. 可选：POPULAR / NEIGHBORS（M7）
+
+- POPULAR：GET `/api/v1/feed/timeline?feedType=POPULAR&limit=10`（cursor 为空视为首页），`nextCursor` 形如 `POP:{offset}`。  
+- NEIGHBORS：必须提供 cursor，格式 `NEI:{seedPostId}:0`，示例：`GET /api/v1/feed/timeline?feedType=NEIGHBORS&limit=10&cursor=NEI:123:0`。  
+  - 期望：负反馈过滤生效、每页作者去重、nextCursor 继续推进（或为空表示结束）。

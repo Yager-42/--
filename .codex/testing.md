@@ -224,3 +224,33 @@
 - POPULAR：GET `/api/v1/feed/timeline?feedType=POPULAR&limit=10`（cursor 为空视为首页），`nextCursor` 形如 `POP:{offset}`。  
 - NEIGHBORS：必须提供 cursor，格式 `NEI:{seedPostId}:0`，示例：`GET /api/v1/feed/timeline?feedType=NEIGHBORS&limit=10&cursor=NEI:123:0`。  
   - 期望：负反馈过滤生效、每页作者去重、nextCursor 继续推进（或为空表示结束）。
+
+---
+
+# 追加：风控与信任服务（文档）最小验证
+
+日期：2026-01-27  
+执行者：Codex（Linus-mode）
+
+目标：验证风控方案文档“可读、可落地、契约不自相矛盾”（不要求 Maven/代码实现）。
+
+## 1. 入口契约一致性
+
+1) 对照代码路由前缀：`/api/v1/risk/...`。  
+   - 期望：`社交接口.md` 的风控接口表已使用 `/api/v1` 前缀。  
+   - 期望：`风控与信任服务-实现方案.md` 中示例路径使用 `/api/v1`。  
+
+2) 对照 userId 来源：`RiskController` 使用 `UserContext.requireUserId()`。  
+   - 期望：文档明确 userId 默认来自登录态；请求体里传 `user_id` 仅作为“可选/会被忽略”的兼容说明。  
+
+## 2. 文档完整性（实现级）
+
+- 期望：`风控与信任服务-实现方案.md` 至少包含：上线定义（Production 口径）、核心数据结构定义、总览架构图、在线决策流程图（LLM 不阻塞在线）、异步链路说明（图片/LLM 扫描、人审工单）、API 契约、存储建议、灰度与指标、上线验收与检查清单，并明确范围=文本+图片（视频 future），且图片风控路线已定为“多模态 LLM”（OCR+文本 LLM 仅兜底）。  
+
+## 3. Mermaid 可渲染性（人工检查）
+
+- 打开 `风控与信任服务-实现方案.md`，检查 3 段 Mermaid：架构图/在线决策流程图等是否能正常渲染（语法无明显错误）。  
+
+## 4. 参考资料链接可访问
+
+- 期望：文末 3 个 URL 可直接访问：AWS Fraud Detector / Feast / Cloudflare bots。  

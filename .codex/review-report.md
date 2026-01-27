@@ -320,3 +320,40 @@
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedRecommendFeedbackMqConfig.java`
 - `project/nexus/nexus-types/src/main/java/cn/nexus/types/event/PostDeletedEvent.java`
 - `project/nexus/nexus-app/src/main/java/cn/nexus/config/FeedRecommendItemBackfillRunner.java`
+
+---
+
+# 追加：风控与信任服务实现方案（文档 CR）
+
+日期：2026-01-27  
+执行者：Codex（Linus-mode）
+
+## 范围
+
+- 依据：`社交接口.md` 第 5 章风控概览 + 现有占位实现 `RiskController/RiskService`。
+- 目标：产出 `风控与信任服务-实现方案.md`，把“概览”补成“可落地实现方案”，并保证不破坏现有用户可见接口行为。
+
+## Linus Review（好品味=数据结构优先）
+
+【品味评分】🟢 好品味  
+【综合评分】88/100（通过）
+
+### 好的部分（值得保留）
+
+- 先把核心数据结构定死：`RiskEvent/RiskSignal/RiskDecision/RiskAction`，让“发帖/评论/关注/登录”等场景都变成同一种输入，天然减少 if/else。
+- 在线/离线分层清晰：在线只做低延迟预检/规则/轻量模型；重计算（图片、人审）全部下沉异步，避免把业务主链路拖死。
+- Never break userspace：现有 `scan/text`、`scan/image`、`user/status` 不改语义；新能力以新增统一决策入口（v2）扩展。
+
+### 致命问题（未发现）
+
+本次为文档与架构设计补齐，不涉及对现网接口/数据的破坏性变更；未发现会导致“落地必炸”的结构性问题。
+
+### 改进方向（可选，但能让文档更可执行）
+
+- 建议补一段 `Response<T>` 的示例 JSON（对齐项目实际返回形态），避免读者只看到业务字段不知道外层封装。
+- 事件命名需最终对齐项目 MQ 规范（exchange/routingKey/queue）；文档里目前给的是示例名。
+
+## 关键文件
+
+- `风控与信任服务-实现方案.md`
+- `社交接口.md`

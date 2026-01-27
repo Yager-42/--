@@ -101,3 +101,20 @@
 - M9：新增全站已发布分页 DAO（`selectPublishedPage`）与可开关回灌 runner：`FeedRecommendItemBackfillRunner`；dev 配置补齐 `feed.recommend.backfill.*`
 - 本地验证：`project/nexus` 下执行 `mvn -DskipTests package` 通过
 - 文档同步：补齐 `.codex/distribution-domain-implementation.md`（推荐流/GlobalLatest/session cache/MQ 旁路/配置与 Redis key）
+
+---
+
+日期：2026-01-27  
+执行者：Codex（Linus-mode）
+
+## 风控与信任服务设计增强（新文档产出）
+
+- 现状确认：`RiskService`/`RiskController` 为占位实现（textScan=PASS、userStatus=NORMAL）；`社交接口.md` 风控接口表与代码契约不一致（`/v1` vs `/api/v1`，userId 来源不一致）
+- 设计方向：用统一数据结构 `RiskEvent/RiskDecision/RiskAction` 消灭“按场景写 if/else”的特殊情况；新增不破坏式 `POST /api/v1/risk/decision` 作为统一决策入口
+- 架构落地：在线链路只做低延迟预检/规则/轻量模型；重计算（图片扫描/人审工单）全部下沉异步，复用现有 Redis + RabbitMQ
+- 公开资料参考：AWS Fraud Detector（模型评分+决策逻辑+Outcome）、Feast（离线/在线特征存储用于实时风控）、Cloudflare Bot（挑战/拦截自动化流量）
+- 文档交付：新增 `风控与信任服务-实现方案.md`（架构图、关键流程、API/事件契约、存储设计、灰度发布、指标与上线验收、特征/模型接入）
+
+- 用户追加要求：不接受 MVP 口径，需“完整可上线方案”；已将文档升级为 Production 上线方案，补齐上线定义、服务拆分（risk-api/risk-worker/risk-admin）、高可用与降级策略、后台接口契约、特征平台/模型接入、上线验收与检查清单，并移除 MVP/v2 表述
+- 上线约束已定：≥1000 万 DAU / 峰值 ≥50k QPS；人审=工作时段+抽样；内容识别=使用 Spring AI Alibaba 调用 LLM API（异步扫描 + 预算/缓存/降级）
+- 范围收敛：当前只覆盖“文本 + 图片”，视频明确为 future；补齐图片风控实现路线（你已选：多模态 LLM；备用：OCR+文本 LLM）、统一 JSON 输出契约（增加 `contentType`）并清理文档里“图片/视频”措辞

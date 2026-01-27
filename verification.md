@@ -57,3 +57,15 @@
 - [ ] 负反馈生效：postId 与 postType 均能过滤（见 `.codex/testing.md`）。
 - [ ] 下架不穿透：status!=2 的内容不返回（见 `.codex/testing.md`）。
 - [ ] 推荐挂了不白屏：gorse 不可达降级 latest 且可翻页（见 `.codex/testing.md`）。
+
+---
+
+日期：2026-01-27  
+执行者：Codex（Linus-mode）
+
+## 风控与信任服务实现方案（文档）验收
+
+- [x] 新文档：`风控与信任服务-实现方案.md` 已生成（Production 上线口径；范围=文本+图片；图片风控=多模态 LLM，OCR+文本仅兜底；架构、数据结构、在线/异步流程、API/事件契约、存储、灰度、指标、上线验收与检查清单）。  
+- [x] 文档一致性修正：`社交接口.md` 风控接口表已对齐代码路由前缀 `/api/v1`，并增加新文档入口链接。  
+- [x] 留痕齐全：`.codex/context-scan.json`、`.codex/operations-log.md`、`.codex/review-report.md`、`.codex/testing.md` 已追加本次记录。  
+- [ ] （可选后续）按文档的上线闭环落地代码：新增 `POST /api/v1/risk/decision` + `risk_decision_log/risk_case/risk_rule_version` 等，使“决策→处置→审计→人审→申诉/反馈”可跑通。  

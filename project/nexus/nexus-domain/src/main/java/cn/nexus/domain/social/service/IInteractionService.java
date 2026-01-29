@@ -11,7 +11,14 @@ public interface IInteractionService {
 
     ReactionStateVO reactionState(Long userId, Long targetId, String targetType, String type);
 
-    CommentResultVO comment(Long userId, Long postId, Long parentId, String content);
+    CommentResultVO comment(Long userId, Long postId, Long parentId, String content, Long commentId);
+
+    /**
+     * 风控回写：推进“待审核”的评论，必要时补发创建事件/通知。
+     *
+     * <p>finalResult: PASS/BLOCK/REVIEW。</p>
+     */
+    OperationResultVO applyCommentRiskReviewResult(Long commentId, String finalResult, String reasonCode);
 
     OperationResultVO pinComment(Long userId, Long commentId, Long postId);
 

@@ -21,7 +21,17 @@ public interface ICommentRepository {
      */
     List<CommentViewVO> listByIds(List<Long> commentIds);
 
-    void insert(Long commentId, Long postId, Long userId, Long rootId, Long parentId, Long replyToId, String content, Long nowMs);
+    void insert(Long commentId, Long postId, Long userId, Long rootId, Long parentId, Long replyToId, String content, Integer status, Long nowMs);
+
+    /**
+     * 待审核评论通过：仅当 status=0 时更新为 1。
+     */
+    boolean approvePending(Long commentId, Long nowMs);
+
+    /**
+     * 待审核评论拒绝：仅当 status=0 时更新为 2（软删）。
+     */
+    boolean rejectPending(Long commentId, Long nowMs);
 
     /**
      * 软删（幂等）：仅当 status=1 时更新为 2。
@@ -48,12 +58,12 @@ public interface ICommentRepository {
      *
      * <p>注意：置顶不参与分页，因此 pinnedId 必须从 items 中排除；cursor 为空表示从最新开始。</p>
      */
-    List<Long> pageRootCommentIds(Long postId, Long pinnedId, String cursor, int limit);
+    List<Long> pageRootCommentIds(Long postId, Long pinnedId, String cursor, int limit, Long viewerId);
 
     /**
      * 楼内回复分页（时间正序，游标分页）。cursor 为空表示从最早开始。
      */
-    List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit);
+    List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit, Long viewerId);
 
     /**
      * 扫描某帖最近的一级评论（用于热榜冷启动/重建）。

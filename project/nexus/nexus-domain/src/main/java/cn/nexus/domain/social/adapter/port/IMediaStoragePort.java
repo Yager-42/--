@@ -17,4 +17,14 @@ public interface IMediaStoragePort {
      * @return 上传会话凭证
      */
     UploadSessionVO generateUploadSession(String sessionId, String fileType, Long fileSize, String crc32);
+
+    /**
+     * 生成媒体读取 URL（用于内容展示/异步风控扫描等场景）。
+     *
+     * <p>约束：返回的 URL 应该是“可被外部拉取”的地址（例如预签名 GET URL）。</p>
+     *
+     * @param sessionId 上传会话的业务标识（同 generateUploadSession 入参）
+     * @return 可读取的 URL
+     */
+    String generateReadUrl(String sessionId);
 }

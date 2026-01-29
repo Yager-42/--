@@ -40,10 +40,14 @@ public class InteractionService implements IInteractionService {
     private final ICommentPinRepository commentPinRepository;
     private final ICommentHotRankRepository commentHotRankRepository;
     private final IContentRepository contentRepository;
+    private final IRiskService riskService;
     private final ICommentEventPort commentEventPort;
     private final IInteractionNotifyEventPort interactionNotifyEventPort;
     private final IInteractionNotificationRepository interactionNotificationRepository;
     private final IUserBaseRepository userBaseRepository;
+
+    private static final int COMMENT_STATUS_PENDING_REVIEW = 0;
+    private static final int COMMENT_STATUS_NORMAL = 1;
 
     @Override
     public ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action, String requestId) {
@@ -76,12 +80,12 @@ public class InteractionService implements IInteractionService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public CommentResultVO comment(Long userId, Long postId, Long parentId, String content) {
+    public CommentResultVO comment(Long userId, Long postId, Long parentId, String content, Long commentId) {
         requireNonNull(userId, "userId");
         requireNonNull(postId, "postId");
 
         Long nowMs = socialIdPort.now();
-        Long commentId = socialIdPort.nextId();
+        Long cid = commentId == null ? socialIdPort.nextId() : commentId;
 
         Long rootId = null;
         Long parentIdToSave = null;
@@ -101,17 +105,75 @@ public class InteractionService implements IInteractionService {
             replyToId = parent.getCommentId();
         }
 
-        commentRepository.insert(commentId, postId, userId, rootId, parentIdToSave, replyToId, content, nowMs);
+        RiskEventVO riskEvent = RiskEventVO.builder()
+                .eventId(String.valueOf(cid))
+                .userId(userId)
+                .actionType("COMMENT_CREATE")
+                .scenario("comment.create")
+                .contentText(content)
+                .mediaUrls(List.of())
+                .targetId(String.valueOf(postId))
+                .extJson("{\"biz\":\"comment\",\"commentId\":" + cid + ",\"postId\":" + postId + ",\"parentId\":" + (parentId == null ? "null" : parentId) + "}")
+                .occurTime(nowMs)
+                .build();
+        RiskDecisionVO decision = riskService.decision(riskEvent);
+        String riskResult = decision == null ? "PASS" : decision.getResult();
+        if ("BLOCK".equalsIgnoreCase(riskResult) || "LIMIT".equalsIgnoreCase(riskResult) || "CHALLENGE".equalsIgnoreCase(riskResult)) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "风控拦截");
+        }
 
-        publishCreated(commentId, postId, rootId, userId, nowMs);
-        publishNotifyCommentCreated(commentId, postId, rootId, parentIdToSave, userId, nowMs);
-        publishNotifyCommentMentioned(commentId, postId, rootId, parentIdToSave, userId, nowMs, content);
+        int status = "REVIEW".equalsIgnoreCase(riskResult) ? COMMENT_STATUS_PENDING_REVIEW : COMMENT_STATUS_NORMAL;
+        commentRepository.insert(cid, postId, userId, rootId, parentIdToSave, replyToId, content, status, nowMs);
+        if (status == COMMENT_STATUS_PENDING_REVIEW) {
+            return CommentResultVO.builder().commentId(cid).createTime(nowMs).status("PENDING_REVIEW").build();
+        }
+
+        publishCreated(cid, postId, rootId, userId, nowMs);
+        publishNotifyCommentCreated(cid, postId, rootId, parentIdToSave, userId, nowMs);
+        publishNotifyCommentMentioned(cid, postId, rootId, parentIdToSave, userId, nowMs, content);
         if (rootId != null) {
             publishReplyCountChanged(rootId, postId, +1L, nowMs);
         }
 
         // @提及：后端从 content 解析 @username 并发布 COMMENT_MENTIONED（旁路，不允许影响评论创建）。
-        return CommentResultVO.builder().commentId(commentId).createTime(nowMs).build();
+        return CommentResultVO.builder().commentId(cid).createTime(nowMs).status("OK").build();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public OperationResultVO applyCommentRiskReviewResult(Long commentId, String finalResult, String reasonCode) {
+        requireNonNull(commentId, "commentId");
+        if (finalResult == null || finalResult.isBlank() || "REVIEW".equalsIgnoreCase(finalResult)) {
+            return ok(commentId, "SKIP", "仍需审核");
+        }
+
+        List<CommentViewVO> list = commentRepository.listByIds(List.of(commentId));
+        CommentViewVO c = list == null || list.isEmpty() ? null : list.get(0);
+        if (c == null || c.getStatus() == null || c.getStatus() != COMMENT_STATUS_PENDING_REVIEW) {
+            return ok(commentId, "SKIP", "非待审核状态");
+        }
+
+        Long nowMs = socialIdPort.now();
+        if ("PASS".equalsIgnoreCase(finalResult)) {
+            boolean approved = commentRepository.approvePending(commentId, nowMs);
+            if (!approved) {
+                return ok(commentId, "SKIP", "已处理");
+            }
+            publishCreated(commentId, c.getPostId(), c.getRootId(), c.getUserId(), nowMs);
+            publishNotifyCommentCreated(commentId, c.getPostId(), c.getRootId(), c.getParentId(), c.getUserId(), nowMs);
+            publishNotifyCommentMentioned(commentId, c.getPostId(), c.getRootId(), c.getParentId(), c.getUserId(), nowMs, c.getContent());
+            if (c.getRootId() != null) {
+                publishReplyCountChanged(c.getRootId(), c.getPostId(), +1L, nowMs);
+            }
+            return ok(commentId, "APPROVED", "已通过");
+        }
+
+        if ("BLOCK".equalsIgnoreCase(finalResult)) {
+            commentRepository.rejectPending(commentId, nowMs);
+            return ok(commentId, "REJECTED", "已拒绝");
+        }
+
+        return ok(commentId, "SKIP", "未知结论");
     }
 
     @Override

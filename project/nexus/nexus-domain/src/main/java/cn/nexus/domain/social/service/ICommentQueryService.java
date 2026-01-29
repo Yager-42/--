@@ -14,18 +14,17 @@ public interface ICommentQueryService {
      *
      * <p>cursor 协议：nextCursor="{lastCreateTimeMs}:{lastCommentId}"；为空表示从最新开始。</p>
      */
-    RootCommentPageVO listRootComments(Long postId, String cursor, Integer limit, Integer preloadReplyLimit);
+    RootCommentPageVO listRootComments(Long postId, Long viewerId, String cursor, Integer limit, Integer preloadReplyLimit);
 
     /**
      * 楼内回复列表（按时间正序）。
      *
      * <p>cursor 协议：nextCursor="{lastCreateTimeMs}:{lastCommentId}"；为空表示从最早开始。</p>
      */
-    ReplyCommentPageVO listReplies(Long rootId, String cursor, Integer limit);
+    ReplyCommentPageVO listReplies(Long rootId, Long viewerId, String cursor, Integer limit);
 
     /**
      * 评论热榜（只排一级评论）。
      */
     CommentHotVO hotComments(Long postId, Integer limit, Integer preloadReplyLimit);
 }
-

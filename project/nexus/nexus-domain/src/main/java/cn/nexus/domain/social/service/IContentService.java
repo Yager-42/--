@@ -56,6 +56,13 @@ public interface IContentService {
     ContentPublishAttemptEntity getPublishAttemptAudit(Long attemptId, Long userId);
 
     /**
+     * 风控回写：推进“待审核”的发布 Attempt，并同步推进 content_post 的可见状态。
+     *
+     * <p>finalResult: PASS/BLOCK/REVIEW（REVIEW 表示仍需继续隔离）。</p>
+     */
+    OperationResultVO applyRiskReviewResult(Long attemptId, String finalResult, String reasonCode);
+
+    /**
      * 触发内容版本存储重平衡（按需重建新的基准版本）。
      */
     OperationResultVO rebalanceStorage(Long postId);

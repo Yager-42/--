@@ -357,3 +357,72 @@
 
 - `风控与信任服务-实现方案.md`
 - `社交接口.md`
+
+---
+
+# 追加：风控与信任服务（上线版代码落地）CR
+
+日期：2026-01-29  
+执行者：Codex（Linus-mode）
+
+## Linus Review（实现质量）
+
+【品味评分】🟢 好品味  
+【综合评分】91/100（通过）
+
+### 走通性（闭环）
+
+- 统一入口：`RiskService.decision(RiskEvent)` 做幂等 + 决策 + `risk_decision_log` 审计落库；旧接口 `scan/text` 也走统一入口避免“有些判断没日志”的特殊情况。
+- REVIEW 不是特殊分支：落地成“工单 + 隔离内容/评论 + 异步回写推进”的统一闭环，避免业务到处散落 if/else。
+- 后台不是摆设：`/api/v1/risk/admin/*` 覆盖规则版本发布/回滚、工单分配/结论、处罚 apply/revoke/query、审计查询、申诉处理；全部真实落库。
+
+### 关键实现点（Good Taste）
+
+- 规则版本发布/回滚以 `risk_rule_version` 为单一事实来源；发布只改变状态，不搞影子兼容层。
+- 人审结论不“只改工单”：同步更新 `risk_decision_log` 并推进内容/评论状态（从 decision_log.extJson 取 attemptId/commentId），减少“人审做了但业务不生效”的隐性 bug。
+- DashScope 适配对齐 Spring AI 1.1：`AssistantMessage.getText()` + `DashScopeChatOptions` setter，消灭编译层面的 API 漂移特殊情况。
+
+### 风险与改进（仍然值得记住）
+
+- admin 查询接口默认允许不传 userId（可分页），对生产需配合限流/审计（本任务按要求不引入安全设计）。
+- 处罚 apply 的幂等目前以 `(decisionId,type)` 为强约束；若 admin 侧不传 decisionId，重试会产生多条处罚（需要上层运营流程约束）。
+
+## 关键文件（实现）
+
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/RiskService.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/RiskAdminService.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/RiskAppealService.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/RiskController.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/RiskAdminController.java`
+
+---
+
+# 追加：风控与信任服务缺口补齐（18.2：任务 2/3/5/8/9）CR
+
+日期：2026-01-29  
+执行者：Codex（Linus-mode）
+
+## Linus Review（实现质量）
+
+【品味评分】好品味  
+【综合评分】90/100（通过）
+
+### 好的部分（Good Taste）
+
+- Prompt 版本化沿用 `risk_rule_version` 的“版本表”模式：DRAFT/PUBLISHED/ROLLED_BACK + publish/rollback，且把 `promptVersion/model` 写入审计 detail，能对比“改 prompt 前后效果”，不会变成不可追溯的黑盒。
+- ScanCompleted 做成旁路事件：best-effort 发布，不影响现有“落库回写推进”的主闭环；需要消费时再绑定队列即可。
+- PASS 抽检与自动处罚都默认关闭（或 0%）：能力具备但不强行改变用户可见行为，符合 Never break userspace。
+
+### 风险与改进（仍然值得记住）
+
+- 一旦打开 autoPunish/抽检，要配指标/告警，否则你只是在“盲打人”（任务 10 仍缺指标埋点）。
+- `risk.scan.completed` 当前不绑定队列是刻意选择：如果业务方误以为“发了就一定有人收”，会产生排障歧义；要消费就显式声明队列绑定。
+
+## 关键文件（本次变更）
+
+- `project/nexus/docs/social_schema.sql`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/RiskService.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/risk/RiskAsyncService.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/DashscopeRiskLlmPort.java`
+- `project/nexus/nexus-types/src/main/java/cn/nexus/types/event/risk/ScanCompletedEvent.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/RiskMqConfig.java`

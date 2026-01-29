@@ -254,3 +254,24 @@
 ## 4. 参考资料链接可访问
 
 - 期望：文末 3 个 URL 可直接访问：AWS Fraud Detector / Feast / Cloudflare bots。  
+
+---
+
+# 追加：风控与信任服务上线版（代码实现）本地验证
+
+日期：2026-01-29  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 编译/测试（已执行）
+
+命令：`./.codex/tools/apache-maven-3.9.6/bin/mvn -f project/nexus/pom.xml test`  
+结果：BUILD SUCCESS（Finished at: 2026-01-29T14:58:29+08:00）
+
+## 1. 风控接口冒烟（需要本地 MySQL/Redis/RabbitMQ）
+
+- 统一决策：`POST /api/v1/risk/decision`
+- 文本扫描（兼容入口）：`POST /api/v1/risk/scan/text`
+- 图片扫描（兼容入口）：`POST /api/v1/risk/scan/image`
+- 用户状态：`GET /api/v1/risk/user/status`
+- 用户申诉：`POST /api/v1/risk/appeals`
+- 后台：规则版本/工单/处罚/审计/申诉处理：`/api/v1/risk/admin/...`

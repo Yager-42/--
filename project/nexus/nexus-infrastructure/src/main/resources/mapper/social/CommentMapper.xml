@@ -35,6 +35,18 @@
         WHERE root_id = #{rootId} AND status = 1
     </update>
 
+    <update id="approvePending">
+        UPDATE interaction_comment
+        SET status = 1, update_time = #{updateTime}
+        WHERE comment_id = #{commentId} AND status = 0
+    </update>
+
+    <update id="rejectPending">
+        UPDATE interaction_comment
+        SET status = 2, update_time = #{updateTime}
+        WHERE comment_id = #{commentId} AND status = 0
+    </update>
+
     <update id="addReplyCount">
         UPDATE interaction_comment
         SET reply_count = GREATEST(0, reply_count + #{delta}), update_time = NOW()
@@ -63,11 +75,39 @@
         LIMIT #{limit}
     </select>
 
+    <select id="pageRootIdsForViewer" resultType="java.lang.Long">
+        SELECT comment_id
+        FROM interaction_comment
+        WHERE post_id = #{postId}
+          AND root_id IS NULL
+          AND (status = 1 OR (status = 0 AND user_id = #{viewerId}))
+          <if test="pinnedId != null">
+            AND comment_id &lt;&gt; #{pinnedId}
+          </if>
+          <if test="cursorTime != null and cursorId != null">
+            AND (create_time &lt; #{cursorTime} OR (create_time = #{cursorTime} AND comment_id &lt; #{cursorId}))
+          </if>
+        ORDER BY create_time DESC, comment_id DESC
+        LIMIT #{limit}
+    </select>
+
     <select id="pageReplyIds" resultType="java.lang.Long">
         SELECT comment_id
         FROM interaction_comment
         WHERE root_id = #{rootId}
           AND status = 1
+          <if test="cursorTime != null and cursorId != null">
+            AND (create_time &gt; #{cursorTime} OR (create_time = #{cursorTime} AND comment_id &gt; #{cursorId}))
+          </if>
+        ORDER BY create_time ASC, comment_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="pageReplyIdsForViewer" resultType="java.lang.Long">
+        SELECT comment_id
+        FROM interaction_comment
+        WHERE root_id = #{rootId}
+          AND (status = 1 OR (status = 0 AND user_id = #{viewerId}))
           <if test="cursorTime != null and cursorId != null">
             AND (create_time &gt; #{cursorTime} OR (create_time = #{cursorTime} AND comment_id &gt; #{cursorId}))
           </if>

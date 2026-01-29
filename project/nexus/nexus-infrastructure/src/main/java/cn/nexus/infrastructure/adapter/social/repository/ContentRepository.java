@@ -212,6 +212,19 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    public boolean updatePostStatus(Long postId, Integer status, Integer expectedStatus) {
+        if (postId == null || status == null || expectedStatus == null) {
+            return false;
+        }
+        int rows = contentPostDao.updateStatusIfMatch(postId, status, expectedStatus);
+        boolean updated = rows > 0;
+        if (updated) {
+            invalidatePostCache(postId);
+        }
+        return updated;
+    }
+
+    @Override
     public boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
                                               String contentText, String mediaInfo, String locationInfo, Integer visibility) {
         Integer expectedVersion = versionNum == null ? null : Math.max(0, versionNum - 1);

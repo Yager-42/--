@@ -22,8 +22,9 @@ public class CommentViewDTO {
     private Long parentId;
     private Long replyToId;
     private String content;
+    /** 1=正常；0=待审核；2=删除 */
+    private Integer status;
     private Long likeCount;
     private Long replyCount;
     private Long createTime;
 }
-

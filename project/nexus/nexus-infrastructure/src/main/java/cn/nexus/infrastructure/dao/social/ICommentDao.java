@@ -18,6 +18,10 @@ public interface ICommentDao {
 
     int softDeleteByRootId(@Param("rootId") Long rootId, @Param("updateTime") java.util.Date updateTime);
 
+    int approvePending(@Param("commentId") Long commentId, @Param("updateTime") java.util.Date updateTime);
+
+    int rejectPending(@Param("commentId") Long commentId, @Param("updateTime") java.util.Date updateTime);
+
     int addReplyCount(@Param("commentId") Long commentId, @Param("delta") Long delta);
 
     int addLikeCount(@Param("commentId") Long commentId, @Param("delta") Long delta);
@@ -28,10 +32,23 @@ public interface ICommentDao {
                            @Param("cursorId") Long cursorId,
                            @Param("limit") Integer limit);
 
+    List<Long> pageRootIdsForViewer(@Param("postId") Long postId,
+                                    @Param("pinnedId") Long pinnedId,
+                                    @Param("viewerId") Long viewerId,
+                                    @Param("cursorTime") java.util.Date cursorTime,
+                                    @Param("cursorId") Long cursorId,
+                                    @Param("limit") Integer limit);
+
     List<Long> pageReplyIds(@Param("rootId") Long rootId,
                             @Param("cursorTime") java.util.Date cursorTime,
                             @Param("cursorId") Long cursorId,
                             @Param("limit") Integer limit);
+
+    List<Long> pageReplyIdsForViewer(@Param("rootId") Long rootId,
+                                     @Param("viewerId") Long viewerId,
+                                     @Param("cursorTime") java.util.Date cursorTime,
+                                     @Param("cursorId") Long cursorId,
+                                     @Param("limit") Integer limit);
 
     List<CommentPO> selectRecentRootBriefs(@Param("postId") Long postId, @Param("limit") Integer limit);
 }

@@ -15,4 +15,8 @@ import lombok.NoArgsConstructor;
 public class CommentResponseDTO {
     private Long commentId;
     private Long createTime;
+    /**
+     * 评论状态：OK / PENDING_REVIEW。
+     */
+    private String status;
 }

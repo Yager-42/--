@@ -40,6 +40,13 @@
         WHERE post_id = #{postId}
     </update>
 
+    <update id="updateStatusIfMatch">
+        UPDATE content_post
+        SET status = #{status}
+        WHERE post_id = #{postId}
+          AND status = #{expectedStatus}
+    </update>
+
     <update id="updateStatusWithUser">
         UPDATE content_post
         SET status = #{status}
@@ -74,7 +81,7 @@
         SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE user_id = #{userId}
-          AND status = 2
+          AND status IN (1, 2)
         <if test="cursorTime != null and cursorPostId != null">
             AND (create_time &lt; #{cursorTime}
                  OR (create_time = #{cursorTime} AND post_id &lt; #{cursorPostId}))

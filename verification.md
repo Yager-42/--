@@ -68,4 +68,17 @@
 - [x] 新文档：`风控与信任服务-实现方案.md` 已生成（Production 上线口径；范围=文本+图片；图片风控=多模态 LLM，OCR+文本仅兜底；架构、数据结构、在线/异步流程、API/事件契约、存储、灰度、指标、上线验收与检查清单）。  
 - [x] 文档一致性修正：`社交接口.md` 风控接口表已对齐代码路由前缀 `/api/v1`，并增加新文档入口链接。  
 - [x] 留痕齐全：`.codex/context-scan.json`、`.codex/operations-log.md`、`.codex/review-report.md`、`.codex/testing.md` 已追加本次记录。  
-- [ ] （可选后续）按文档的上线闭环落地代码：新增 `POST /api/v1/risk/decision` + `risk_decision_log/risk_case/risk_rule_version` 等，使“决策→处置→审计→人审→申诉/反馈”可跑通。  
+- [x] （已完成：2026-01-29）按文档的上线闭环落地代码：新增 `POST /api/v1/risk/decision` + `risk_decision_log/risk_case/risk_rule_version` 等，使“决策→处置→审计→人审→申诉/反馈”可跑通。  
+
+---
+
+日期：2026-01-29  
+执行者：Codex（Linus-mode）
+
+## 风控与信任服务（上线版代码实现）验收
+
+- [x] 统一决策入口：`POST /api/v1/risk/decision` 已实现；且 `scan/text` 兼容入口内部走统一入口并落 `risk_decision_log`。
+- [x] 异步闭环：REVIEW 会创建 `risk_case` 并投递异步扫描；异步结果回写 `risk_decision_log` 并推进内容/评论隔离状态到最终态。
+- [x] risk-admin 后台：规则版本（create/list/publish/rollback）、工单（list/assign/decision）、处罚（apply/revoke/query）、审计查询、申诉处理接口齐全且为真实落库实现。
+- [x] 申诉入口：`POST /api/v1/risk/appeals` 写入 `risk_feedback(type=APPEAL,status=OPEN)`；后台 `ACCEPT` 会撤销处罚。
+- [x] 本地验证：`./.codex/tools/apache-maven-3.9.6/bin/mvn -f project/nexus/pom.xml test` BUILD SUCCESS（Finished at: 2026-01-29T14:58:29+08:00）（见 `.codex/testing.md`）。

@@ -21,4 +21,10 @@ public class CommentRequestDTO {
     private Long postId;
     private Long parentId;
     private String content;
+    /**
+     * 可选：业务侧生成的 commentId（作为幂等 eventId）。
+     *
+     * <p>旧客户端不传则由服务端生成；传入时会作为本次评论的 commentId 使用。</p>
+     */
+    private Long commentId;
 }

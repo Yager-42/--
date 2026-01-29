@@ -8,9 +8,14 @@ import cn.nexus.api.social.risk.dto.*;
  */
 public interface IRiskApi {
 
+    Response<RiskDecisionResponseDTO> decision(RiskDecisionRequestDTO requestDTO);
+
     Response<TextScanResponseDTO> textScan(TextScanRequestDTO requestDTO);
 
     Response<ImageScanResponseDTO> imageScan(ImageScanRequestDTO requestDTO);
 
     Response<UserRiskStatusResponseDTO> userStatus(UserRiskStatusRequestDTO requestDTO);
+
+    /** 用户发起申诉 */
+    Response<RiskAppealResponseDTO> appeal(RiskAppealRequestDTO requestDTO);
 }

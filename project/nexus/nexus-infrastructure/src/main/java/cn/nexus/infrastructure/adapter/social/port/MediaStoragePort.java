@@ -61,6 +61,29 @@ public class MediaStoragePort implements IMediaStoragePort {
         }
     }
 
+    @Override
+    public String generateReadUrl(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return null;
+        }
+        String objectName = buildObjectName(sessionId);
+        try {
+            ensureBucket();
+            int expiry = (int) Math.max(properties.getExpirySeconds(), 60);
+            return client.getPresignedObjectUrl(
+                    GetPresignedObjectUrlArgs.builder()
+                            .method(Method.GET)
+                            .bucket(properties.getBucket())
+                            .object(objectName)
+                            .expiry(expiry)
+                            .build()
+            );
+        } catch (Exception e) {
+            log.warn("生成 MinIO 读取 URL 失败, sessionId={}, object={}, err={}", sessionId, objectName, e.getMessage(), e);
+            return null;
+        }
+    }
+
     private void ensureBucket() throws Exception {
         if (client.bucketExists(BucketExistsArgs.builder().bucket(properties.getBucket()).build())) {
             return;

@@ -76,7 +76,7 @@ public class CommentRepository implements ICommentRepository {
     }
 
     @Override
-    public void insert(Long commentId, Long postId, Long userId, Long rootId, Long parentId, Long replyToId, String content, Long nowMs) {
+    public void insert(Long commentId, Long postId, Long userId, Long rootId, Long parentId, Long replyToId, String content, Integer status, Long nowMs) {
         Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
         CommentPO po = new CommentPO();
         po.setCommentId(commentId);
@@ -86,12 +86,30 @@ public class CommentRepository implements ICommentRepository {
         po.setParentId(parentId);
         po.setReplyToId(replyToId);
         po.setContent(content == null ? "" : content);
-        po.setStatus(1);
+        po.setStatus(status == null ? 1 : status);
         po.setLikeCount(0L);
         po.setReplyCount(0L);
         po.setCreateTime(now);
         po.setUpdateTime(now);
         commentDao.insert(po);
+    }
+
+    @Override
+    public boolean approvePending(Long commentId, Long nowMs) {
+        if (commentId == null) {
+            return false;
+        }
+        Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
+        return commentDao.approvePending(commentId, now) > 0;
+    }
+
+    @Override
+    public boolean rejectPending(Long commentId, Long nowMs) {
+        if (commentId == null) {
+            return false;
+        }
+        Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
+        return commentDao.rejectPending(commentId, now) > 0;
     }
 
     @Override
@@ -131,21 +149,36 @@ public class CommentRepository implements ICommentRepository {
     }
 
     @Override
-    public List<Long> pageRootCommentIds(Long postId, Long pinnedId, String cursor, int limit) {
+    public List<Long> pageRootCommentIds(Long postId, Long pinnedId, String cursor, int limit, Long viewerId) {
         Cursor c = Cursor.parse(cursor);
         int normalizedLimit = Math.max(1, limit);
-        return commentDao.pageRootIds(postId,
+        if (viewerId == null) {
+            return commentDao.pageRootIds(postId,
+                    pinnedId,
+                    c == null ? null : c.cursorTime,
+                    c == null ? null : c.cursorId,
+                    normalizedLimit);
+        }
+        return commentDao.pageRootIdsForViewer(postId,
                 pinnedId,
+                viewerId,
                 c == null ? null : c.cursorTime,
                 c == null ? null : c.cursorId,
                 normalizedLimit);
     }
 
     @Override
-    public List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit) {
+    public List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit, Long viewerId) {
         Cursor c = Cursor.parse(cursor);
         int normalizedLimit = Math.max(1, limit);
-        return commentDao.pageReplyIds(rootId,
+        if (viewerId == null) {
+            return commentDao.pageReplyIds(rootId,
+                    c == null ? null : c.cursorTime,
+                    c == null ? null : c.cursorId,
+                    normalizedLimit);
+        }
+        return commentDao.pageReplyIdsForViewer(rootId,
+                viewerId,
                 c == null ? null : c.cursorTime,
                 c == null ? null : c.cursorId,
                 normalizedLimit);

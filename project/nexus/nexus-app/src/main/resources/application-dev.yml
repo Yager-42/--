@@ -24,6 +24,9 @@ spring:
     consumer:
       group-id: nexus-like-pipeline
       auto-offset-reset: earliest
+  ai:
+    dashscope:
+      api-key: ${AI_DASHSCOPE_API_KEY:}
   sql:
     init:
       mode: never
@@ -85,3 +88,22 @@ feed:
   global:
     latest:
       maxSize: 20000
+
+risk:
+  llm:
+    text-model: ${RISK_LLM_TEXT_MODEL:qwen-plus}
+    image-model: ${RISK_LLM_IMAGE_MODEL:qwen-vl-plus}
+    budgetPerMinute: 200
+    cacheTtlSeconds: 86400
+    inflightLockSeconds: 30
+  autoPunish:
+    enabled: false
+    minConfidence: 0.95
+    durationSeconds: 600
+  sample:
+    # PASS 抽检比例（0-100）；默认 0 表示关闭
+    passPercent: 0
+    # 工作时段（Asia/Shanghai）：仅时段内生效；end<=start 视为不限制
+    workStartHour: 9
+    workEndHour: 21
+    salt: ${RISK_SAMPLE_SALT:}

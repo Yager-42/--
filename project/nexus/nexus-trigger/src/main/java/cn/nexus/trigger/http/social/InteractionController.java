@@ -87,9 +87,9 @@ public class InteractionController implements IInteractionApi {
         try {
             Long userId = UserContext.requireUserId();
             // @提及由后端统一从 content 解析 @username；不接收客户端传入的 mentions(userId 列表)。
-            CommentResultVO vo = interactionService.comment(userId, requestDTO.getPostId(), requestDTO.getParentId(), requestDTO.getContent());
+            CommentResultVO vo = interactionService.comment(userId, requestDTO.getPostId(), requestDTO.getParentId(), requestDTO.getContent(), requestDTO.getCommentId());
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                    CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).build());
+                    CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).status(vo.getStatus()).build());
         } catch (AppException e) {
             return Response.<CommentResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
         } catch (Exception e) {

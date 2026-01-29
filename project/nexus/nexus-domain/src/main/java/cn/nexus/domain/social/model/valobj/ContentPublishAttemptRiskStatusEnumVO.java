@@ -11,7 +11,8 @@ import lombok.Getter;
 public enum ContentPublishAttemptRiskStatusEnumVO {
     NOT_EVALUATED(0, "未评估"),
     PASSED(1, "通过"),
-    REJECTED(2, "拒绝");
+    REJECTED(2, "拒绝"),
+    REVIEW_REQUIRED(3, "待审核");
 
     private final int code;
     private final String desc;

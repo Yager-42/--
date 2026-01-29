@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IRiskPunishmentDao">
+
+    <resultMap id="RiskPunishmentMap" type="cn.nexus.infrastructure.dao.social.po.RiskPunishmentPO">
+        <id property="punishId" column="punish_id"/>
+        <result property="userId" column="user_id"/>
+        <result property="type" column="type"/>
+        <result property="status" column="status"/>
+        <result property="startTime" column="start_time"/>
+        <result property="endTime" column="end_time"/>
+        <result property="reasonCode" column="reason_code"/>
+        <result property="decisionId" column="decision_id"/>
+        <result property="operatorId" column="operator_id"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.RiskPunishmentPO">
+        INSERT INTO risk_punishment(
+            punish_id, user_id, type, status, start_time, end_time,
+            reason_code, decision_id, operator_id, create_time, update_time
+        ) VALUES(
+            #{punishId}, #{userId}, #{type}, #{status}, #{startTime}, #{endTime},
+            #{reasonCode}, #{decisionId}, #{operatorId}, NOW(), NOW()
+        )
+    </insert>
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.RiskPunishmentPO">
+        INSERT IGNORE INTO risk_punishment(
+            punish_id, user_id, type, status, start_time, end_time,
+            reason_code, decision_id, operator_id, create_time, update_time
+        ) VALUES(
+            #{punishId}, #{userId}, #{type}, #{status}, #{startTime}, #{endTime},
+            #{reasonCode}, #{decisionId}, #{operatorId}, NOW(), NOW()
+        )
+    </insert>
+
+    <select id="selectByDecisionAndType" resultMap="RiskPunishmentMap">
+        SELECT punish_id, user_id, type, status, start_time, end_time,
+               reason_code, decision_id, operator_id, create_time, update_time
+        FROM risk_punishment
+        WHERE decision_id = #{decisionId}
+          AND type = #{type}
+        LIMIT 1
+    </select>
+
+    <select id="selectActiveByUser" resultMap="RiskPunishmentMap">
+        SELECT punish_id, user_id, type, status, start_time, end_time,
+               reason_code, decision_id, operator_id, create_time, update_time
+        FROM risk_punishment
+        WHERE user_id = #{userId}
+          AND status = 'ACTIVE'
+          AND start_time &lt;= #{now}
+          AND end_time &gt; #{now}
+        ORDER BY end_time ASC, punish_id ASC
+    </select>
+
+    <update id="revoke">
+        UPDATE risk_punishment
+        SET status = 'REVOKED',
+            operator_id = #{operatorId},
+            update_time = NOW()
+        WHERE punish_id = #{punishId}
+          AND status = 'ACTIVE'
+    </update>
+
+    <select id="selectByUser" resultMap="RiskPunishmentMap">
+        SELECT punish_id, user_id, type, status, start_time, end_time,
+               reason_code, decision_id, operator_id, create_time, update_time
+        FROM risk_punishment
+        WHERE user_id = #{userId}
+        ORDER BY create_time DESC, punish_id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="selectByFilter" resultMap="RiskPunishmentMap">
+        SELECT punish_id, user_id, type, status, start_time, end_time,
+               reason_code, decision_id, operator_id, create_time, update_time
+        FROM risk_punishment
+        WHERE 1=1
+        <if test="userId != null">
+            AND user_id = #{userId}
+        </if>
+        <if test="type != null and type != ''">
+            AND type = #{type}
+        </if>
+        <if test="beginTime != null">
+            AND create_time &gt;= #{beginTime}
+        </if>
+        <if test="endTime != null">
+            AND create_time &lt;= #{endTime}
+        </if>
+        ORDER BY create_time DESC, punish_id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+</mapper>

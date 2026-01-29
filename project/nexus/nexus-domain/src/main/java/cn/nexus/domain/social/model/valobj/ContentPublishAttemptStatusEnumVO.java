@@ -11,6 +11,7 @@ import lombok.Getter;
 public enum ContentPublishAttemptStatusEnumVO {
     CREATED(0, "已创建"),
     RISK_REJECTED(1, "风控拒绝"),
+    PENDING_REVIEW(7, "待审核"),
     TRANSCODING(2, "转码中"),
     READY_TO_PUBLISH(3, "可发布"),
     PUBLISHED(4, "已发布"),

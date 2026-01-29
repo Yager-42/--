@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS `interaction_comment` (
   `parent_id` BIGINT NULL COMMENT '直接回复的评论ID（用于展示/定位）',
   `reply_to_id` BIGINT NULL COMMENT '显示“回复@谁”的目标评论ID（用于展示）',
   `content` LONGTEXT NOT NULL COMMENT '评论内容',
-  `status` TINYINT NOT NULL COMMENT '1正常；2删除（软删）',
+  `status` TINYINT NOT NULL COMMENT '0待审核；1正常；2删除（软删）',
   `like_count` BIGINT NOT NULL DEFAULT 0 COMMENT '一级评论点赞数（最终一致）',
   `reply_count` BIGINT NOT NULL DEFAULT 0 COMMENT '一级评论回复数（最终一致）',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -187,3 +187,115 @@ CREATE TABLE IF NOT EXISTS `interaction_comment_pin` (
   PRIMARY KEY (`post_id`),
   KEY `idx_comment_id` (`comment_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='互动-评论置顶表（一帖一条）';
+
+
+-- =========================
+-- 风控与信任服务（Risk Control & Trust）
+-- =========================
+
+-- 决策审计日志：每次决策必落库，用于追溯“为什么拦/为什么放”
+CREATE TABLE IF NOT EXISTS `risk_decision_log` (
+  `decision_id` BIGINT NOT NULL COMMENT '决策ID',
+  `event_id` VARCHAR(128) NOT NULL COMMENT '业务侧事件ID（幂等键的一部分）',
+  `user_id` BIGINT NOT NULL COMMENT '用户ID',
+  `action_type` VARCHAR(32) NOT NULL COMMENT '动作类型',
+  `scenario` VARCHAR(64) NOT NULL COMMENT '场景',
+  `result` VARCHAR(16) NOT NULL COMMENT 'PASS/REVIEW/BLOCK/CHALLENGE/SHADOWBAN/LIMIT',
+  `reason_code` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '原因码（稳定可统计）',
+  `request_hash` VARCHAR(64) NOT NULL COMMENT '请求体hash（幂等一致性校验）',
+  `signals_json` LONGTEXT NULL COMMENT '命中信号JSON',
+  `actions_json` TEXT NULL COMMENT '要执行动作JSON',
+  `ext_json` TEXT NULL COMMENT '扩展字段JSON（例如 attemptId/targetId 等）',
+  `trace_id` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '链路追踪ID（可选）',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`decision_id`),
+  UNIQUE KEY `uk_user_event` (`user_id`, `event_id`),
+  KEY `idx_event_id` (`event_id`),
+  KEY `idx_user_time` (`user_id`, `create_time`),
+  KEY `idx_result_time` (`result`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='风控决策审计日志';
+
+-- 人审工单：承接 REVIEW 结果
+CREATE TABLE IF NOT EXISTS `risk_case` (
+  `case_id` BIGINT NOT NULL COMMENT '工单ID',
+  `decision_id` BIGINT NOT NULL COMMENT '关联决策ID',
+  `status` VARCHAR(16) NOT NULL COMMENT 'OPEN/ASSIGNED/DONE',
+  `queue` VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT '队列',
+  `assignee` BIGINT NULL COMMENT '审核人',
+  `result` VARCHAR(16) NOT NULL DEFAULT '' COMMENT 'PASS/BLOCK（结论）',
+  `evidence_json` TEXT NULL COMMENT '证据/上下文JSON',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`case_id`),
+  UNIQUE KEY `uk_decision` (`decision_id`),
+  KEY `idx_status_queue_time` (`status`, `queue`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='风控人审工单';
+
+-- 规则版本：灰度/发布/回滚的基础设施
+CREATE TABLE IF NOT EXISTS `risk_rule_version` (
+  `version` BIGINT NOT NULL COMMENT '规则版本号',
+  `status` VARCHAR(16) NOT NULL COMMENT 'DRAFT/PUBLISHED/ROLLED_BACK',
+  `rules_json` LONGTEXT NOT NULL COMMENT '规则配置JSON',
+  `create_by` BIGINT NULL COMMENT '创建人',
+  `publish_by` BIGINT NULL COMMENT '发布人',
+  `publish_time` DATETIME NULL COMMENT '发布时间',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`version`),
+  KEY `idx_status_time` (`status`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='风控规则版本';
+
+-- Prompt 版本：用于 LLM 提示词灰度/回滚，并将 promptVersion 写入 decision_log 以便对比效果
+CREATE TABLE IF NOT EXISTS `risk_prompt_version` (
+  `version` BIGINT NOT NULL COMMENT 'Prompt版本号',
+  `content_type` VARCHAR(16) NOT NULL COMMENT 'TEXT/IMAGE',
+  `status` VARCHAR(16) NOT NULL COMMENT 'DRAFT/PUBLISHED/ROLLED_BACK',
+  `prompt_text` LONGTEXT NOT NULL COMMENT '系统提示词/约束（System Prompt）',
+  `model` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '可选：绑定模型名（便于回溯）',
+  `create_by` BIGINT NULL COMMENT '创建人',
+  `publish_by` BIGINT NULL COMMENT '发布人',
+  `publish_time` DATETIME NULL COMMENT '发布时间',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`version`),
+  KEY `idx_type_status_time` (`content_type`, `status`, `create_time`),
+  KEY `idx_status_time` (`status`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='风控 LLM Prompt 版本';
+
+-- 处罚事实表：以 MySQL 为准，Redis 只是缓存
+CREATE TABLE IF NOT EXISTS `risk_punishment` (
+  `punish_id` BIGINT NOT NULL COMMENT '处罚ID',
+  `user_id` BIGINT NOT NULL COMMENT '用户ID',
+  `type` VARCHAR(32) NOT NULL COMMENT '处罚类型（POST_BAN/COMMENT_BAN/LOGIN_BAN/DM_BAN/LIMIT 等）',
+  `status` VARCHAR(16) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE/REVOKED/EXPIRED',
+  `start_time` DATETIME NOT NULL COMMENT '生效开始时间',
+  `end_time` DATETIME NOT NULL COMMENT '生效结束时间',
+  `reason_code` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '原因码',
+  `decision_id` BIGINT NULL COMMENT '来源决策ID（用于幂等与追溯）',
+  `operator_id` BIGINT NULL COMMENT '操作人（后台/系统）',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`punish_id`),
+  UNIQUE KEY `uk_decision_type` (`decision_id`, `type`),
+  KEY `idx_user_status_time` (`user_id`, `status`, `end_time`),
+  KEY `idx_decision_id` (`decision_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='风控处罚事实表';
+
+-- 反馈/申诉：用于误杀治理与训练真值沉淀
+CREATE TABLE IF NOT EXISTS `risk_feedback` (
+  `feedback_id` BIGINT NOT NULL COMMENT '反馈ID',
+  `user_id` BIGINT NOT NULL COMMENT '用户ID',
+  `type` VARCHAR(16) NOT NULL COMMENT 'APPEAL/LABEL等',
+  `status` VARCHAR(16) NOT NULL COMMENT 'OPEN/DONE',
+  `decision_id` BIGINT NULL COMMENT '关联决策ID',
+  `punish_id` BIGINT NULL COMMENT '关联处罚ID',
+  `content` TEXT NULL COMMENT '用户内容/理由',
+  `result` VARCHAR(16) NOT NULL DEFAULT '' COMMENT 'ACCEPT/REJECT 等',
+  `operator_id` BIGINT NULL COMMENT '处理人',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`feedback_id`),
+  KEY `idx_user_time` (`user_id`, `create_time`),
+  KEY `idx_status_time` (`status`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='风控反馈与申诉';

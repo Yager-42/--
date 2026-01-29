@@ -52,8 +52,10 @@ public class CommentController implements ICommentApi {
     @Override
     public Response<CommentListResponseDTO> list(CommentListRequestDTO requestDTO) {
         try {
+            Long viewerId = UserContext.getUserId();
             RootCommentPageVO vo = commentQueryService.listRootComments(
                     requestDTO.getPostId(),
+                    viewerId,
                     requestDTO.getCursor(),
                     requestDTO.getLimit(),
                     requestDTO.getPreloadReplyLimit());
@@ -73,7 +75,8 @@ public class CommentController implements ICommentApi {
     @Override
     public Response<CommentReplyListResponseDTO> replyList(CommentReplyListRequestDTO requestDTO) {
         try {
-            ReplyCommentPageVO vo = commentQueryService.listReplies(requestDTO.getRootId(), requestDTO.getCursor(), requestDTO.getLimit());
+            Long viewerId = UserContext.getUserId();
+            ReplyCommentPageVO vo = commentQueryService.listReplies(requestDTO.getRootId(), viewerId, requestDTO.getCursor(), requestDTO.getLimit());
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), toDto(vo));
         } catch (AppException e) {
             return Response.<CommentReplyListResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
@@ -135,6 +138,7 @@ public class CommentController implements ICommentApi {
                 .parentId(vo.getParentId())
                 .replyToId(vo.getReplyToId())
                 .content(vo.getContent() == null ? "" : vo.getContent())
+                .status(vo.getStatus())
                 .likeCount(vo.getLikeCount() == null ? 0L : vo.getLikeCount())
                 .replyCount(vo.getReplyCount() == null ? 0L : vo.getReplyCount())
                 .createTime(vo.getCreateTime())
@@ -221,4 +225,3 @@ public class CommentController implements ICommentApi {
                 .build();
     }
 }
-

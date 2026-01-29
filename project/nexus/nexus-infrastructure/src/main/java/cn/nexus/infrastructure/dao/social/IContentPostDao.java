@@ -13,6 +13,8 @@ public interface IContentPostDao {
 
     int updateStatus(@Param("postId") Long postId, @Param("status") Integer status);
 
+    int updateStatusIfMatch(@Param("postId") Long postId, @Param("status") Integer status, @Param("expectedStatus") Integer expectedStatus);
+
     int updateStatusWithUser(@Param("postId") Long postId, @Param("userId") Long userId, @Param("status") Integer status);
 
     ContentPostPO selectByIdForUpdate(@Param("postId") Long postId);

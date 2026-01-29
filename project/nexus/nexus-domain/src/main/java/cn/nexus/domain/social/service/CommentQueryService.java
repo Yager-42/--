@@ -37,16 +37,16 @@ public class CommentQueryService implements ICommentQueryService {
     private final IUserBaseRepository userBaseRepository;
 
     @Override
-    public RootCommentPageVO listRootComments(Long postId, String cursor, Integer limit, Integer preloadReplyLimit) {
+    public RootCommentPageVO listRootComments(Long postId, Long viewerId, String cursor, Integer limit, Integer preloadReplyLimit) {
         requireNonNull(postId, "postId");
         int normalizedLimit = normalizeLimit(limit, 20, 50);
         int preload = normalizePreload(preloadReplyLimit, 3, 10);
 
         Long pinnedId = commentPinRepository.getPinnedCommentId(postId);
-        RootCommentViewVO pinned = loadPinned(postId, pinnedId, preload);
+        RootCommentViewVO pinned = loadPinned(postId, pinnedId, preload, viewerId);
 
-        List<Long> rootIds = commentRepository.pageRootCommentIds(postId, pinnedId, cursor, normalizedLimit);
-        List<RootCommentViewVO> items = loadRootsWithPreview(rootIds, preload);
+        List<Long> rootIds = commentRepository.pageRootCommentIds(postId, pinnedId, cursor, normalizedLimit, viewerId);
+        List<RootCommentViewVO> items = loadRootsWithPreview(rootIds, preload, viewerId);
 
         enrichUserProfile(pinned, items);
 
@@ -64,11 +64,11 @@ public class CommentQueryService implements ICommentQueryService {
     }
 
     @Override
-    public ReplyCommentPageVO listReplies(Long rootId, String cursor, Integer limit) {
+    public ReplyCommentPageVO listReplies(Long rootId, Long viewerId, String cursor, Integer limit) {
         requireNonNull(rootId, "rootId");
         int normalizedLimit = normalizeLimit(limit, 50, 100);
 
-        List<Long> ids = commentRepository.pageReplyCommentIds(rootId, cursor, normalizedLimit);
+        List<Long> ids = commentRepository.pageReplyCommentIds(rootId, cursor, normalizedLimit, viewerId);
         List<CommentViewVO> items = loadComments(ids);
         enrichUserProfile(items);
 
@@ -87,7 +87,7 @@ public class CommentQueryService implements ICommentQueryService {
         int preload = normalizePreload(preloadReplyLimit, 3, 10);
 
         Long pinnedId = commentPinRepository.getPinnedCommentId(postId);
-        RootCommentViewVO pinned = loadPinned(postId, pinnedId, preload);
+        RootCommentViewVO pinned = loadPinned(postId, pinnedId, preload, null);
 
         int fetchCount = normalizedLimit + 1;
         List<Long> raw = commentHotRankRepository.topIds(postId, fetchCount);
@@ -107,13 +107,13 @@ public class CommentQueryService implements ICommentQueryService {
             hotIds = hotIds.subList(0, normalizedLimit);
         }
 
-        List<RootCommentViewVO> items = loadRootsWithPreview(hotIds, preload);
+        List<RootCommentViewVO> items = loadRootsWithPreview(hotIds, preload, null);
         enrichUserProfile(pinned, items);
 
         return CommentHotVO.builder().pinned(pinned).items(items).build();
     }
 
-    private RootCommentViewVO loadPinned(Long postId, Long pinnedId, int preload) {
+    private RootCommentViewVO loadPinned(Long postId, Long pinnedId, int preload, Long viewerId) {
         if (postId == null || pinnedId == null) {
             return null;
         }
@@ -133,11 +133,11 @@ public class CommentQueryService implements ICommentQueryService {
             return null;
         }
 
-        List<CommentViewVO> preview = loadRepliesPreview(root.getCommentId(), preload);
+        List<CommentViewVO> preview = loadRepliesPreview(root.getCommentId(), preload, viewerId);
         return RootCommentViewVO.builder().root(root).repliesPreview(preview).build();
     }
 
-    private List<RootCommentViewVO> loadRootsWithPreview(List<Long> rootIds, int preload) {
+    private List<RootCommentViewVO> loadRootsWithPreview(List<Long> rootIds, int preload, Long viewerId) {
         if (rootIds == null || rootIds.isEmpty()) {
             return List.of();
         }
@@ -150,21 +150,29 @@ public class CommentQueryService implements ICommentQueryService {
             if (root == null) {
                 continue;
             }
-            // 热榜可能有脏 ID：只返回正常的一级评论
-            if (root.getStatus() == null || root.getStatus() != 1 || root.getRootId() != null) {
+            // 热榜可能有脏 ID：只返回一级评论；待审核评论仅对作者本人可见
+            if (root.getRootId() != null) {
                 continue;
             }
-            List<CommentViewVO> preview = loadRepliesPreview(root.getCommentId(), preload);
+            Integer st = root.getStatus();
+            boolean visible = st != null && st == 1;
+            if (!visible && st != null && st == 0 && viewerId != null && viewerId.equals(root.getUserId())) {
+                visible = true;
+            }
+            if (!visible) {
+                continue;
+            }
+            List<CommentViewVO> preview = loadRepliesPreview(root.getCommentId(), preload, viewerId);
             res.add(RootCommentViewVO.builder().root(root).repliesPreview(preview).build());
         }
         return res;
     }
 
-    private List<CommentViewVO> loadRepliesPreview(Long rootCommentId, int preload) {
+    private List<CommentViewVO> loadRepliesPreview(Long rootCommentId, int preload, Long viewerId) {
         if (rootCommentId == null || preload <= 0) {
             return List.of();
         }
-        List<Long> replyIds = commentRepository.pageReplyCommentIds(rootCommentId, null, preload);
+        List<Long> replyIds = commentRepository.pageReplyCommentIds(rootCommentId, null, preload, viewerId);
         return loadComments(replyIds);
     }
 

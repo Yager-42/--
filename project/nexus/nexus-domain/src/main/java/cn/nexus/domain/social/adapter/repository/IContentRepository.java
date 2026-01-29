@@ -50,6 +50,18 @@ public interface IContentRepository {
      */
     ContentPostPageVO listUserPosts(Long userId, String cursor, int limit);
 
+    /**
+     * 仅更新内容状态（不修改版本号与正文）。
+     *
+     * <p>用于风控隔离（PENDING_REVIEW -> PUBLISHED/REJECTED）等“状态推进”场景。</p>
+     *
+     * @param postId          内容 ID
+     * @param status          新状态
+     * @param expectedStatus  期望的当前状态（用于并发幂等）
+     * @return true=本次完成状态推进；false=状态不匹配或不存在
+     */
+    boolean updatePostStatus(Long postId, Integer status, Integer expectedStatus);
+
     boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
                                        String contentText, String mediaInfo, String locationInfo, Integer visibility);
 

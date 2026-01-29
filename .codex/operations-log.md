@@ -118,3 +118,40 @@
 - 用户追加要求：不接受 MVP 口径，需“完整可上线方案”；已将文档升级为 Production 上线方案，补齐上线定义、服务拆分（risk-api/risk-worker/risk-admin）、高可用与降级策略、后台接口契约、特征平台/模型接入、上线验收与检查清单，并移除 MVP/v2 表述
 - 上线约束已定：≥1000 万 DAU / 峰值 ≥50k QPS；人审=工作时段+抽样；内容识别=使用 Spring AI Alibaba 调用 LLM API（异步扫描 + 预算/缓存/降级）
 - 范围收敛：当前只覆盖“文本 + 图片”，视频明确为 future；补齐图片风控实现路线（你已选：多模态 LLM；备用：OCR+文本 LLM）、统一 JSON 输出契约（增加 `contentType`）并清理文档里“图片/视频”措辞
+
+---
+
+日期：2026-01-29  
+执行者：Codex（Linus-mode）
+
+## 风控与信任服务上线版落地（代码实现）
+
+- 修复 DashScope 适配编译：`DashscopeRiskLlmPort` 对齐 Spring AI 1.1（`AssistantMessage.getText()` + `DashScopeChatOptions` setter），`mvn test` 通过
+- 风控后台（risk-admin）接口落地：新增 `IRiskAdminApi` + DTO + `RiskAdminController`，覆盖规则版本/工单/处罚/审计/申诉处理（均为真实落库逻辑）
+- 领域服务补齐：新增 `IRiskAdminService/RiskAdminService` 与 `IRiskAppealService/RiskAppealService`，人审结论会更新 `risk_case`/`risk_decision_log` 并推进内容/评论隔离状态
+- MyBatis 扩展：规则版本 `maxVersion/updateRulesJson`；审计日志与处罚增加按条件分页查询；工单查询增加可选时间过滤
+- 用户申诉入口：`POST /api/v1/risk/appeals` 写入 `risk_feedback(type=APPEAL,status=OPEN)`；后台 `ACCEPT` 会撤销 `risk_punishment`
+- 配置与文档：`application-dev.yml` 增加 `spring.ai.dashscope.api-key` 与 `risk.llm.*`；`social_schema.sql` 注释对齐评论 `status=0`（待审核）
+
+---
+
+日期：2026-01-29  
+执行者：Codex（Linus-mode）
+
+## 风控与信任服务任务盘点（文档 vs 代码）
+
+- 对照表：新增 `.codex/risk-trust-task-gap.md`，按《风控与信任服务-实现方案.md》18.2 的 10 项任务逐条标注 DONE/PARTIAL 与证据文件
+- 主要缺口：`prompt_version`（表+存储层）、`ScanCompleted` 事件、`LOGIN/REGISTER/DM_SEND` 业务接入、PASS 抽检策略、指标埋点与开关矩阵
+
+---
+
+日期：2026-01-29  
+执行者：Codex（Linus-mode）
+
+## 风控与信任服务缺口补齐（18.2：任务 2/3/5/8/9；排除任务 10）
+
+- Prompt 版本化：新增表 `risk_prompt_version` + MyBatis/Repository；risk-admin 增加 prompt 版本的 upsert/list/publish/rollback；LLM 调用会读取当前生效 prompt 并把 `promptVersion/model` 写入审计 detail，保证可回溯
+- ScanCompleted 事件：新增 `ScanCompletedEvent`，在 `RiskLlmScanConsumer`/`RiskImageScanConsumer` 扫描完成后 best-effort 发布 `risk.scan.completed`（旁路消费用）
+- PASS 抽检：`RiskService.tryCreateCase` 对 PASS 结果按“工作时段 + 抽样比例”创建 `risk_case(queue=sample)`（不改变用户可见决策结果）；默认 `passPercent=0` 关闭
+- 自动处罚：`RiskAsyncService` 在 LLM=BLOCK 且置信度达阈值时可写 `risk_punishment`（幂等 `insertIgnore`）；默认 `risk.autoPunish.enabled=false` 关闭
+- Never break userspace：新增能力默认关闭/0%，避免对现有用户可见行为造成意外变化

@@ -82,3 +82,15 @@
 - [x] risk-admin 后台：规则版本（create/list/publish/rollback）、工单（list/assign/decision）、处罚（apply/revoke/query）、审计查询、申诉处理接口齐全且为真实落库实现。
 - [x] 申诉入口：`POST /api/v1/risk/appeals` 写入 `risk_feedback(type=APPEAL,status=OPEN)`；后台 `ACCEPT` 会撤销处罚。
 - [x] 本地验证：`./.codex/tools/apache-maven-3.9.6/bin/mvn -f project/nexus/pom.xml test` BUILD SUCCESS（Finished at: 2026-01-29T14:58:29+08:00）（见 `.codex/testing.md`）。
+
+---
+
+日期：2026-01-30  
+执行者：Codex（Linus-mode）
+
+## 搜索与发现服务域（实现文档）验收
+
+- [x] 实现级文档：`.codex/search-discovery-implementation.md`（接口契约不变；type=ALL/POST/USER/GROUP；USER=username+userId；GROUP=groupName+groupId；ES/Redis/MQ/回灌/验收用例/外部溯源齐全）。  
+- [x] 留痕齐全：`.codex/context-scan.json`、`.codex/operations-log.md`、`.codex/review-report.md`、`.codex/testing.md` 已追加本次记录。  
+- [x] 本地编译验证：`project/nexus` 下执行 `& "..\..\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -DskipTests package`，BUILD SUCCESS（Finished at: 2026-01-30T10:51:33+08:00）（见 `.codex/testing.md`）。  
+- [ ] 端到端冒烟：未实际拉起 ES/Redis/RabbitMQ 并跑 curl 用例（文档 8.1-8.3 已给出可复制步骤）。  

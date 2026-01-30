@@ -275,3 +275,24 @@
 - 用户状态：`GET /api/v1/risk/user/status`
 - 用户申诉：`POST /api/v1/risk/appeals`
 - 后台：规则版本/工单/处罚/审计/申诉处理：`/api/v1/risk/admin/...`
+
+---
+
+# 追加：搜索与发现服务域（文档交付）最小验证
+
+日期：2026-01-30  
+执行者：Codex（Linus-mode）
+
+## 0. 产物检查（已完成）
+
+- 新增实现文档：`.codex/search-discovery-implementation.md`
+- 更新留痕：`.codex/context-scan.json`、`.codex/operations-log.md`、`.codex/review-report.md`
+
+## 1. Maven 编译（已执行）
+
+命令：`& "..\..\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -DskipTests package`（在 `project/nexus` 下执行）  
+结果：BUILD SUCCESS（Finished at: 2026-01-30T10:51:33+08:00）
+
+## 2. 集成冒烟（未执行）
+
+未拉起 ES/Redis/RabbitMQ 的端到端冒烟（本文档已给出 docker-compose 与 curl 用例，执行者可按 8.1-8.3 复现）。

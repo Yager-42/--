@@ -155,3 +155,39 @@
 - PASS 抽检：`RiskService.tryCreateCase` 对 PASS 结果按“工作时段 + 抽样比例”创建 `risk_case(queue=sample)`（不改变用户可见决策结果）；默认 `passPercent=0` 关闭
 - 自动处罚：`RiskAsyncService` 在 LLM=BLOCK 且置信度达阈值时可写 `risk_punishment`（幂等 `insertIgnore`）；默认 `risk.autoPunish.enabled=false` 关闭
 - Never break userspace：新增能力默认关闭/0%，避免对现有用户可见行为造成意外变化
+
+---
+
+日期：2026-01-30  
+执行者：Codex（Linus-mode）
+
+## 搜索与发现服务域实现文档产出（Search & Discovery）
+
+- 现状确认：项目已存在 `SearchController(/api/v1/search/*)` + `ISearchApi/DTO/ISearchService`，但 `SearchService` 为占位返回 demo 数据
+- 复用写侧入口：内容发布/删除事件已由 `ContentDispatchPort` 投递到 exchange=`social.feed`（rk=`post.published`/`post.deleted`），且发布点为 after-commit
+- 写死上线口径：支持 `type=ALL/POST/USER/GROUP`；USER 只按 `username+userId` 搜索；GROUP 只按 `groupName+groupId` 搜索；未知 type 返回空（items=[]）但不抛错（facets.meta.reason=UNSUPPORTED_TYPE）
+- 技术选型定稿：Elasticsearch 8.12.2（官方 Java Client）+ Redis（history/trending/suggest）+ RabbitMQ（social.feed + 新增 social.search）；不引入 CDC
+- 核心数据结构写死：单索引多 docType（index=`social_search_v1` + alias=`social_search`）；ES `_id` 写死 `{docType}:{id}`（POST/USER/GROUP 统一幂等）
+- 查询一致性约束：`filters` 字符串承载 JSON Schema（分页/过滤/归因）；`facets` 返回 JSON 字符串（含 meta + aggs）；type=ALL 仍是一条 ES query（不做多 query merge，避免 offset/limit 语义崩坏）
+- GROUP 真相源补齐：文档内补充 `community_group` 最小可用 DDL + DAO/Mapper/Repository 规范；并定义 `social.search` 的 user/group upsert/delete 事件契约与事件类文件路径
+- 文档交付：更新 `.codex/search-discovery-implementation.md`（ES mapping/Redis key/MQ 拓扑/索引规则/查询 DSL/回灌 runner/验收用例/溯源映射，范围=POST+USER+GROUP）
+
+公开资料溯源（摘要）：
+
+- GitHub Code Search inverted index primer：https://github.blog/2023-02-06-the-technology-behind-githubs-new-code-search/
+- Google 论文（大规模搜索架构）：http://infolab.stanford.edu/~backrub/google.html
+- Transactional Outbox Pattern：https://microservices.io/patterns/data/transactional-outbox.html
+- Elasticsearch kNN / Suggesters：https://www.elastic.co/guide/en/elasticsearch/reference/current/knn-search.html / https://www.elastic.co/guide/en/elasticsearch/reference/current/search-suggesters.html
+
+---
+
+日期：2026-01-30  
+执行者：Codex（Linus-mode）
+
+## 搜索与发现服务域方案重构：仅 POST 搜索
+
+- 范围收缩：只支持 POST；`type` 空/ALL/POST → POST；USER/GROUP/其它 → UNSUPPORTED（返回空列表，不抛错）
+- 用户确认：接受 `type=USER/GROUP` 返回空列表（不抛错）
+- 依赖收敛：移除 `social.search` 与 USER/GROUP 索引链路；Search 不再依赖 `community_group`
+- 数据结构简化：ES mapping/文档结构只保留 POST 字段；不再引入 `docType`
+- 查询与验收更新：只保留 POST Query；facets 仅 `mediaType/postTypes + meta`；冒烟用例增加 `type=ALL` 归一化与 `type=USER` UNSUPPORTED

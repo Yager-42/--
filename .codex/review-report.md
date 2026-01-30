@@ -426,3 +426,39 @@
 - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/DashscopeRiskLlmPort.java`
 - `project/nexus/nexus-types/src/main/java/cn/nexus/types/event/risk/ScanCompletedEvent.java`
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/RiskMqConfig.java`
+
+---
+
+# 追加：搜索与发现服务域实现文档 CR
+
+日期：2026-01-30  
+执行者：Codex（Linus-mode）
+
+## 需求与范围
+
+- 依据：`社交接口.md` 的“搜索与发现服务域”章节 + 当前代码骨架（SearchController/ISearchService/SearchService 占位）。  
+- 目标：产出实现级文档，约束到“任何 agent 都能实现出一致的搜索域”，并给出可追溯的外部借鉴来源。  
+- 本次口径：`type=ALL/POST/USER/GROUP`；USER 只按 `username+userId` 搜索；GROUP 只按 `groupName+groupId` 搜索；HTTP/DTO 契约保持不变。  
+
+## Linus Review（文档可实现性与一致性）
+
+【品味评分】🟡 凑合  
+【综合评分】90/100（通过）
+
+### 好的部分（Good Taste）
+
+- 先看事实再设计：把“保持 /api/v1/search/* 与 DTO 字段不变”写成硬约束，符合 Never break userspace。  
+- 消灭特殊情况：把“不可见 POST”的判定放在索引侧（回表判定 → delete/upsert），从而让查询侧不需要 status/visibility filter。  
+- 幂等靠数据结构：ES `_id` 写死 `{docType}:{id}`（POST/USER/GROUP 统一），MQ 重投不会写出重复垃圾。  
+- ALL 行为不模糊：明确 type=ALL 仍然是一条 ES query（不做多 query merge），保证 offset/limit 可验证。  
+- 交付可执行：mapping/Redis key/MQ 拓扑/filters+facets schema/Query DSL/curl 冒烟/回灌 runner 都给到“可照抄”的粒度。  
+
+### 风险与改进（仍然值得记住）
+
+- USER/GROUP 的索引更新依赖新事件 `social.search`：如果业务侧不在“资料变更/圈子变更”后 after-commit 发事件，索引会长期不更新（这不是 Search 的锅，是上游没按契约做）。  
+- GROUP 真相源需要补齐：文档已给出 `community_group` DDL + DAO/Mapper/Repository 规范，但它属于“新增持久化”，上线需要 DB 变更流程配合。  
+- USER 回灌需要新增 `user_base.selectPage`：否则只能靠事件增量，历史用户永远搜不到。  
+
+## 关键文件（本次交付）
+
+- `.codex/search-discovery-implementation.md`

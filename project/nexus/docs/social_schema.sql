@@ -11,6 +11,23 @@ CREATE TABLE IF NOT EXISTS `user_base` (
   UNIQUE KEY `uk_username` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户基础信息表';
 
+-- 社群/圈子表：社群域真相源（Search 本次不依赖）
+CREATE TABLE IF NOT EXISTS `community_group` (
+  `group_id` BIGINT NOT NULL COMMENT '圈子ID',
+  `owner_id` BIGINT NOT NULL DEFAULT 0 COMMENT '群主用户ID（可选）',
+  `name` VARCHAR(128) NOT NULL COMMENT '圈子名称',
+  `join_mode` TINYINT DEFAULT 0 COMMENT '0任意,1审核,2邀请（可选）',
+  `channel_config` JSON NULL COMMENT '频道配置（可选）',
+
+  `member_count` BIGINT NOT NULL DEFAULT 0 COMMENT '成员数（最终一致即可）',
+  `is_deleted` TINYINT NOT NULL DEFAULT 0 COMMENT '软删：0正常,1删除',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`group_id`),
+  KEY `idx_update_time` (`update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='社群/圈子表';
+
 -- 用户关系表（正向：我关注/好友/屏蔽谁）
 CREATE TABLE IF NOT EXISTS `user_relation` (
   `id` BIGINT NOT NULL,

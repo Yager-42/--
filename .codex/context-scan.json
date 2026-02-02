@@ -1,5 +1,5 @@
 {
-  "date": "2026-01-30",
+  "date": "2026-02-02",
   "executor": "Codex (Linus-mode)",
   "cwd": "C:\\\\Users\\\\Administrator\\\\Desktop\\\\文档",
   "repo": {
@@ -17,8 +17,8 @@
     ]
   },
   "focus": {
-    "feature": "search & discovery service production implementation spec (indexing/search/suggest/trending/history) — keep /api/v1/search/* contract unchanged",
-    "docSource": "社交接口.md"
+    "feature": "user domain implementation plan vs current code: cross-domain contract conflicts (user_base/nickname, user.nickname_changed, privacy settings, userId source)",
+    "docSource": ".codex/user-domain-implementation.md"
   },
   "observations": [
     "RiskService 已实现统一决策入口 decision(RiskEvent)->RiskDecision，并且旧接口 textScan/imageScan 也走统一链路以保证每次判断落 risk_decision_log。",
@@ -28,7 +28,12 @@
     "DashScope Spring AI Alibaba 适配已对齐 1.1 API（AssistantMessage.getText + DashScopeChatOptions setter），mvn test 通过。",
     "搜索域已有 HTTP 契约与占位实现：SearchController(/api/v1/search/*) + ISearchApi + ISearchService/SearchService（当前返回 demo 数据）。",
     "内容发布/删除事件已复用 RabbitMQ：ContentDispatchPort 投递到 exchange=social.feed，routingKey=post.published / post.deleted（after-commit 触发）。",
-    "FeedFanoutConfig 已提供 social.feed 交换机声明与 Jackson JSON MessageConverter；搜索索引链路应复用该 converter，避免重复声明。"
+    "FeedFanoutConfig 已提供 social.feed 交换机声明与 Jackson JSON MessageConverter；搜索索引链路应复用该 converter，避免重复声明。",
+    "用户域在本项目中没有独立实现（无 cn.nexus.domain.user）；目前只落了 user_base/user_privacy_setting 等读侧/策略表，并通过 X-User-Id 注入 userId（由网关提供真值）。",
+    "user_base 当前缺少 nickname 字段：多处实现把 nickname= username（UserBriefVO/UserBaseRepository/SearchIndexConsumer），与用户域方案要求“username(不可变) 与 nickname(可变) 分离”冲突。",
+    "Search 侧已声明 user.nickname_changed 队列/绑定并实现消费（SearchIndexMqConfig/SearchIndexConsumer），但当前代码中缺少 producer 发布该事件（没有 RabbitTemplate.convertAndSend(exchange=social.feed, rk=user.nickname_changed)）。",
+    "user_base 与 user_privacy_setting 的 DAO 当前只有 select（没有 insert/update）：评论/搜索/关系等跨域读路径依赖上游数据写入，但当前实现缺少正式写入口（用户域方案建议补齐网关 upsert 与用户自助更新 API）。",
+    "面向客户端的 Controller 基本遵循 UserContext.requireUserId()，但少数历史接口仍保留 userId 参数（ignored），需要在文档里明确“客户端传 userId 不作为真值”。"
   ]
 }
 

@@ -223,3 +223,42 @@
 - App：新增 `SearchIndexBackfillRunner`（默认关闭；checkpoint=Redis `search:backfill:cursor`；可重跑 best-effort）
 - Types/写侧事件：新增 `PostUpdatedEvent/UserNicknameChangedEvent`；内容编辑成功后 after-commit 触发 `post.updated`（避免把 edit 当成 publish）
 - 依赖与验证：`nexus-infrastructure` 增加 `elasticsearch-java:8.12.2`，`nexus-trigger` 增加 `spring-retry`；本地 `project/nexus` 下 `mvn test` 通过
+
+---
+
+日期：2026-02-02  
+执行者：Codex（Linus-mode）
+
+## 用户领域：实现方案文档（基于已实现半套补齐）
+
+- 新增文档：`.codex/user-domain-implementation.md`
+- 设计定位：User Domain=Profile/Settings/Status + `user_base` 读模型；账号/认证不在本项目实现（继续信任 `X-User-Id` 真值）
+- 关键补齐点：`user_base` 增 `nickname` 消除 “nickname=username” 特殊情况；昵称变更 after-commit 发布 `user.nickname_changed` 复用现有 search 消费链路
+
+---
+
+日期：2026-02-02  
+执行者：Codex（Linus-mode）
+
+## 用户领域：跨领域冲突盘点（用户域方案 vs 现有实现）
+
+- user_base 当前表结构缺少 `nickname`：多处实现写死 `nickname=username`（影响评论展示与搜索 authorNickname）
+- `user.nickname_changed`：已有 MQ binding + consumer，但当前缺少 producer 发布该事件（用户域写入口尚未落地）
+- user_base / user_privacy_setting：DAO 目前仅提供 select（无 insert/update），跨域读依赖缺少正式上游写入口
+- HTTP userId 真值：大多数 Controller 用 `UserContext.requireUserId()`；少数历史接口仍保留 userId 参数（ignored），需在接口文档中明确“不信任客户端传入 userId”
+- 已按你的选择固化“用户域缺漏项”实现选项：`1A 2A 3C 4A 5A 6A 7A 8A 9B 10B 11A 12B 13A 14A 15A 16B 17A 18B`（详见 `.codex/user-domain-implementation.md` 第 13.1 节）
+
+---
+
+日期：2026-02-02  
+执行者：Codex（Linus-mode）
+
+## 用户领域：缺漏项拍板更新（1B2A3A4A5A）
+
+- 1B：`/api/v1/internal/user/upsert` = update-only；`user_base` 缺行直接 NOT_FOUND，不自动创建  
+- 2A：Profile 本次只做 `nickname/avatarUrl`；bio/background/gender 延后  
+- 3A：`username` 真正区分大小写（数据库 collation + 唯一索引）  
+- 4A：昵称变更事件走 MySQL Outbox（落库 -> after-commit 尝试投递 -> 失败可重试）  
+- 5A：DEACTIVATED 只拦写不拦读（internal 接口例外允许写）
+
+- 文档更新：`.codex/user-domain-implementation.md`（user_base/接口/Outbox/阶段计划/已拍板条目对齐）

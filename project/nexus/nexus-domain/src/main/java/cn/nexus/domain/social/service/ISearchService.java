@@ -10,9 +10,9 @@ import cn.nexus.domain.social.model.valobj.SearchTrendingVO;
  */
 public interface ISearchService {
 
-    SearchResultVO search(String keyword, String type, String sort, String filters);
+    SearchResultVO search(Long userId, String keyword, String type, String sort, String filters);
 
-    SearchSuggestVO suggest(String keyword);
+    SearchSuggestVO suggest(Long userId, String keyword);
 
     SearchTrendingVO trending(String category);
 

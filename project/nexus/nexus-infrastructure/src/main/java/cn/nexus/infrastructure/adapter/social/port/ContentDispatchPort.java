@@ -3,6 +3,7 @@ package cn.nexus.infrastructure.adapter.social.port;
 import cn.nexus.domain.social.adapter.port.IContentDispatchPort;
 import cn.nexus.types.event.PostDeletedEvent;
 import cn.nexus.types.event.PostPublishedEvent;
+import cn.nexus.types.event.PostUpdatedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -18,6 +19,7 @@ public class ContentDispatchPort implements IContentDispatchPort {
 
     private static final String EXCHANGE = "social.feed";
     private static final String ROUTING_KEY = "post.published";
+    private static final String ROUTING_KEY_UPDATED = "post.updated";
     private static final String ROUTING_KEY_DELETED = "post.deleted";
 
     private final RabbitTemplate rabbitTemplate;
@@ -30,6 +32,16 @@ public class ContentDispatchPort implements IContentDispatchPort {
         event.setPublishTimeMs(System.currentTimeMillis());
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, event);
         log.info("Post_Published dispatched. postId={}, userId={}", postId, userId);
+    }
+
+    @Override
+    public void onUpdated(Long postId, Long operatorId) {
+        PostUpdatedEvent event = new PostUpdatedEvent();
+        event.setPostId(postId);
+        event.setOperatorId(operatorId);
+        event.setTsMs(System.currentTimeMillis());
+        rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY_UPDATED, event);
+        log.info("Post_Updated dispatched. postId={}, operatorId={}", postId, operatorId);
     }
 
     @Override

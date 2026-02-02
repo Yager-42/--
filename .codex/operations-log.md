@@ -191,3 +191,35 @@
 - 依赖收敛：移除 `social.search` 与 USER/GROUP 索引链路；Search 不再依赖 `community_group`
 - 数据结构简化：ES mapping/文档结构只保留 POST 字段；不再引入 `docType`
 - 查询与验收更新：只保留 POST Query；facets 仅 `mediaType/postTypes + meta`；冒烟用例增加 `type=ALL` 归一化与 `type=USER` UNSUPPORTED
+
+---
+
+日期：2026-02-02  
+执行者：Codex（Linus-mode）
+
+## 搜索与发现服务域：实现细节选项写死（按用户选择）
+
+- 已按你的选择固化策略：`1A 2B 3B 4C 5A 6C 7A`
+- 文档更新：`.codex/search-discovery-implementation.md`
+  - 读侧失败语义：ES 查询失败直接 `0001`（UN_ERROR），不做“空列表降级”
+  - 写侧失败策略：可重试/不可重试分流 + 5 次指数退避重试，耗尽后进入 DLQ
+  - 索引陈旧治理：新增并消费 `post.updated` + `user.nickname_changed`
+  - 回灌断点续跑：Redis checkpoint `search:backfill:cursor`
+  - filters 严格校验：类型不对/值非法直接 `0002`（ILLEGAL_PARAMETER）
+- MQ 并发/预取配置化：默认 `concurrency=2`、`prefetch=20`
+- 日志格式写死：单行 `key=value`，首字段 `event=...`
+
+---
+
+日期：2026-02-02  
+执行者：Codex（Linus-mode）
+
+## 搜索与发现服务域：代码实现落地（Search & Discovery / POST only）
+
+- Domain：新增 `ISearchEnginePort` + `SearchEngineQueryVO/SearchEngineResultVO/SearchDocumentVO`，新增 `ISearchHistoryRepository/ISearchTrendingRepository`，并将 `SearchService` 从占位实现替换为真实链路（filters 校验 → ES 查询 → best-effort 写 history/trend）
+- Trigger(HTTP)：`SearchController` 仅做传参 + 异常映射；`search/suggest` 增加读取 `UserContext.getUserId()` 并传入 domain（HTTP 契约/DTO 不变）
+- Trigger(MQ)：新增 `SearchIndexMqConfig`（复用 `social.feed` + DLX/DLQ + retry/backoff + concurrency/prefetch 配置化）与 `SearchIndexConsumer`（回表 → upsert/delete，消费 `post.published/post.updated/post.deleted/user.nickname_changed`）
+- Infrastructure：新增 `SearchElasticsearchConfig`（ES 8.12.2 官方 Java Client），实现 `SearchEnginePort`（BM25 + gauss recency + highlight + aggs + update-by-query），实现 Redis 仓储 `SearchHistoryRepository/SearchTrendingRepository`
+- App：新增 `SearchIndexBackfillRunner`（默认关闭；checkpoint=Redis `search:backfill:cursor`；可重跑 best-effort）
+- Types/写侧事件：新增 `PostUpdatedEvent/UserNicknameChangedEvent`；内容编辑成功后 after-commit 触发 `post.updated`（避免把 edit 当成 publish）
+- 依赖与验证：`nexus-infrastructure` 增加 `elasticsearch-java:8.12.2`，`nexus-trigger` 增加 `spring-retry`；本地 `project/nexus` 下 `mvn test` 通过

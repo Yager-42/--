@@ -302,7 +302,11 @@ public class ContentService implements IContentService {
             }
 
             // 事务提交后再发 MQ：避免消费者读到未提交数据导致“索引误删”等线上鬼故事。
-            dispatchAfterCommit(targetPostId, userId);
+            if (existedPost == null) {
+                dispatchAfterCommit(targetPostId, userId);
+            } else {
+                dispatchUpdateAfterCommit(targetPostId, userId);
+            }
             return OperationResultVO.builder()
                     .success(true)
                     .id(targetPostId)
@@ -925,6 +929,26 @@ public class ContentService implements IContentService {
                 } catch (Exception e) {
                     // afterCommit 失败不会回滚业务事务：只能记录，后续再补偿（如需要可引入 outbox）。
                     log.error("post published dispatch failed after commit, postId={}, userId={}", postId, userId, e);
+                }
+            }
+        });
+    }
+
+    private void dispatchUpdateAfterCommit(Long postId, Long operatorId) {
+        if (postId == null || operatorId == null) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            contentDispatchPort.onUpdated(postId, operatorId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    contentDispatchPort.onUpdated(postId, operatorId);
+                } catch (Exception e) {
+                    log.error("post updated dispatch failed after commit, postId={}, operatorId={}", postId, operatorId, e);
                 }
             }
         });

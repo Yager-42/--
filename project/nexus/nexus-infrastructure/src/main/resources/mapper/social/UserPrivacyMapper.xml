@@ -10,4 +10,11 @@
     <select id="selectByUserId" resultMap="PrivacyMap">
         SELECT user_id, need_approval FROM user_privacy_setting WHERE user_id = #{userId}
     </select>
+
+    <insert id="upsertNeedApproval">
+        INSERT INTO user_privacy_setting(user_id, need_approval)
+        VALUES(#{userId}, #{needApproval})
+        ON DUPLICATE KEY UPDATE
+            need_approval = VALUES(need_approval)
+    </insert>
 </mapper>

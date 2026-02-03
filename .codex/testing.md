@@ -296,3 +296,102 @@
 ## 2. 集成冒烟（未执行）
 
 未拉起 ES/Redis/RabbitMQ 的端到端冒烟（本文档已给出 docker-compose 与 curl 用例，执行者可按 8.1-8.3 复现）。
+
+---
+
+# 追加：用户领域阶段 A1（user_base.nickname 对齐）本地验证
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 测试（已执行）
+
+命令：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" test`  
+结果：BUILD SUCCESS；新增测试 `UserBaseRepositoryTest`（2 tests）
+
+---
+
+# 追加：用户领域阶段 A2（user_status / user_event_outbox 基础设施）本地验证
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 测试（已执行）
+
+命令：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" -pl nexus-infrastructure -am test`  
+结果：BUILD SUCCESS
+
+---
+
+# 追加：用户领域阶段 B1（UserService 写入逻辑 + 领域接口）本地验证
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 测试（已执行）
+
+命令：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" test`  
+结果：BUILD SUCCESS（nexus-domain: UserServiceTest 6 tests；nexus-infrastructure: UserBaseRepositoryTest 2 tests）
+
+---
+
+# 追加：用户领域阶段 B2（Outbox 发布器 + 定时重试）本地验证
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 测试（已执行）
+
+命令：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" test`  
+结果：BUILD SUCCESS
+
+---
+
+# 追加：用户领域 9.3（Profile Page 聚合接口）+ 阶段 D（user_base 缓存）本地验证
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 测试（已执行）
+
+命令：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" test`  
+结果：BUILD SUCCESS（nexus-domain: UserProfilePageQueryServiceTest 2 tests；nexus-infrastructure: UserBaseRepositoryTest 6 tests + UserProfileRepositoryTest 4 tests）
+
+
+---
+
+# 追加：用户领域阶段 B3（写接口 HTTP/API）本地验证
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 测试（已执行）
+
+命令：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" test`  
+结果：BUILD SUCCESS（nexus-infrastructure: UserBaseRepositoryTest 2 tests + UserProfileRepositoryTest 4 tests）
+
+
+---
+
+# 追加：用户领域阶段 C（读接口 Profile + 最小屏蔽校验）本地验证
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 测试（已执行）
+
+命令：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" test`  
+结果：BUILD SUCCESS
+
+
+---
+
+# 追加：用户领域读接口收口（me/profile、profile、me/privacy）本地验证
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 0. Maven 测试（已执行）
+
+命令：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" test`  
+结果：BUILD SUCCESS

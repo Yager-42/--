@@ -1,0 +1,9 @@
+-- 用户状态表（最小实现）
+CREATE TABLE IF NOT EXISTS `user_status` (
+  `user_id` BIGINT NOT NULL,
+  `status` VARCHAR(32) NOT NULL COMMENT 'ACTIVE/DEACTIVATED',
+  `deactivated_time` DATETIME NULL,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户状态表（最小实现）';
+

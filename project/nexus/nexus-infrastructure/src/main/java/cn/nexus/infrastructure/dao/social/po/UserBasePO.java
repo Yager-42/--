@@ -12,6 +12,6 @@ import lombok.Data;
 public class UserBasePO {
     private Long userId;
     private String username;
+    private String nickname;
     private String avatarUrl;
 }
-

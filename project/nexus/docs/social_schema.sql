@@ -3,7 +3,8 @@
 -- 用户基础表：用于评论/通知读侧补全 nickname/avatar，以及 @username -> userId 映射
 CREATE TABLE IF NOT EXISTS `user_base` (
   `user_id` BIGINT NOT NULL COMMENT '用户ID (Sharding Key)',
-  `username` VARCHAR(64) NOT NULL COMMENT '全局唯一用户名（用于 @username 提及）',
+  `username` VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '全局唯一用户名（用于 @username 提及，区分大小写）',
+  `nickname` VARCHAR(64) NOT NULL DEFAULT '' COMMENT '展示昵称（可改）',
   `avatar_url` VARCHAR(255) DEFAULT '' COMMENT '头像URL',
   `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
   `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

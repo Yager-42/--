@@ -8,4 +8,6 @@ import org.apache.ibatis.annotations.Param;
 public interface IUserPrivacyDao {
 
     UserPrivacyPO selectByUserId(@Param("userId") Long userId);
+
+    int upsertNeedApproval(@Param("userId") Long userId, @Param("needApproval") Boolean needApproval);
 }

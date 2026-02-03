@@ -262,3 +262,121 @@
 - 5A：DEACTIVATED 只拦写不拦读（internal 接口例外允许写）
 
 - 文档更新：`.codex/user-domain-implementation.md`（user_base/接口/Outbox/阶段计划/已拍板条目对齐）
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：阶段 A1（user_base.nickname 读模型对齐）
+
+- 数据结构：`user_base` DDL 补齐 `nickname`；`username` 按 `utf8mb4_bin` 约束大小写区分（schema 文档对齐）
+- 代码对齐：`UserBasePO`/`UserBaseMapper.xml`/`UserBaseRepository` 增加 nickname 读取与映射
+- 特殊情况收敛：迁移期 fallback（nickname 为空 -> username）只允许存在于 `UserBaseRepository` 一处，避免补丁扩散到调用方
+- 测试：`nexus-infrastructure` 引入 `spring-boot-starter-test`（test scope）；新增 `UserBaseRepositoryTest`
+- 本地验证：`project/nexus` 下执行 `mvn test`，BUILD SUCCESS
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：阶段 A2（user_status / user_event_outbox 基础设施）
+
+- DDL：新增 `project/nexus/docs/user_status.sql`、`project/nexus/docs/user_event_outbox.sql`（与实现方案文档一致）
+- MyBatis：新增 `cn.nexus.infrastructure.dao.user.*` DAO/PO 与 `mapper/user/*.xml`
+- 配置：`application-dev.yml` 的 `mybatis.mapper-locations` 扩展为 `classpath*:mapper/**/*.xml`，确保新 mapper 能被加载
+- 本地验证：执行 `mvn -pl nexus-infrastructure -am test`，BUILD SUCCESS
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：阶段 B1（UserService 写入逻辑 + 领域接口）
+
+- 新增用户域分层：`cn.nexus.domain.user.*`（adapter/repository、adapter/port、model/valobj、service）
+- 写逻辑：`UserService` 实现 profile/privacy/internal upsert 的核心规则（昵称空白报错；avatarUrl 允许清空；internal upsert update-only + username 一致性校验）
+- 事件触发：nickname 变更时，事务内调用 `IUserEventOutboxPort.saveNicknameChanged(userId, tsMs)`，并用 `TransactionSynchronizationManager.registerSynchronization(...afterCommit...)` 在提交后触发 `tryPublishPending()`
+- 用户停用：面向客户端写请求拦截 `DEACTIVATED`（internal 入口例外允许写）
+- 错误码：`ResponseCode` 补齐 `NOT_FOUND/CONFLICT/USER_DEACTIVATED`（后续 controller 直接复用）
+- 测试：`nexus-domain` 增加 `spring-boot-starter-test`（test scope）；新增 `UserServiceTest` 覆盖核心分支；全量 `mvn test` 通过
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：阶段 B2（Outbox 发布器 + 定时重试）
+
+- Outbox 端口实现：`UserEventOutboxPort`（MySQL outbox 落库 + RabbitMQ 投递）
+- 投递规则：`tryPublishPending()` 每次拉取 `NEW/FAIL` 各 100 条，逐条投递 `exchange=social.feed`、`rk=user.nickname_changed`；成功 markDone，失败 markFail 并增加 retry_count
+- payload：最小化为 `{userId, tsMs}`，消费者回表读 nickname（避免冗余字段漂移）
+- 定时任务：新增 `UserEventOutboxRetryJob`（每分钟重试 NEW/FAIL；每日 3 点清理 DONE 7 天前记录）
+- 调度启用：`Application` 增加 `@EnableScheduling`（否则已有的 RelationEventRetryJob 也不会运行）
+- 本地验证：全量 `mvn test`，BUILD SUCCESS
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：阶段 B3（写接口 HTTP/API + 基础仓储实现）
+
+- nexus-api：新增 `cn.nexus.api.user.*`（`IUserProfileApi/IUserSettingApi/IUserInternalUserApi`）与 DTO（Profile Patch/Privacy Update/Internal Upsert）
+- nexus-trigger：新增 `cn.nexus.trigger.http.user.*` Controller，实现 `/api/v1/user/me/profile`、`/api/v1/user/me/privacy`、`/api/v1/internal/user/upsert`
+- 契约对齐：面向客户端的写接口一律用 `UserContext.requireUserId()` 取 userId；internal 接口不走 UserContext
+- MyBatis 补齐：`IUserBaseDao` 增 `selectByUserId/updatePatch`；`IUserPrivacyDao` 增 `upsertNeedApproval`；对应 Mapper.xml 增 SQL
+- 特殊情况消除：`updatePatch` 不允许用 affectedRows=0 误判 NOT_FOUND（值相同也应视为成功）；仓储层二次回表确认是否存在
+- 测试与验证：新增 `UserProfileRepositoryTest`；全量 `mvn test`，BUILD SUCCESS
+
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：阶段 C（读接口 Profile + 最小屏蔽校验）
+
+- nexus-api：扩展 `IUserProfileApi`，新增 `GET /api/v1/user/me/profile` 与 `GET /api/v1/user/profile?targetUserId=...`，并补齐 DTO（Query/Response）
+- nexus-trigger：`UserProfileController` 实现读接口；读取 `user_base`（profile）与 `user_status`（status）；DEACTIVATED 只拦写不拦读
+- 最小隐私：查看他人 profile 前做双向屏蔽判断：`IRelationPolicyPort.isBlocked(viewer,target)` 与 `isBlocked(target,viewer)` 任一为 true 则返回 NOT_FOUND（不泄露用户存在性）
+- 本地验证：全量 `mvn test`，BUILD SUCCESS
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：补齐 Settings 读接口（me/privacy）
+
+- nexus-api：`IUserSettingApi` 增加 `GET /api/v1/user/me/privacy`，返回 `needApproval`
+- nexus-trigger：`UserSettingController` 增加 GET 入口；当前用户必须存在于 `user_base`，否则返回 NOT_FOUND；needApproval 默认 false
+- 本地验证：全量 `mvn test`，BUILD SUCCESS
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：9.3 个人主页聚合接口 + 阶段 D user_base 缓存
+
+- 9.3 聚合接口：新增 `GET /api/v1/user/profile/page?targetUserId=...`（Profile + 关系统计 + 风控能力）
+- 契约不破坏：不改既有 Profile/Settings/Internal HTTP；聚合接口为新增 endpoint + 新 DTO
+- 最小隐私：查看他人主页前做双向屏蔽校验，任一方向屏蔽则返回 NOT_FOUND（不泄露用户存在性）
+- 关系统计：followCount 复用 `IRelationCachePort.getFollowCount`；followerCount 用 `IRelationRepository.countFollowerIds`；friendCount 用 `countRelationsBySource(..., RELATION_FRIEND)`；isFollow 以 follow/friend 边存在性判定
+- 风控能力：复用 `IRiskService.userStatus(targetUserId)` 返回 capabilities（POST/COMMENT）
+- 阶段 D 缓存：`UserBaseRepository` 增加 user_base 批量读 Redis 缓存（multiGet 命中直返；miss 单次 DB 回源并回填）
+- 缓存 key：`social:userbase:{userId}`（JSON：userId/nickname/avatarUrl，TTL=3600s）；`social:userbase:uid:{username}`（userId 字符串，TTL=3600s）
+- 缓存失效：`UserProfileRepository.updatePatch` 更新成功后删除 `social:userbase:{userId}`，确保昵称/头像变更能及时反映到跨域读侧
+- 本地验证：全量 `mvn test`，BUILD SUCCESS
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域：修正 Search 索引回灌昵称语义
+
+- 修复：`SearchIndexBackfillRunner.loadNicknames` 回灌索引时优先读取 `user_base.nickname`；若为空则回退 `username`，避免把展示昵称写成 handle
+- 本地验证：全量 `mvn test`，BUILD SUCCESS

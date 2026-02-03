@@ -210,7 +210,12 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
             if (row == null || row.getUserId() == null) {
                 continue;
             }
-            map.put(row.getUserId(), row.getUsername() == null ? "" : row.getUsername());
+            // 迁移期兼容：优先使用展示昵称 nickname；若为空则回退到 username（handle），避免回灌写出空 authorNickname。
+            String nickname = row.getNickname();
+            if (nickname == null || nickname.isBlank()) {
+                nickname = row.getUsername();
+            }
+            map.put(row.getUserId(), nickname == null ? "" : nickname);
         }
         return map;
     }

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.user.IUserEventOutboxDao">
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.user.po.UserEventOutboxPO">
+        INSERT INTO user_event_outbox(event_type, fingerprint, payload, status, retry_count, create_time, update_time)
+        VALUES(#{eventType}, #{fingerprint}, #{payload}, #{status}, #{retryCount}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE fingerprint = fingerprint
+    </insert>
+
+    <select id="selectByStatus" resultType="cn.nexus.infrastructure.dao.user.po.UserEventOutboxPO">
+        SELECT id, event_type, fingerprint, payload, status, retry_count, create_time, update_time
+        FROM user_event_outbox
+        WHERE status = #{status}
+        ORDER BY update_time ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markDone">
+        UPDATE user_event_outbox
+        SET status = 'DONE', update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <update id="markFail">
+        UPDATE user_event_outbox
+        SET status = 'FAIL', retry_count = retry_count + 1, update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteOlderThan">
+        DELETE FROM user_event_outbox
+        WHERE status = #{status}
+          AND update_time < #{before}
+    </delete>
+
+</mapper>
+

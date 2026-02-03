@@ -2,8 +2,14 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="cn.nexus.infrastructure.dao.social.IUserBaseDao">
 
+    <select id="selectByUserId" resultType="cn.nexus.infrastructure.dao.social.po.UserBasePO">
+        SELECT user_id, username, nickname, avatar_url
+        FROM user_base
+        WHERE user_id = #{userId}
+    </select>
+
     <select id="selectByUserIds" resultType="cn.nexus.infrastructure.dao.social.po.UserBasePO">
-        SELECT user_id, username, avatar_url
+        SELECT user_id, username, nickname, avatar_url
         FROM user_base
         WHERE user_id IN
         <foreach collection="userIds" item="id" open="(" separator="," close=")">
@@ -12,11 +18,24 @@
     </select>
 
     <select id="selectByUsernames" resultType="cn.nexus.infrastructure.dao.social.po.UserBasePO">
-        SELECT user_id, username, avatar_url
+        SELECT user_id, username, nickname, avatar_url
         FROM user_base
         WHERE username IN
         <foreach collection="usernames" item="u" open="(" separator="," close=")">
             #{u}
         </foreach>
     </select>
+
+    <update id="updatePatch">
+        UPDATE user_base
+        <set>
+            <if test="nickname != null">
+                nickname = #{nickname},
+            </if>
+            <if test="avatarUrl != null">
+                avatar_url = #{avatarUrl},
+            </if>
+        </set>
+        WHERE user_id = #{userId}
+    </update>
 </mapper>

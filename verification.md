@@ -94,3 +94,27 @@
 - [x] 留痕齐全：`.codex/context-scan.json`、`.codex/operations-log.md`、`.codex/review-report.md`、`.codex/testing.md` 已追加本次记录。  
 - [x] 本地编译验证：`project/nexus` 下执行 `& "..\..\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -DskipTests package`，BUILD SUCCESS（Finished at: 2026-01-30T10:51:33+08:00）（见 `.codex/testing.md`）。  
 - [ ] 端到端冒烟：未实际拉起 ES/Redis/RabbitMQ 并跑 curl 用例（文档 8.1-8.3 已给出可复制步骤）。  
+
+
+---
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## 用户领域（Profile/Settings/Status + user_base 读模型）最小验收
+
+- [x] user_base 数据结构正确：存在 nickname（展示名）且 username 区分大小写（见 `project/nexus/docs/social_schema.sql`）
+- [x] 写接口：
+  - [x] `POST /api/v1/user/me/profile`（改 nickname/avatarUrl；nickname 变化写 Outbox）
+  - [x] `POST /api/v1/user/me/privacy`（改 needApproval）
+  - [x] `POST /api/v1/internal/user/upsert`（update-only；缺行=NOT_FOUND；username 不一致=CONFLICT）
+- [x] 读接口：
+  - [x] `GET /api/v1/user/me/profile`
+  - [x] `GET /api/v1/user/profile?targetUserId=...`（双向屏蔽任一为 true => NOT_FOUND）
+  - [x] `GET /api/v1/user/me/privacy`
+- [x] 状态规则：DEACTIVATED 只拦写不拦读（internal 入口例外允许写）
+- [x] 事件可靠性：Outbox 落库 + after-commit 尝试投递 + 定时重试（exchange=`social.feed` rk=`user.nickname_changed`）
+- [x] 本地测试：`& ".\.codex\tools\apache-maven-3.9.6\bin\mvn.cmd" -f "project\nexus\pom.xml" test` BUILD SUCCESS
+
+- [x] （可选）个人主页聚合接口：新增 `GET /api/v1/user/profile/page?targetUserId=...`，聚合 profile + relation（followCount/followerCount/friendCount/isFollow）+ risk capabilities
+- [x] （可选）user_base 缓存/性能优化：`IUserBaseRepository` 批量读加入 Redis 缓存（multiGet+回源+回填，TTL=3600s），并在 profile 更新成功后失效 `social:userbase:{userId}`

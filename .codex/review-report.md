@@ -462,3 +462,43 @@
 ## 关键文件（本次交付）
 
 - `.codex/search-discovery-implementation.md`
+
+---
+
+# 追加：用户领域（Profile/Settings/Status + user_base 读模型 + Outbox）CR
+
+日期：2026-02-03  
+执行者：Codex（Linus-mode）
+
+## Linus Review（实现质量）
+
+【品味评分】🟢 好品味  
+【综合评分】92/100（通过）
+
+### 好的部分（Good Taste）
+
+- 数据结构先行：`user_base` 正式引入 `nickname`（展示名）并保持 `username` 为不可变 handle（区分大小写），让“展示名”不再靠补丁冒充。
+- 事件可靠性不是口号：nickname 变化走 MySQL Outbox（事务内落库 → after-commit 尝试投递 → 失败定时重试），避免“改名成功但索引不更新”的线上鬼故事。
+- 特殊情况收敛：迁移期 nickname fallback 不扩散到调用方；并处理 MySQL `affectedRows=0`（值相同）导致的误判 NOT_FOUND。
+- Never break userspace：现有 UserContext 契约保持不变；屏蔽时返回 NOT_FOUND（不泄露用户存在性）；DEACTIVATED 只拦写不拦读（internal 入口例外允许写）。
+
+### 致命问题（未发现）
+
+本次为新增用户域最小能力与补齐缺口，不涉及对既有用户可见接口的破坏性改动；未发现会导致启动失败或“写成功但读不到”的结构性问题。
+
+### 风险与改进（仍然值得记住）
+
+- 真实环境需要执行 DDL/回填：`user_base.nickname` 必须回填 `nickname=username`（否则可能出现 nickname 为空的历史数据）；这是数据治理问题，不应该靠业务层到处打补丁长期兜底。
+- 端到端冒烟依赖 MySQL/RabbitMQ：当前以单测+编译验证为主；建议本地拉起依赖后跑一次“改昵称→outbox→search consumer”链路冒烟。
+- 可选项已落地：个人主页聚合接口（9.3）与 user_base Redis 缓存（阶段 D）已实现；仍需注意 relation 口径（PENDING 是否计入计数）与缓存一致性（写路径 evict + TTL）。
+
+## 关键文件（实现）
+
+- `project/nexus/docs/social_schema.sql`
+- `project/nexus/docs/user_status.sql`
+- `project/nexus/docs/user_event_outbox.sql`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/user/service/UserService.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/user/port/UserEventOutboxPort.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/user/UserProfileController.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/user/UserSettingController.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/user/InternalUserController.java`

@@ -37,7 +37,7 @@ hotkey:
   pushPeriodMs: 500
 
 mybatis:
-  mapper-locations: classpath*:mapper/social/*.xml
+  mapper-locations: classpath*:mapper/**/*.xml
   configuration:
     map-underscore-to-camel-case: true
 

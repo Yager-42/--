@@ -2,6 +2,7 @@ package cn.nexus.infrastructure.adapter.social.repository;
 
 import cn.nexus.domain.social.adapter.repository.IContentPublishAttemptRepository;
 import cn.nexus.domain.social.model.entity.ContentPublishAttemptEntity;
+import cn.nexus.domain.social.model.valobj.ContentPublishAttemptStatusEnumVO;
 import cn.nexus.infrastructure.dao.social.IContentPublishAttemptDao;
 import cn.nexus.infrastructure.dao.social.po.ContentPublishAttemptPO;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +37,17 @@ public class ContentPublishAttemptRepository implements IContentPublishAttemptRe
     @Transactional(readOnly = true)
     public ContentPublishAttemptEntity findByAttemptId(Long attemptId) {
         return toEntity(contentPublishAttemptDao.selectById(attemptId));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ContentPublishAttemptEntity findLatestActiveAttempt(Long postId, Long userId) {
+        return toEntity(contentPublishAttemptDao.selectLatestActiveAttempt(
+                postId,
+                userId,
+                ContentPublishAttemptStatusEnumVO.CREATED.getCode(),
+                ContentPublishAttemptStatusEnumVO.TRANSCODING.getCode(),
+                ContentPublishAttemptStatusEnumVO.PENDING_REVIEW.getCode()));
     }
 
     @Override

@@ -2,11 +2,9 @@ package cn.nexus.trigger.http.social;
 
 import cn.nexus.api.response.Response;
 import cn.nexus.api.social.IFeedApi;
-import cn.nexus.api.social.common.OperationResultDTO;
 import cn.nexus.api.social.feed.dto.*;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
 import cn.nexus.domain.social.model.valobj.FeedTimelineVO;
-import cn.nexus.domain.social.model.valobj.OperationResultVO;
 import cn.nexus.domain.social.service.IFeedService;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
@@ -66,44 +64,6 @@ public class FeedController implements IFeedApi {
         }
     }
 
-    @PostMapping("/feedback/negative")
-    @Override
-    public Response<OperationResultDTO> submitNegativeFeedback(@RequestBody NegativeFeedbackRequestDTO requestDTO) {
-        try {
-            Long userId = UserContext.requireUserId();
-            OperationResultVO vo = feedService.negativeFeedback(
-                    userId, requestDTO.getTargetId(), requestDTO.getType(), requestDTO.getReasonCode(), requestDTO.getExtraTags());
-            return toOperationResult(vo);
-        } catch (AppException e) {
-            return Response.<OperationResultDTO>builder().code(e.getCode()).info(e.getInfo()).build();
-        } catch (Exception e) {
-            log.error("feed negative feedback api failed, req={}", requestDTO, e);
-            return Response.<OperationResultDTO>builder()
-                    .code(ResponseCode.UN_ERROR.getCode())
-                    .info(ResponseCode.UN_ERROR.getInfo())
-                    .build();
-        }
-    }
-
-    @DeleteMapping("/feedback/negative/{targetId}")
-    @Override
-    public Response<OperationResultDTO> cancelNegativeFeedback(@PathVariable("targetId") Long targetId,
-                                                               @RequestBody CancelNegativeFeedbackRequestDTO ignoredRequestDTO) {
-        try {
-            Long userId = UserContext.requireUserId();
-            OperationResultVO vo = feedService.cancelNegativeFeedback(userId, targetId);
-            return toOperationResult(vo);
-        } catch (AppException e) {
-            return Response.<OperationResultDTO>builder().code(e.getCode()).info(e.getInfo()).build();
-        } catch (Exception e) {
-            log.error("feed cancel negative feedback api failed, targetId={}", targetId, e);
-            return Response.<OperationResultDTO>builder()
-                    .code(ResponseCode.UN_ERROR.getCode())
-                    .info(ResponseCode.UN_ERROR.getInfo())
-                    .build();
-        }
-    }
-
     private FeedTimelineResponseDTO toTimelineDTO(FeedTimelineVO vo) {
         return FeedTimelineResponseDTO.builder()
                 .items(vo.getItems().stream().map(this::toItem).collect(Collectors.toList()))
@@ -116,18 +76,9 @@ public class FeedController implements IFeedApi {
                 .postId(vo.getPostId())
                 .authorId(vo.getAuthorId())
                 .text(vo.getText())
+                .summary(vo.getSummary())
                 .publishTime(vo.getPublishTime())
                 .source(vo.getSource())
                 .build();
-    }
-
-    private Response<OperationResultDTO> toOperationResult(OperationResultVO vo) {
-        OperationResultDTO dto = OperationResultDTO.builder()
-                .success(vo.isSuccess())
-                .id(vo.getId())
-                .status(vo.getStatus())
-                .message(vo.getMessage())
-                .build();
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
     }
 }

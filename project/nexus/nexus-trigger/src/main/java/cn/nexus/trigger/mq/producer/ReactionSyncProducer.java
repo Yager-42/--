@@ -6,6 +6,7 @@ import cn.nexus.trigger.mq.config.ReactionSyncDelayConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "reaction.sync.mode", havingValue = "rabbit")
 public class ReactionSyncProducer implements IReactionDelayPort {
 
     private final RabbitTemplate rabbitTemplate;

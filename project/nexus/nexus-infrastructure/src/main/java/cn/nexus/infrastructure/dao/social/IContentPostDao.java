@@ -15,9 +15,36 @@ public interface IContentPostDao {
 
     int updateStatusIfMatch(@Param("postId") Long postId, @Param("status") Integer status, @Param("expectedStatus") Integer expectedStatus);
 
+    int updateStatusIfMatchAndVersion(@Param("postId") Long postId,
+                                      @Param("status") Integer status,
+                                      @Param("expectedStatus") Integer expectedStatus,
+                                      @Param("expectedVersion") Integer expectedVersion);
+
+    int softDeleteIfMatchAndVersion(@Param("postId") Long postId,
+                                    @Param("deleteTime") java.util.Date deleteTime,
+                                    @Param("expectedStatus") Integer expectedStatus,
+                                    @Param("expectedVersion") Integer expectedVersion);
+
     int updateStatusWithUser(@Param("postId") Long postId, @Param("userId") Long userId, @Param("status") Integer status);
 
     ContentPostPO selectByIdForUpdate(@Param("postId") Long postId);
+
+    /**
+     * 更新内容摘要（AI 异步写回）。
+     */
+    int updateSummary(@Param("postId") Long postId,
+                      @Param("summary") String summary,
+                      @Param("summaryStatus") Integer summaryStatus);
+
+    /**
+     * 查询超过指定时间的软删内容（用于定时物理清理）。仅返回 post_id，避免一次查询拉取大字段。
+     */
+    java.util.List<Long> selectSoftDeletedIdsBefore(@Param("cutoff") java.util.Date cutoff, @Param("limit") Integer limit);
+
+    /**
+     * 按 postId 批量物理删除（仅删除软删且超过 cutoff 的记录）。
+     */
+    int deleteSoftDeletedByIds(@Param("postIds") java.util.List<Long> postIds, @Param("cutoff") java.util.Date cutoff);
 
     int updateContentAndVersion(@Param("postId") Long postId,
                                 @Param("contentText") String contentText,

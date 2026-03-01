@@ -57,7 +57,7 @@ public class ContentController implements IContentApi {
     public Response<SaveDraftResponseDTO> saveDraft(@RequestBody SaveDraftRequestDTO requestDTO) {
         try {
             Long userId = UserContext.requireUserId();
-            DraftVO vo = contentService.saveDraft(userId, requestDTO.getContentText(), requestDTO.getMediaIds());
+            DraftVO vo = contentService.saveDraft(userId, requestDTO.getDraftId(), requestDTO.getContentText(), requestDTO.getMediaIds());
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                     SaveDraftResponseDTO.builder().draftId(vo.getDraftId()).build());
         } catch (AppException e) {
@@ -157,11 +157,12 @@ public class ContentController implements IContentApi {
     public Response<ScheduleContentResponseDTO> schedule(@RequestBody ScheduleContentRequestDTO requestDTO) {
         try {
             Long userId = UserContext.requireUserId();
-            OperationResultVO vo = contentService.schedule(userId, requestDTO.getContentData(), requestDTO.getPublishTime(), requestDTO.getTimezone());
+            OperationResultVO vo = contentService.schedule(userId, requestDTO.getPostId(), requestDTO.getPublishTime(), requestDTO.getTimezone());
             long delayMs = requestDTO.getPublishTime() == null ? 0 : requestDTO.getPublishTime() - System.currentTimeMillis();
             contentScheduleProducer.sendDelay(vo.getId(), delayMs);
             ScheduleContentResponseDTO dto = ScheduleContentResponseDTO.builder()
                     .taskId(vo.getId())
+                    .postId(requestDTO.getPostId())
                     .status(vo.getStatus())
                     .build();
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
@@ -215,10 +216,11 @@ public class ContentController implements IContentApi {
     @Override
     public Response<DraftSyncResponseDTO> syncDraft(@PathVariable("draftId") Long draftId, @RequestBody DraftSyncRequestDTO requestDTO) {
         try {
-            OperationResultVO vo = contentService.syncDraft(draftId, requestDTO.getDiffContent(), requestDTO.getClientVersion(), requestDTO.getDeviceId(), requestDTO.getMediaIds());
+            Long userId = UserContext.requireUserId();
+            DraftSyncVO vo = contentService.syncDraft(draftId, userId, requestDTO.getDiffContent(), requestDTO.getClientVersion(), requestDTO.getDeviceId(), requestDTO.getMediaIds());
             DraftSyncResponseDTO dto = DraftSyncResponseDTO.builder()
-                    .serverVersion(vo.getMessage())
-                    .syncTime(vo.getId() == null ? null : vo.getId())
+                    .serverVersion(vo.getServerVersion() == null ? null : String.valueOf(vo.getServerVersion()))
+                    .syncTime(vo.getSyncTime())
                     .build();
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
         } catch (AppException e) {

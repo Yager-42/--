@@ -5,12 +5,10 @@ import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRelationCachePort;
-import cn.nexus.domain.social.adapter.port.IRelationGroupLockPort;
 import cn.nexus.domain.social.adapter.port.IFriendRequestIdempotentPort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.FriendRequestEntity;
 import cn.nexus.domain.social.model.entity.RelationEntity;
-import cn.nexus.domain.social.model.entity.RelationGroupEntity;
 import cn.nexus.domain.social.model.valobj.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -31,7 +29,6 @@ public class RelationService implements IRelationService {
     private final IRelationPolicyPort relationPolicyPort;
     private final IRelationAdjacencyCachePort adjacencyCachePort;
     private final IRelationCachePort relationCachePort;
-    private final IRelationGroupLockPort relationGroupLockPort;
     private final IFriendRequestIdempotentPort friendRequestIdempotentPort;
 
     private static final int RELATION_FOLLOW = 1;
@@ -41,9 +38,6 @@ public class RelationService implements IRelationService {
     private static final int STATUS_ACTIVE = 1;
     private static final int STATUS_PENDING = 2;
     private static final int STATUS_REJECTED = 3;
-
-    private static final String ACTION_MOVE = "MOVE";
-    private static final String ACTION_MERGE = "MERGE";
 
     /**
      * 关注流程：先校验参数与屏蔽、关注上限，再判断已有关注/好友边；根据策略决定是否进入待审批或直接生效，写关系表、粉丝表、缓存并触发关注事件。
@@ -273,149 +267,8 @@ public class RelationService implements IRelationService {
                 .build();
     }
 
-    /**
-     * 关系分组管理：基于 action 执行创建/更新/删除/移动/合并/成员增删/查询。先做成员数量与幂等结果检查，再加分布式锁防并发；操作完成缓存幂等结果并释放锁。
-     */
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public RelationGroupVO manageGroup(Long userId,
-                                       String action,
-                                       String listName,
-                                       Long listId,
-                                       List<Long> memberIds,
-                                       Long sourceListId,
-                                       Long targetListId,
-                                       List<Long> addMemberIds,
-                                       List<Long> removeMemberIds,
-                                       String idempotentToken) {
-        String normalizedAction = normalizeAction(action);
-        Long id = listId != null ? listId : socialIdPort.nextId();
-        List<Long> members = safeMembers(memberIds);
-        if (members.size() > 1000) {
-            return RelationGroupVO.builder().listId(id).listName("成员过多").memberIds(Collections.emptyList()).build();
-        }
-        RelationGroupVO idemResult = relationGroupLockPort.loadResult(idempotentToken);
-        if (idemResult != null) {
-            return idemResult;
-        }
-        String name = defaultListName(listName);
-        if (!relationGroupLockPort.tryLock(userId, normalizedAction, 5)) {
-            return RelationGroupVO.builder().listId(id).listName("操作过于频繁").memberIds(Collections.emptyList()).build();
-        }
-
-        try {
-            if ("DELETE".equals(normalizedAction)) {
-                RelationGroupEntity deleted = relationRepository.deleteGroup(userId, id);
-                RelationGroupVO vo = RelationGroupVO.builder()
-                        .listId(id)
-                        .listName(deleted == null ? name + " (不存在)" : name + " (已删除)")
-                        .memberIds(Collections.emptyList())
-                        .build();
-                cacheIdem(idempotentToken, vo);
-                return vo;
-            }
-            if (ACTION_MOVE.equals(normalizedAction)) {
-                List<Long> moveList = safeMembers(memberIds);
-                if (targetListId == null || sourceListId == null) {
-                    return RelationGroupVO.builder().listId(id).listName("缺少分组ID").memberIds(Collections.emptyList()).build();
-                }
-                relationRepository.removeGroupMembers(sourceListId, moveList);
-                relationRepository.addGroupMembers(targetListId, moveList);
-                List<Long> targetMembers = relationRepository.listGroupMembers(targetListId);
-                if (targetMembers.size() > 1000) {
-                    return RelationGroupVO.builder().listId(targetListId).listName("目标成员过多").memberIds(Collections.emptyList()).build();
-                }
-                RelationGroupVO vo = RelationGroupVO.builder()
-                        .listId(targetListId)
-                        .listName(name)
-                        .memberIds(targetMembers)
-                        .build();
-                cacheIdem(idempotentToken, vo);
-                return vo;
-            }
-            if (ACTION_MERGE.equals(normalizedAction)) {
-                Long target = targetListId != null ? targetListId : id;
-                Set<Long> merged = new LinkedHashSet<>(relationRepository.listGroupMembers(target));
-                merged.addAll(safeMembers(addMemberIds));
-                merged.removeAll(safeMembers(removeMemberIds));
-                if (merged.size() > 1000) {
-                    return RelationGroupVO.builder().listId(target).listName("目标成员过多").memberIds(Collections.emptyList()).build();
-                }
-                relationRepository.removeGroupMembers(target, safeMembers(removeMemberIds));
-                relationRepository.addGroupMembers(target, safeMembers(addMemberIds));
-                RelationGroupVO vo = RelationGroupVO.builder()
-                        .listId(target)
-                        .listName(name)
-                        .memberIds(new ArrayList<>(merged))
-                        .build();
-                cacheIdem(idempotentToken, vo);
-                return vo;
-            }
-            if ("UPDATE".equals(normalizedAction)) {
-                RelationGroupEntity group = RelationGroupEntity.builder()
-                        .groupId(id)
-                        .userId(userId)
-                        .groupName(name)
-                        .memberIds(members)
-                        .deleted(false)
-                        .build();
-                relationRepository.updateGroup(group);
-                relationRepository.replaceGroupMembers(id, members);
-            } else if ("ADD_MEMBER".equals(normalizedAction)) {
-                relationRepository.addGroupMembers(id, members);
-            } else if ("REMOVE_MEMBER".equals(normalizedAction)) {
-                relationRepository.removeGroupMembers(id, members);
-            } else if ("LIST".equals(normalizedAction)) {
-                List<RelationGroupEntity> groups = relationRepository.listGroups(userId);
-                if (groups.isEmpty()) {
-                    members = members.isEmpty() ? sampleMembers(userId) : members;
-                    RelationGroupVO vo = RelationGroupVO.builder()
-                            .listId(id)
-                            .listName(name)
-                            .memberIds(members)
-                            .build();
-                    cacheIdem(idempotentToken, vo);
-                    return vo;
-                }
-                RelationGroupEntity first = groups.get(0);
-                List<Long> storedMembers = relationRepository.listGroupMembers(first.getGroupId());
-                RelationGroupVO vo = RelationGroupVO.builder()
-                        .listId(first.getGroupId())
-                        .listName(first.getGroupName())
-                        .memberIds(storedMembers)
-                        .build();
-                cacheIdem(idempotentToken, vo);
-                return vo;
-            } else {
-                RelationGroupEntity group = RelationGroupEntity.builder()
-                        .groupId(id)
-                        .userId(userId)
-                        .groupName(name)
-                        .memberIds(members)
-                        .deleted(false)
-                        .build();
-                relationRepository.createGroup(group);
-                relationRepository.replaceGroupMembers(id, members);
-            }
-
-            RelationGroupVO vo = RelationGroupVO.builder()
-                    .listId(id)
-                    .listName(name)
-                    .memberIds(members)
-                    .build();
-            cacheIdem(idempotentToken, vo);
-            return vo;
-        } finally {
-            relationGroupLockPort.unlock(userId, normalizedAction);
-        }
-    }
-
     private boolean invalidPair(Long sourceId, Long targetId) {
         return sourceId == null || targetId == null || sourceId <= 0 || targetId <= 0 || Objects.equals(sourceId, targetId);
-    }
-
-    private void cacheIdem(String token, RelationGroupVO vo) {
-        relationGroupLockPort.saveResult(token, vo, 300);
     }
 
     private boolean reachFollowLimit(Long sourceId) {
@@ -446,27 +299,6 @@ public class RelationService implements IRelationService {
         long safeSource = sourceId == null ? 0 : sourceId;
         long safeTarget = targetId == null ? 0 : targetId;
         return safeSource + "-" + safeTarget;
-    }
-
-    private String normalizeAction(String action) {
-        return action == null ? "CREATE" : action.trim().toUpperCase();
-    }
-
-    private String defaultListName(String listName) {
-        return listName == null || listName.isBlank() ? "默认分组" : listName;
-    }
-
-    private List<Long> safeMembers(List<Long> memberIds) {
-        if (memberIds == null) {
-            return Collections.emptyList();
-        }
-        LinkedHashSet<Long> dedup = new LinkedHashSet<>(memberIds);
-        return new ArrayList<>(dedup);
-    }
-
-    private List<Long> sampleMembers(Long userId) {
-        long base = userId == null ? socialIdPort.nextId() : userId;
-        return List.of(base + 1, base + 2, base + 3);
     }
 
     private String toStatus(Integer statusCode) {

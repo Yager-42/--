@@ -13,8 +13,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ScheduleContentRequestDTO {
-    private Long userId;
-    private String contentData;
+    /** 绑定的 postId（=draftId）。 */
+    private Long postId;
     private Long publishTime;
     private String timezone;
 }

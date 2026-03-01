@@ -3,6 +3,7 @@ package cn.nexus.infrastructure.adapter.social.port;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.model.valobj.ReactionApplyResultVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDao;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
@@ -20,7 +21,7 @@ import java.util.*;
  *
  * <p>职责：</p>
  * <ul>
- *   <li>在线写入：Lua 原子更新（set 去重 + cnt 计数 + ops 记录 + sync 标记）。</li>
+ *   <li>在线写入：Lua 原子更新（bitmap 去重 + cnt 计数 + ops 记录 + sync 标记）。</li>
  *   <li>延迟同步：opsKey -> processingKey 的快照（Lua 原子 RENAME）。</li>
  *   <li>读优化：热点 key 才启用 L1 Caffeine，且一律 L1-first（miss 回源 Redis 并回填）。</li>
  * </ul>
@@ -33,7 +34,8 @@ import java.util.*;
 @RequiredArgsConstructor
 public class ReactionCachePort implements IReactionCachePort {
 
-    private static final String KEY_SET_PREFIX = "interact:reaction:set:";
+    private static final String KEY_BM_PREFIX = "interact:reaction:bm:";
+    private static final long BIT_SHARD_SIZE = 1_000_000L;
     private static final String KEY_CNT_PREFIX = "interact:reaction:cnt:";
     private static final String KEY_OPS_PREFIX = "interact:reaction:ops:";
     private static final String KEY_OPS_PROCESSING_PREFIX = "interact:reaction:ops:processing:";
@@ -50,6 +52,7 @@ public class ReactionCachePort implements IReactionCachePort {
     private static final Duration L1_TTL = Duration.ofSeconds(2);
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final IInteractionReactionCountDao interactionReactionCountDao;
 
     /**
      * 只缓存 count：热点读走 L1，短 TTL。
@@ -64,11 +67,18 @@ public class ReactionCachePort implements IReactionCachePort {
         if (userId == null || target == null) {
             return ReactionApplyResultVO.builder().currentCount(0L).delta(0).firstPending(false).build();
         }
+        if (userId < 0) {
+            return ReactionApplyResultVO.builder().currentCount(0L).delta(0).firstPending(false).build();
+        }
 
-        List<String> keys = List.of(setKey(target), cntKey(target), opsKey(target), syncKey(target));
+        long shard = userId / BIT_SHARD_SIZE;
+        long offset = userId % BIT_SHARD_SIZE;
+
+        List<String> keys = List.of(bmKey(target, shard), cntKey(target), opsKey(target), syncKey(target));
         List<String> argv = List.of(
                 userId.toString(),
                 String.valueOf(desiredState),
+                String.valueOf(offset),
                 String.valueOf(Math.max(1, syncTtlSec))
         );
 
@@ -165,8 +175,13 @@ public class ReactionCachePort implements IReactionCachePort {
         if (userId == null || target == null) {
             return false;
         }
-        Boolean member = stringRedisTemplate.opsForSet().isMember(setKey(target), userId.toString());
-        return Boolean.TRUE.equals(member);
+        if (userId < 0) {
+            return false;
+        }
+        long shard = userId / BIT_SHARD_SIZE;
+        long offset = userId % BIT_SHARD_SIZE;
+        Boolean bit = stringRedisTemplate.opsForValue().getBit(bmKey(target, shard), offset);
+        return Boolean.TRUE.equals(bit);
     }
 
     @Override
@@ -216,8 +231,8 @@ public class ReactionCachePort implements IReactionCachePort {
         return Boolean.TRUE.equals(exists);
     }
 
-    private String setKey(ReactionTargetVO target) {
-        return KEY_SET_PREFIX + target.hashTag();
+    private String bmKey(ReactionTargetVO target, long shard) {
+        return KEY_BM_PREFIX + target.hashTag() + ":" + shard;
     }
 
     private String cntKey(ReactionTargetVO target) {
@@ -256,9 +271,16 @@ public class ReactionCachePort implements IReactionCachePort {
             return v;
         }
 
-        // cntKey 丢失或损坏：用 set 基数重建并回填。
-        Long card = stringRedisTemplate.opsForSet().size(setKey(target));
-        long rebuilt = card == null ? 0L : Math.max(0L, card);
+        // cntKey 丢失或损坏：从 DB 的 interaction_reaction_count 回表读 count 并回填。
+        String targetType = target.getTargetType() == null ? null : target.getTargetType().getCode();
+        Long targetId = target.getTargetId();
+        String reactionType = target.getReactionType() == null ? null : target.getReactionType().getCode();
+        if (targetType == null || targetType.isBlank() || targetId == null || reactionType == null || reactionType.isBlank()) {
+            stringRedisTemplate.opsForValue().set(cntKey, "0");
+            return 0L;
+        }
+        Long dbCount = interactionReactionCountDao.selectCount(targetType, targetId, reactionType);
+        long rebuilt = dbCount == null ? 0L : Math.max(0L, dbCount);
         stringRedisTemplate.opsForValue().set(cntKey, String.valueOf(rebuilt));
         return rebuilt;
     }
@@ -321,48 +343,49 @@ public class ReactionCachePort implements IReactionCachePort {
     }
 
     private static final String LUA_APPLY_ATOMIC = ""
-            + "local setKey = KEYS[1]\n"
+            + "local bmKey = KEYS[1]\n"
             + "local cntKey = KEYS[2]\n"
             + "local opsKey = KEYS[3]\n"
             + "local syncKey = KEYS[4]\n"
+            + "\n"
             + "local userId = ARGV[1]\n"
             + "local desiredState = ARGV[2]\n"
-            + "local syncTtlSec = tonumber(ARGV[3])\n"
+            + "local offset = tonumber(ARGV[3])\n"
+            + "local syncTtlSec = tonumber(ARGV[4])\n"
             + "\n"
             + "local delta = 0\n"
             + "\n"
-            + "-- cntKey 丢失时用 set 基数重建，避免 DECR 产生负数\n"
+            + "-- cntKey 不存在时：先设成 0（避免 DECR 直接变负数）；后续读侧会从 DB count 表回填纠正\n"
             + "local current = redis.call('GET', cntKey)\n"
             + "if (not current) then\n"
-            + "  current = redis.call('SCARD', setKey)\n"
-            + "  redis.call('SET', cntKey, current)\n"
+            + "  redis.call('SET', cntKey, '0')\n"
             + "end\n"
             + "\n"
             + "if desiredState == '1' then\n"
-            + "  local added = redis.call('SADD', setKey, userId)\n"
-            + "  if added == 1 then\n"
+            + "  local old = redis.call('SETBIT', bmKey, offset, 1)\n"
+            + "  if old == 0 then\n"
             + "    redis.call('INCR', cntKey)\n"
             + "    delta = 1\n"
             + "  end\n"
             + "else\n"
-            + "  local removed = redis.call('SREM', setKey, userId)\n"
-            + "  if removed == 1 then\n"
+            + "  local old = redis.call('SETBIT', bmKey, offset, 0)\n"
+            + "  if old == 1 then\n"
             + "    redis.call('DECR', cntKey)\n"
             + "    delta = -1\n"
             + "  end\n"
             + "end\n"
             + "\n"
-            + "-- 记录最后状态，延迟落库时按 userId 覆盖即可（last-write-wins）\n"
+            + "-- last-write-wins：延迟落库时按 userId 覆盖即可\n"
             + "redis.call('HSET', opsKey, userId, desiredState)\n"
             + "\n"
-            + "-- 只在首次置 pending 时返回 true，避免重复投递延迟消息\n"
+            + "-- 只在首次置 pending 时返回 1，避免重复投递延迟任务\n"
             + "local firstPending = redis.call('SET', syncKey, 'PENDING', 'NX', 'EX', syncTtlSec)\n"
             + "\n"
-            + "-- 防御：极端情况下 cntKey 可能不一致，回表修正为 set 基数\n"
+            + "-- 防御：cntKey 可能被误删/误写，出现负数时拉回到 0（并让后续同步再对齐 DB）\n"
             + "local updated = tonumber(redis.call('GET', cntKey) or '0')\n"
             + "if updated < 0 then\n"
-            + "  updated = redis.call('SCARD', setKey)\n"
-            + "  redis.call('SET', cntKey, updated)\n"
+            + "  updated = 0\n"
+            + "  redis.call('SET', cntKey, '0')\n"
             + "end\n"
             + "\n"
             + "local fp = 0\n"

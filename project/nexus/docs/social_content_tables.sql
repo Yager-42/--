@@ -9,9 +9,13 @@ CREATE TABLE `content_post` (
   `location_info` JSON COMMENT '地理位置信息',
   `status` TINYINT DEFAULT 1 COMMENT '0草稿,1审核中,2已发布,3审核拒绝,4定时,6删除',
   `visibility` TINYINT DEFAULT 0 COMMENT '0公开,1好友,2仅自己',
+  `summary` TEXT COMMENT 'AI 生成摘要',
+  `summary_status` TINYINT NOT NULL DEFAULT 0 COMMENT '摘要生成状态：0未生成/1已生成/2失败',
   `version_num` INT DEFAULT 1 COMMENT '当前版本号',
   `is_edited` TINYINT DEFAULT 0 COMMENT '是否编辑过',
   `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `delete_time` DATETIME DEFAULT NULL COMMENT '删除时间（软删）',
   PRIMARY KEY (`post_id`),
   INDEX `idx_user_time` (`user_id`, `create_time`)
 ) ENGINE=InnoDB COMMENT='内容发布主表';
@@ -75,6 +79,7 @@ CREATE TABLE `content_draft` (
 CREATE TABLE `content_schedule` (
   `task_id` BIGINT NOT NULL,
   `user_id` BIGINT,
+  `post_id` BIGINT NOT NULL DEFAULT 0 COMMENT '绑定的 postId（=draftId）',
   `content_data` LONGTEXT COMMENT '待发布内容Payload',
   `schedule_time` DATETIME NOT NULL COMMENT '预定发布时间',
   `status` TINYINT DEFAULT 0 COMMENT '0待执行,1执行中,2已完成,3失败/取消',
@@ -85,6 +90,7 @@ CREATE TABLE `content_schedule` (
   `alarm_sent` TINYINT DEFAULT 0,
   PRIMARY KEY (`task_id`),
   UNIQUE KEY `uk_idempotent_token` (`idempotent_token`),
+  INDEX `idx_post_status` (`post_id`, `status`),
   INDEX `idx_time_status` (`schedule_time`, `status`)
 ) ENGINE=InnoDB COMMENT='定时发布任务表';
 

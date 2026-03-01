@@ -7,7 +7,6 @@ import cn.nexus.domain.social.model.valobj.FollowResultVO;
 import cn.nexus.domain.social.model.valobj.FriendDecisionResultVO;
 import cn.nexus.domain.social.model.valobj.FriendRequestResultVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
-import cn.nexus.domain.social.model.valobj.RelationGroupVO;
 import cn.nexus.domain.social.service.IRelationService;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
@@ -118,40 +117,6 @@ public class RelationController implements IRelationApi {
         } catch (Exception e) {
             log.error("relation block api failed, req={}", requestDTO, e);
             return Response.<BlockResponseDTO>builder()
-                    .code(ResponseCode.UN_ERROR.getCode())
-                    .info(ResponseCode.UN_ERROR.getInfo())
-                    .build();
-        }
-    }
-
-    @PostMapping("/list")
-    @Override
-    public Response<RelationGroupResponseDTO> manageGroup(@RequestBody RelationGroupRequestDTO requestDTO) {
-        try {
-            Long userId = UserContext.requireUserId();
-            RelationGroupVO vo = relationService.manageGroup(
-                    userId,
-                    requestDTO.getAction(),
-                    requestDTO.getListName(),
-                    requestDTO.getListId(),
-                    requestDTO.getMemberIds(),
-                    requestDTO.getSourceListId(),
-                    requestDTO.getTargetListId(),
-                    requestDTO.getAddMemberIds(),
-                    requestDTO.getRemoveMemberIds(),
-                    requestDTO.getIdempotentToken());
-            RelationGroupResponseDTO dto = RelationGroupResponseDTO.builder()
-                    .listId(vo.getListId())
-                    .listName(vo.getListName())
-                    .memberIds(vo.getMemberIds())
-                    .build();
-            log.debug("分组操作完成: {}", dto);
-            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
-        } catch (AppException e) {
-            return Response.<RelationGroupResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
-        } catch (Exception e) {
-            log.error("relation manage group api failed, req={}", requestDTO, e);
-            return Response.<RelationGroupResponseDTO>builder()
                     .code(ResponseCode.UN_ERROR.getCode())
                     .info(ResponseCode.UN_ERROR.getInfo())
                     .build();

@@ -23,6 +23,8 @@ public interface IContentScheduleDao {
 
     ContentSchedulePO selectByToken(@Param("idempotentToken") String token);
 
+    ContentSchedulePO selectActiveByPostId(@Param("postId") Long postId);
+
     int cancel(@Param("taskId") Long taskId, @Param("userId") Long userId, @Param("reason") String reason);
 
     int updateSchedule(@Param("taskId") Long taskId,

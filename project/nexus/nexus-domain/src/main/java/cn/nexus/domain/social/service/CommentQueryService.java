@@ -70,6 +70,15 @@ public class CommentQueryService implements ICommentQueryService {
 
         List<Long> ids = commentRepository.pageReplyCommentIds(rootId, cursor, normalizedLimit, viewerId);
         List<CommentViewVO> items = loadComments(ids);
+        if (!items.isEmpty()) {
+            List<CommentViewVO> visible = new ArrayList<>(items.size());
+            for (CommentViewVO v : items) {
+                if (visibleToViewer(v, viewerId)) {
+                    visible.add(v);
+                }
+            }
+            items = visible;
+        }
         enrichUserProfile(items);
 
         String nextCursor = null;
@@ -154,12 +163,7 @@ public class CommentQueryService implements ICommentQueryService {
             if (root.getRootId() != null) {
                 continue;
             }
-            Integer st = root.getStatus();
-            boolean visible = st != null && st == 1;
-            if (!visible && st != null && st == 0 && viewerId != null && viewerId.equals(root.getUserId())) {
-                visible = true;
-            }
-            if (!visible) {
+            if (!visibleToViewer(root, viewerId)) {
                 continue;
             }
             List<CommentViewVO> preview = loadRepliesPreview(root.getCommentId(), preload, viewerId);
@@ -173,7 +177,18 @@ public class CommentQueryService implements ICommentQueryService {
             return List.of();
         }
         List<Long> replyIds = commentRepository.pageReplyCommentIds(rootCommentId, null, preload, viewerId);
-        return loadComments(replyIds);
+        List<CommentViewVO> list = loadComments(replyIds);
+        if (list.isEmpty()) {
+            return List.of();
+        }
+        // 防止“预览缓存 key 不区分 viewerId”导致待审核(status=0)回复被其他人看见：这里统一做可见性过滤。
+        List<CommentViewVO> visible = new ArrayList<>(list.size());
+        for (CommentViewVO v : list) {
+            if (visibleToViewer(v, viewerId)) {
+                visible.add(v);
+            }
+        }
+        return visible;
     }
 
     private List<CommentViewVO> loadComments(List<Long> ids) {
@@ -293,6 +308,17 @@ public class CommentQueryService implements ICommentQueryService {
         }
         v.setNickname(u.getNickname());
         v.setAvatarUrl(u.getAvatarUrl());
+    }
+
+    private boolean visibleToViewer(CommentViewVO v, Long viewerId) {
+        if (v == null) {
+            return false;
+        }
+        Integer st = v.getStatus();
+        if (st != null && st == 1) {
+            return true;
+        }
+        return st != null && st == 0 && viewerId != null && viewerId.equals(v.getUserId());
     }
 
     private CommentViewVO lastRoot(List<RootCommentViewVO> items) {

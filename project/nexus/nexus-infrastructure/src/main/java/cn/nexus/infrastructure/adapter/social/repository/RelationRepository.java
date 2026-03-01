@@ -3,16 +3,11 @@ package cn.nexus.infrastructure.adapter.social.repository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.FriendRequestEntity;
 import cn.nexus.domain.social.model.entity.RelationEntity;
-import cn.nexus.domain.social.model.entity.RelationGroupEntity;
 import cn.nexus.infrastructure.dao.social.IFollowerDao;
 import cn.nexus.infrastructure.dao.social.IFriendRequestDao;
 import cn.nexus.infrastructure.dao.social.IRelationDao;
-import cn.nexus.infrastructure.dao.social.IRelationGroupDao;
-import cn.nexus.infrastructure.dao.social.IRelationGroupMemberDao;
 import cn.nexus.infrastructure.dao.social.po.FollowerPO;
 import cn.nexus.infrastructure.dao.social.po.FriendRequestPO;
-import cn.nexus.infrastructure.dao.social.po.RelationGroupPO;
-import cn.nexus.infrastructure.dao.social.po.RelationGroupMemberPO;
 import cn.nexus.infrastructure.dao.social.po.RelationPO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
@@ -28,11 +23,12 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class RelationRepository implements IRelationRepository {
 
+    private static final int RELATION_FOLLOW = 1;
+    private static final int STATUS_ACTIVE = 1;
+
     private final IRelationDao relationDao;
     private final IFriendRequestDao friendRequestDao;
-    private final IRelationGroupDao relationGroupDao;
     private final IFollowerDao followerDao;
-    private final IRelationGroupMemberDao relationGroupMemberDao;
 
     @Override
     public RelationEntity saveRelation(RelationEntity relation) {
@@ -110,6 +106,18 @@ public class RelationRepository implements IRelationRepository {
     }
 
     @Override
+    public List<Long> listBigVFollowingIds(Long userId, int followerThreshold, int limit) {
+        if (userId == null || followerThreshold <= 0 || limit <= 0) {
+            return List.of();
+        }
+        List<Long> list = relationDao.selectBigVFollowingIds(userId, RELATION_FOLLOW, STATUS_ACTIVE, followerThreshold, limit);
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        return list.stream().filter(Objects::nonNull).collect(Collectors.toList());
+    }
+
+    @Override
     public FriendRequestEntity saveFriendRequest(FriendRequestEntity request) {
         FriendRequestPO po = new FriendRequestPO();
         po.setRequestId(request.getRequestId());
@@ -165,83 +173,6 @@ public class RelationRepository implements IRelationRepository {
         friendRequestDao.deleteBetween(sourceId, targetId);
     }
 
-    @Override
-    public RelationGroupEntity createGroup(RelationGroupEntity group) {
-        relationGroupDao.insert(toPO(group));
-        return group;
-    }
-
-    @Override
-    public RelationGroupEntity updateGroup(RelationGroupEntity group) {
-        relationGroupDao.update(toPO(group));
-        return group;
-    }
-
-    @Override
-    public RelationGroupEntity deleteGroup(Long userId, Long groupId) {
-        int rows = relationGroupDao.softDelete(userId, groupId);
-        if (rows == 0) {
-            return null;
-        }
-        RelationGroupEntity entity = new RelationGroupEntity();
-        entity.setGroupId(groupId);
-        entity.setUserId(userId);
-        entity.setDeleted(true);
-        return entity;
-    }
-
-    @Override
-    public List<RelationGroupEntity> listGroups(Long userId) {
-        List<RelationGroupPO> groups = relationGroupDao.selectByUser(userId);
-        return groups.stream().map(this::toEntity).collect(Collectors.toList());
-    }
-
-    @Override
-    public void replaceGroupMembers(Long groupId, List<Long> memberIds) {
-        relationGroupMemberDao.deleteByGroup(groupId);
-        if (memberIds == null || memberIds.isEmpty()) {
-            return;
-        }
-        List<RelationGroupMemberPO> list = memberIds.stream().map(mid -> {
-            RelationGroupMemberPO po = new RelationGroupMemberPO();
-            po.setId(groupId * 100000 + mid);
-            po.setGroupId(groupId);
-            po.setMemberId(mid);
-            return po;
-        }).collect(Collectors.toList());
-        relationGroupMemberDao.batchInsert(list);
-    }
-
-    @Override
-    public List<Long> listGroupMembers(Long groupId) {
-        return relationGroupMemberDao.selectByGroup(groupId).stream()
-                .map(RelationGroupMemberPO::getMemberId)
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public void addGroupMembers(Long groupId, List<Long> memberIds) {
-        if (memberIds == null || memberIds.isEmpty()) {
-            return;
-        }
-        List<RelationGroupMemberPO> list = memberIds.stream().map(mid -> {
-            RelationGroupMemberPO po = new RelationGroupMemberPO();
-            po.setId(groupId * 100000 + mid);
-            po.setGroupId(groupId);
-            po.setMemberId(mid);
-            return po;
-        }).collect(Collectors.toList());
-        relationGroupMemberDao.batchInsert(list);
-    }
-
-    @Override
-    public void removeGroupMembers(Long groupId, List<Long> memberIds) {
-        if (memberIds == null || memberIds.isEmpty()) {
-            return;
-        }
-        relationGroupMemberDao.deleteBatch(groupId, memberIds);
-    }
-
     private String idempotentKey(Long sourceId, Long targetId) {
         long safeSource = sourceId == null ? 0 : sourceId;
         long safeTarget = targetId == null ? 0 : targetId;
@@ -286,27 +217,6 @@ public class RelationRepository implements IRelationRepository {
                 .idempotentKey(po.getIdempotentKey())
                 .status(po.getStatus())
                 .version(po.getVersion())
-                .build();
-    }
-
-    private RelationGroupPO toPO(RelationGroupEntity entity) {
-        RelationGroupPO po = new RelationGroupPO();
-        po.setGroupId(entity.getGroupId());
-        po.setUserId(entity.getUserId());
-        po.setGroupName(entity.getGroupName());
-        po.setDeleted(Boolean.TRUE.equals(entity.getDeleted()));
-        return po;
-    }
-
-    private RelationGroupEntity toEntity(RelationGroupPO po) {
-        if (po == null) {
-            return null;
-        }
-        return RelationGroupEntity.builder()
-                .groupId(po.getGroupId())
-                .userId(po.getUserId())
-                .groupName(po.getGroupName())
-                .deleted(po.getDeleted())
                 .build();
     }
 }

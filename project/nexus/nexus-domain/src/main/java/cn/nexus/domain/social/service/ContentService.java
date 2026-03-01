@@ -1,6 +1,6 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.adapter.port.IContentDispatchPort;
+import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
 import cn.nexus.domain.social.adapter.port.IMediaTranscodePort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
@@ -12,6 +12,8 @@ import cn.nexus.domain.social.model.entity.ContentPublishAttemptEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.*;
+import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.types.exception.AppException;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -44,7 +46,7 @@ public class ContentService implements IContentService {
     private final IContentPublishAttemptRepository contentPublishAttemptRepository;
     private final IMediaStoragePort mediaStoragePort;
     private final IMediaTranscodePort mediaTranscodePort;
-    private final IContentDispatchPort contentDispatchPort;
+    private final IContentEventOutboxPort contentEventOutboxPort;
     private final IRiskService riskService;
     private final RedissonClient redissonClient;
 
@@ -87,22 +89,29 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 草稿保存：生成 draftId，构建 ContentDraftEntity 持久化，并回传 draftId。未做内容校验与设备/版本约束，保持幂等由上层控制。
+     * 草稿保存/覆盖更新：draftId 为空则创建新草稿，否则覆盖更新同一条草稿（draftId=postId）。
      */
     @Override
-    public DraftVO saveDraft(Long userId, String contentText, List<String> mediaIds) {
-        Long draftId = socialIdPort.nextId();
+    public DraftVO saveDraft(Long userId, Long draftId, String contentText, List<String> mediaIds) {
+        validateContentNotEmpty(contentText, mediaIds, null);
+        Long targetDraftId = draftId == null ? socialIdPort.nextId() : draftId;
+        assertNotScheduled(targetDraftId);
+        ContentDraftEntity existed = contentRepository.findDraft(targetDraftId);
+        if (existed != null && existed.getUserId() != null && userId != null && !existed.getUserId().equals(userId)) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "NO_PERMISSION");
+        }
+
         ContentDraftEntity entity = ContentDraftEntity.builder()
-                .draftId(draftId)
+                .draftId(targetDraftId)
                 .userId(userId)
                 .draftContent(contentText)
                 .mediaIds(mediaIds == null ? null : String.join(",", mediaIds))
                 .deviceId("unknown")
-                .clientVersion("1")
+                .clientVersion(1L)
                 .updateTime(socialIdPort.now())
                 .build();
         contentRepository.saveDraft(entity);
-        return DraftVO.builder().draftId(draftId).build();
+        return DraftVO.builder().draftId(targetDraftId).build();
     }
 
     /**
@@ -115,14 +124,31 @@ public class ContentService implements IContentService {
     @Transactional(rollbackFor = Exception.class)
     @Override
     public OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, List<String> postTypes) {
+        assertNotScheduled(postId);
+        return publishInternal(postId, userId, text, mediaInfo, location, visibility, postTypes);
+    }
+
+    private OperationResultVO publishInternal(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, List<String> postTypes) {
         assertTx("publish");
-        Long targetPostId = postId == null ? socialIdPort.nextId() : postId;
+        validateContentNotEmpty(text, null, mediaInfo);
+        if (postId == null) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "postId 不能为空，请先创建草稿拿 postId");
+        }
+        Long targetPostId = postId;
         RLock lock = lockFor(targetPostId);
         lock.lock();
         try {
             ContentPostEntity existedPost = contentRepository.findPostForUpdate(targetPostId);
             if (existedPost != null && userId != null && existedPost.getUserId() != null && !existedPost.getUserId().equals(userId)) {
                 return OperationResultVO.builder().success(false).id(targetPostId).status("NO_PERMISSION").message("无权限").build();
+            }
+            if (existedPost != null && existedPost.getStatus() != null && existedPost.getStatus() == STATUS_DELETED) {
+                return OperationResultVO.builder().success(false).id(targetPostId).status("DELETED").message("已删除/禁止发布").build();
+            }
+
+            ContentPublishAttemptEntity activeAttempt = contentPublishAttemptRepository.findLatestActiveAttempt(targetPostId, userId);
+            if (activeAttempt != null) {
+                return toPublishResultFromAttempt(activeAttempt);
             }
 
             List<String> normalizedPostTypes = normalizePostTypes(postTypes);
@@ -303,9 +329,9 @@ public class ContentService implements IContentService {
 
             // 事务提交后再发 MQ：避免消费者读到未提交数据导致“索引误删”等线上鬼故事。
             if (existedPost == null) {
-                dispatchAfterCommit(targetPostId, userId);
+                dispatchAfterCommit(targetPostId, userId, newVersion);
             } else {
-                dispatchUpdateAfterCommit(targetPostId, userId);
+                dispatchUpdateAfterCommit(targetPostId, userId, newVersion);
             }
             return OperationResultVO.builder()
                     .success(true)
@@ -340,29 +366,98 @@ public class ContentService implements IContentService {
         return urls;
     }
 
+    private void validateContentNotEmpty(String text, List<String> mediaIds, String mediaInfo) {
+        boolean hasText = text != null && !text.trim().isEmpty();
+        boolean hasMediaIds = mediaIds != null && !mediaIds.isEmpty();
+        boolean hasMediaInfo = mediaInfo != null && !mediaInfo.trim().isEmpty();
+        if (!(hasText || hasMediaIds || hasMediaInfo)) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "content 不能为空");
+        }
+    }
+
     /**
-     * 软删内容：按 userId 校验后设置删除状态，返回是否删除成功及状态文案。
+     * 内容锁：一旦设置了“待执行”的定时发布，就禁止再改内容（草稿/发布）。
+     *
+     * <p>解锁方式：先取消定时任务（status!=0 或 is_canceled=1）。</p>
+     */
+    private void assertNotScheduled(Long postId) {
+        if (postId == null) {
+            return;
+        }
+        ContentScheduleEntity active = contentRepository.findActiveScheduleByPostId(postId);
+        if (active != null) {
+            throw new AppException(ResponseCode.CONFLICT.getCode(), "已设置定时发布，如需编辑请先取消定时任务");
+        }
+    }
+
+    /**
+     * 软删内容：使用与 publish 相同的 postId 锁，并用状态/版本条件更新，避免并发下“删了又活”。
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO delete(Long userId, Long postId) {
-        boolean ok = contentRepository.softDelete(postId, userId);
-        if (ok) {
-            dispatchDeleteAfterCommit(postId, userId);
+        if (postId == null) {
+            return OperationResultVO.builder()
+                    .success(false)
+                    .status("ILLEGAL_PARAMETER")
+                    .message("postId 不能为空")
+                    .build();
         }
-        return OperationResultVO.builder()
-                .success(ok)
-                .id(postId)
-                .status(ok ? "DELETED" : "NOT_FOUND")
-                .message(ok ? "已删除" : "未找到或无权限")
-                .build();
+
+        RLock lock = lockFor(postId);
+        lock.lock();
+        try {
+            ContentPostEntity post = contentRepository.findPostForUpdate(postId);
+            if (post == null) {
+                return OperationResultVO.builder()
+                        .success(false)
+                        .id(postId)
+                        .status("NOT_FOUND")
+                        .message("未找到或无权限")
+                        .build();
+            }
+            if (userId == null || post.getUserId() == null || !post.getUserId().equals(userId)) {
+                return OperationResultVO.builder()
+                        .success(false)
+                        .id(postId)
+                        .status("NO_PERMISSION")
+                        .message("未找到或无权限")
+                        .build();
+            }
+            if (post.getStatus() != null && post.getStatus() == STATUS_DELETED) {
+                // 幂等：已删除就直接返回，不重复派发事件。
+                return OperationResultVO.builder()
+                        .success(true)
+                        .id(postId)
+                        .status("DELETED")
+                        .message("已删除")
+                        .build();
+            }
+
+            boolean ok = contentRepository.softDeleteIfMatchStatusAndVersion(
+                    postId,
+                    post.getStatus(),
+                    post.getVersionNum(),
+                    socialIdPort.now());
+            if (ok) {
+                dispatchDeleteAfterCommit(postId, userId, post.getVersionNum());
+            }
+            return OperationResultVO.builder()
+                    .success(ok)
+                    .id(postId)
+                    .status(ok ? "DELETED" : "VERSION_MISMATCH")
+                    .message(ok ? "已删除" : "删除失败（版本不匹配）")
+                    .build();
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
      * 定时发布创建：校验 userId，使用内容+时间生成幂等 token，若已有未执行任务直接返回；否则创建任务并处理并发主键冲突，返回任务状态。
      */
     @Override
-    public OperationResultVO schedule(Long userId, String contentData, Long publishTime, String timezone) {
+    public OperationResultVO schedule(Long userId, Long postId, Long publishTime, String timezone) {
         if (userId == null) {
             return OperationResultVO.builder()
                     .success(false)
@@ -370,7 +465,18 @@ public class ContentService implements IContentService {
                     .message("userId 不能为空")
                     .build();
         }
-        String token = hash(userId + ":" + (contentData == null ? "" : contentData) + ":" + publishTime);
+        if (postId == null) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "请先创建草稿拿到 postId");
+        }
+        ContentDraftEntity draft = contentRepository.findDraft(postId);
+        if (draft == null) {
+            throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
+        }
+        if (draft.getUserId() != null && !draft.getUserId().equals(userId)) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "NO_PERMISSION");
+        }
+        validateContentNotEmpty(draft.getDraftContent(), null, draft.getMediaIds());
+        String token = hash(userId + ":" + postId + ":" + publishTime);
         ContentScheduleEntity exist = contentRepository.findScheduleByToken(token);
         if (exist != null && (exist.getStatus() == null || exist.getStatus() == SCHEDULE_STATUS_SCHEDULED)) {
             return OperationResultVO.builder()
@@ -385,7 +491,8 @@ public class ContentService implements IContentService {
             contentRepository.createSchedule(ContentScheduleEntity.builder()
                     .taskId(taskId)
                     .userId(userId)
-                    .contentData(contentData)
+                    .postId(postId)
+                    .contentData(draft.getDraftContent())
                     .scheduleTime(publishTime)
                     .status(SCHEDULE_STATUS_SCHEDULED)
                     .retryCount(0)
@@ -414,43 +521,34 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 客户端草稿同步：查找草稿并基于客户端版本号判定是否可覆盖，更新内容/设备/版本并回写；不存在则创建新草稿。
+     * 客户端草稿同步：仅允许 owner 覆盖更新；草稿不存在直接返回 NOT_FOUND（避免被撞库创建垃圾草稿）。
      */
     @Override
-    public OperationResultVO syncDraft(Long draftId, String diffContent, String clientVersion, String deviceId, List<String> mediaIds) {
-        ContentDraftEntity entity = contentRepository.findDraft(draftId);
+    @Transactional(rollbackFor = Exception.class)
+    public DraftSyncVO syncDraft(Long draftId, Long userId, String diffContent, Long clientVersion, String deviceId, List<String> mediaIds) {
+        assertNotScheduled(draftId);
+        validateContentNotEmpty(diffContent, mediaIds, null);
+        ContentDraftEntity entity = contentRepository.findDraftForUpdate(draftId);
         if (entity == null) {
-            entity = ContentDraftEntity.builder()
-                    .draftId(draftId)
-                    .draftContent(diffContent)
-                    .mediaIds(mediaIds == null ? null : String.join(",", mediaIds))
-                    .deviceId(deviceId)
-                    .clientVersion(clientVersion)
-                    .updateTime(socialIdPort.now())
-                    .build();
-        } else {
-            if (!isNewerClientVersion(clientVersion, entity.getClientVersion())) {
-                return OperationResultVO.builder()
-                        .success(false)
-                        .id(draftId)
-                        .status("STALE_VERSION")
-                        .message("客户端版本过旧，拒绝覆盖")
-                        .build();
-            }
-            entity.setDraftContent(diffContent);
-            entity.setDeviceId(deviceId);
-            entity.setClientVersion(clientVersion);
-            if (mediaIds != null) {
-                entity.setMediaIds(String.join(",", mediaIds));
-            }
-            entity.setUpdateTime(socialIdPort.now());
+            throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
         }
+        if (entity.getUserId() != null && userId != null && !entity.getUserId().equals(userId)) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "NO_PERMISSION");
+        }
+        if (!isNewerClientVersion(clientVersion, entity.getClientVersion())) {
+            throw new AppException(ResponseCode.CONFLICT.getCode(), "STALE_VERSION");
+        }
+        entity.setDraftContent(diffContent);
+        entity.setDeviceId(deviceId);
+        entity.setClientVersion(clientVersion);
+        if (mediaIds != null) {
+            entity.setMediaIds(String.join(",", mediaIds));
+        }
+        entity.setUpdateTime(socialIdPort.now());
         contentRepository.saveDraft(entity);
-        return OperationResultVO.builder()
-                .success(true)
-                .id(draftId)
-                .status("SYNCED")
-                .message("serverVersion-" + clientVersion)
+        return DraftSyncVO.builder()
+                .serverVersion(entity.getClientVersion())
+                .syncTime(entity.getUpdateTime())
                 .build();
     }
 
@@ -554,6 +652,7 @@ public class ContentService implements IContentService {
      * 批量执行到期定时任务：按时间查询待处理任务，跳过已取消，逐条调用 publish 并按结果更新状态与重试计数，超过重试上限则标记失败报警。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public OperationResultVO processSchedules(Long now, Integer limit) {
         long ts = now == null ? socialIdPort.now() : now;
         List<ContentScheduleEntity> tasks = contentRepository.listPendingSchedules(ts, limit == null ? 50 : limit);
@@ -563,7 +662,19 @@ public class ContentService implements IContentService {
                 contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_CANCELED, task.getRetryCount(), "已取消跳过", 0, null, SCHEDULE_STATUS_SCHEDULED);
                 continue;
             }
-            OperationResultVO res = publish(null, task.getUserId(), task.getContentData(), null, null, "PUBLIC", null);
+            ContentDraftEntity draft = contentRepository.findDraft(task.getPostId());
+            if (draft == null) {
+                contentRepository.updateScheduleStatus(task.getTaskId(),
+                        SCHEDULE_STATUS_CANCELED,
+                        task.getRetryCount(),
+                        "draft_not_found",
+                        1,
+                        null,
+                        SCHEDULE_STATUS_SCHEDULED);
+                log.error("schedule task skipped due to draft not found, taskId={}, postId={}", task.getTaskId(), task.getPostId());
+                continue;
+            }
+            OperationResultVO res = publishInternal(task.getPostId(), task.getUserId(), draft.getDraftContent(), draft.getMediaIds(), null, "PUBLIC", null);
             if (res.isSuccess()) {
                 success++;
                 contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null, SCHEDULE_STATUS_SCHEDULED);
@@ -598,6 +709,7 @@ public class ContentService implements IContentService {
      * 单个定时任务执行：校验状态/取消标记，调用 publish 产出，按结果更新重试/延迟或置成功/终止。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public OperationResultVO executeSchedule(Long taskId) {
         ContentScheduleEntity task = contentRepository.findSchedule(taskId);
         if (task == null) {
@@ -609,7 +721,12 @@ public class ContentService implements IContentService {
         if (task.getIsCanceled() != null && task.getIsCanceled() == 1) {
             return OperationResultVO.builder().success(false).status("CANCELED").message("任务已取消").build();
         }
-        OperationResultVO res = publish(null, task.getUserId(), task.getContentData(), null, null, "PUBLIC", null);
+        ContentDraftEntity draft = contentRepository.findDraft(task.getPostId());
+        if (draft == null) {
+            contentRepository.updateScheduleStatus(taskId, SCHEDULE_STATUS_CANCELED, task.getRetryCount(), "draft_not_found", 1, null, SCHEDULE_STATUS_SCHEDULED);
+            return OperationResultVO.builder().success(false).id(taskId).status("DRAFT_NOT_FOUND").message("草稿不存在，已终止定时任务").build();
+        }
+        OperationResultVO res = publishInternal(task.getPostId(), task.getUserId(), draft.getDraftContent(), draft.getMediaIds(), null, "PUBLIC", null);
         if (res.isSuccess()) {
             contentRepository.updateScheduleStatus(taskId, SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null, SCHEDULE_STATUS_SCHEDULED);
         } else {
@@ -666,8 +783,13 @@ public class ContentService implements IContentService {
         if (task.getStatus() != null && task.getStatus() != SCHEDULE_STATUS_SCHEDULED) {
             return OperationResultVO.builder().success(false).status("SKIPPED").message("状态不允许变更").build();
         }
-        String token = hash((contentData == null ? task.getContentData() : contentData) + ":" + publishTime);
-        boolean ok = contentRepository.updateSchedule(taskId, userId, publishTime, contentData, token, reason);
+        // 定时任务一旦创建，就不允许再改内容；想改必须先取消定时任务。
+        if (contentData != null && !contentData.trim().isEmpty()) {
+            throw new AppException(ResponseCode.CONFLICT.getCode(), "已设置定时发布，如需编辑请先取消定时任务");
+        }
+        Long postId = task.getPostId();
+        String token = hash(userId + ":" + (postId == null ? "0" : postId) + ":" + publishTime);
+        boolean ok = contentRepository.updateSchedule(taskId, userId, publishTime, task.getContentData(), token, reason);
         return OperationResultVO.builder()
                 .success(ok)
                 .id(taskId)
@@ -730,7 +852,13 @@ public class ContentService implements IContentService {
         }
 
         if ("PASS".equalsIgnoreCase(finalResult)) {
-            boolean okPost = contentRepository.updatePostStatus(postId, STATUS_PUBLISHED, STATUS_PENDING_REVIEW);
+            Integer expectedVersion = attempt.getPublishedVersionNum();
+            boolean okPost = contentRepository.updatePostStatusIfMatchVersion(postId, STATUS_PUBLISHED, STATUS_PENDING_REVIEW, expectedVersion);
+            if (!okPost) {
+                log.warn("risk review apply skipped (post status/version not match), postId={}, expectedVersion={}, attemptId={}", postId, expectedVersion, attemptId);
+                ContentPublishAttemptEntity latest = contentPublishAttemptRepository.findByAttemptId(attemptId);
+                return toPublishResultFromAttempt(latest == null ? attempt : latest);
+            }
             boolean okAttempt = contentPublishAttemptRepository.updateAttemptStatus(
                     attemptId,
                     ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode(),
@@ -744,11 +872,7 @@ public class ContentService implements IContentService {
             if (!okAttempt) {
                 throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attemptId);
             }
-            if (okPost) {
-                dispatchAfterCommit(postId, userId);
-            } else {
-                log.warn("post status advance failed (pending->published), postId={}", postId);
-            }
+            dispatchAfterCommit(postId, userId, attempt.getPublishedVersionNum());
             attempt.setAttemptStatus(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode());
             attempt.setRiskStatus(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode());
             attempt.setTranscodeStatus(ContentPublishAttemptTranscodeStatusEnumVO.DONE.getCode());
@@ -756,7 +880,13 @@ public class ContentService implements IContentService {
         }
 
         if ("BLOCK".equalsIgnoreCase(finalResult)) {
-            contentRepository.updatePostStatus(postId, STATUS_REJECTED, STATUS_PENDING_REVIEW);
+            Integer expectedVersion = attempt.getPublishedVersionNum();
+            boolean okPost = contentRepository.updatePostStatusIfMatchVersion(postId, STATUS_REJECTED, STATUS_PENDING_REVIEW, expectedVersion);
+            if (!okPost) {
+                log.warn("risk review apply skipped (post status/version not match), postId={}, expectedVersion={}, attemptId={}", postId, expectedVersion, attemptId);
+                ContentPublishAttemptEntity latest = contentPublishAttemptRepository.findByAttemptId(attemptId);
+                return toPublishResultFromAttempt(latest == null ? attempt : latest);
+            }
             boolean okAttempt = contentPublishAttemptRepository.updateAttemptStatus(
                     attemptId,
                     ContentPublishAttemptStatusEnumVO.RISK_REJECTED.getCode(),
@@ -819,14 +949,12 @@ public class ContentService implements IContentService {
         }
     }
 
-    private boolean isNewerClientVersion(String incoming, String current) {
-        try {
-            long in = incoming == null ? 0L : Long.parseLong(incoming);
-            long cur = current == null ? 0L : Long.parseLong(current);
-            return in >= cur;
-        } catch (NumberFormatException e) {
-            return true;
+    private boolean isNewerClientVersion(Long incoming, Long current) {
+        if (incoming == null) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "clientVersion 不能为空");
         }
+        long cur = current == null ? 0L : current;
+        return incoming >= cur;
     }
 
     private String hash(byte[] data) {
@@ -912,63 +1040,73 @@ public class ContentService implements IContentService {
         }
     }
 
-    private void dispatchAfterCommit(Long postId, Long userId) {
+    private void dispatchAfterCommit(Long postId, Long userId, Integer versionNum) {
         if (postId == null || userId == null) {
             return;
         }
-        // 理论上 publish() 必须在事务内；这里做防御，避免未来改动把事件又发回“事务外”。
+        // 事务内先落 outbox：即使 MQ 不可用，也能保证“写库成功后事件不丢”。
+        long tsMs = socialIdPort.now();
+        contentEventOutboxPort.savePostPublished(postId, userId, versionNum, tsMs);
+        contentEventOutboxPort.savePostSummaryGenerate(postId, userId, versionNum, tsMs);
+
+        // 防御：若未来有人把 publish() 改成“事务外调用”，至少还能尝试投递。
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            contentDispatchPort.onPublished(postId, userId);
+            contentEventOutboxPort.tryPublishPending();
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 try {
-                    contentDispatchPort.onPublished(postId, userId);
+                    contentEventOutboxPort.tryPublishPending();
                 } catch (Exception e) {
-                    // afterCommit 失败不会回滚业务事务：只能记录，后续再补偿（如需要可引入 outbox）。
-                    log.error("post published dispatch failed after commit, postId={}, userId={}", postId, userId, e);
+                    log.error("content outbox tryPublishPending failed after commit, postId={}, userId={}", postId, userId, e);
                 }
             }
         });
     }
 
-    private void dispatchUpdateAfterCommit(Long postId, Long operatorId) {
+    private void dispatchUpdateAfterCommit(Long postId, Long operatorId, Integer versionNum) {
         if (postId == null || operatorId == null) {
             return;
         }
+        long tsMs = socialIdPort.now();
+        contentEventOutboxPort.savePostUpdated(postId, operatorId, versionNum, tsMs);
+        contentEventOutboxPort.savePostSummaryGenerate(postId, operatorId, versionNum, tsMs);
+
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            contentDispatchPort.onUpdated(postId, operatorId);
+            contentEventOutboxPort.tryPublishPending();
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 try {
-                    contentDispatchPort.onUpdated(postId, operatorId);
+                    contentEventOutboxPort.tryPublishPending();
                 } catch (Exception e) {
-                    log.error("post updated dispatch failed after commit, postId={}, operatorId={}", postId, operatorId, e);
+                    log.error("content outbox tryPublishPending failed after commit, postId={}, operatorId={}", postId, operatorId, e);
                 }
             }
         });
     }
 
-    private void dispatchDeleteAfterCommit(Long postId, Long operatorId) {
+    private void dispatchDeleteAfterCommit(Long postId, Long operatorId, Integer versionNum) {
         if (postId == null || operatorId == null) {
             return;
         }
+        contentEventOutboxPort.savePostDeleted(postId, operatorId, versionNum, socialIdPort.now());
+
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            contentDispatchPort.onDeleted(postId, operatorId);
+            contentEventOutboxPort.tryPublishPending();
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 try {
-                    contentDispatchPort.onDeleted(postId, operatorId);
+                    contentEventOutboxPort.tryPublishPending();
                 } catch (Exception e) {
-                    log.error("post deleted dispatch failed after commit, postId={}, operatorId={}", postId, operatorId, e);
+                    log.error("content outbox tryPublishPending failed after commit, postId={}, operatorId={}", postId, operatorId, e);
                 }
             }
         });

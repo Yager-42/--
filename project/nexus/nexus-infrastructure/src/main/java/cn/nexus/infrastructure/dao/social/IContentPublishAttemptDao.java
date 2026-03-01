@@ -13,6 +13,12 @@ public interface IContentPublishAttemptDao {
 
     ContentPublishAttemptPO selectByToken(@Param("idempotentToken") String idempotentToken);
 
+    ContentPublishAttemptPO selectLatestActiveAttempt(@Param("postId") Long postId,
+                                                      @Param("userId") Long userId,
+                                                      @Param("statusCreated") Integer statusCreated,
+                                                      @Param("statusTranscoding") Integer statusTranscoding,
+                                                      @Param("statusPendingReview") Integer statusPendingReview);
+
     int updateStatus(@Param("attemptId") Long attemptId,
                      @Param("attemptStatus") Integer attemptStatus,
                      @Param("riskStatus") Integer riskStatus,

@@ -23,15 +23,4 @@ public interface IRelationService {
     FriendDecisionResultVO friendDecision(java.util.List<Long> requestIds, String action);
 
     OperationResultVO block(Long sourceId, Long targetId);
-
-    RelationGroupVO manageGroup(Long userId,
-                                String action,
-                                String listName,
-                                Long listId,
-                                java.util.List<Long> memberIds,
-                                Long sourceListId,
-                                Long targetListId,
-                                java.util.List<Long> addMemberIds,
-                                java.util.List<Long> removeMemberIds,
-                                String idempotentToken);
 }

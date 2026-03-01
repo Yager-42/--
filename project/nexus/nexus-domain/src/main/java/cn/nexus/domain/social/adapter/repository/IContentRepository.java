@@ -6,6 +6,7 @@ import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
 
+import java.util.Date;
 import java.util.List;
 
 /**
@@ -16,6 +17,11 @@ public interface IContentRepository {
     ContentDraftEntity saveDraft(ContentDraftEntity draft);
 
     ContentDraftEntity findDraft(Long draftId);
+
+    /**
+     * 查询草稿并加行锁（用于版本号校验的并发安全覆盖写）。
+     */
+    ContentDraftEntity findDraftForUpdate(Long draftId);
 
     ContentPostEntity savePost(ContentPostEntity post);
 
@@ -62,6 +68,23 @@ public interface IContentRepository {
      */
     boolean updatePostStatus(Long postId, Integer status, Integer expectedStatus);
 
+    /**
+     * 状态推进（带版本号约束）。
+     *
+     * <p>用于“人审回写”这类场景：必须绑定到 attempt 对应的版本号，避免推进错版本。</p>
+     */
+    boolean updatePostStatusIfMatchVersion(Long postId, Integer status, Integer expectedStatus, Integer expectedVersion);
+
+    /**
+     * 更新内容摘要（AI 异步写回）。
+     *
+     * @param postId         内容 ID
+     * @param summary        摘要文本（可为空）
+     * @param summaryStatus  摘要状态：0未生成/1已生成/2失败
+     * @return true=本次更新成功；false=目标不存在
+     */
+    boolean updatePostSummary(Long postId, String summary, Integer summaryStatus);
+
     boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
                                        String contentText, String mediaInfo, String locationInfo, Integer visibility);
 
@@ -72,6 +95,22 @@ public interface IContentRepository {
     ContentHistoryEntity findHistoryVersion(Long postId, Integer versionNum);
 
     boolean softDelete(Long postId, Long userId);
+
+    /**
+     * 软删（带状态/版本条件）：用于 delete 与 publish 并发时的防御，避免覆盖其它版本更新结果。
+     */
+    boolean softDeleteIfMatchStatusAndVersion(Long postId, Integer expectedStatus, Integer expectedVersion, Long deleteTimeMs);
+
+    /**
+     * 物理清理：删除超过指定时间的软删内容（分批）。
+     *
+     * <p>注意：仅清理 content_post 与关联的 content_post_type；content_history 保留审计，不做物理删除。</p>
+     *
+     * @param cutoff delete_time 早于该时间的记录会被清理
+     * @param limit  单次最多清理条数
+     * @return 实际清理的 content_post 行数
+     */
+    int deleteSoftDeletedBefore(Date cutoff, int limit);
 
     ContentScheduleEntity createSchedule(ContentScheduleEntity schedule);
 
@@ -85,5 +124,7 @@ public interface IContentRepository {
 
     ContentScheduleEntity findScheduleByToken(String token);
     boolean updateSchedule(Long taskId, Long userId, Long scheduleTime, String contentData, String idempotentToken, String reason);
+
+    ContentScheduleEntity findActiveScheduleByPostId(Long postId);
 
 }

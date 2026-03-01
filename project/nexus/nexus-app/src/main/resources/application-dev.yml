@@ -44,10 +44,10 @@ mybatis:
 feed:
   inbox:
     maxSize: 1000
-    ttlDays: 30
+    ttlDays: 14
   outbox:
     maxSize: 1000
-    ttlDays: 30
+    ttlDays: 14
   corefans:
     ttlDays: 30
   fanout:
@@ -138,3 +138,7 @@ search:
     dailyTtlDays: 8
     unionTtlSeconds: 120
     topKForSuggestScan: 200
+
+reaction:
+  sync:
+    mode: redis

@@ -4,6 +4,7 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.CustomExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -17,6 +18,7 @@ import java.util.Map;
  * @since 2026-01-20
  */
 @Configuration
+@ConditionalOnProperty(name = "reaction.sync.mode", havingValue = "rabbit")
 public class ReactionSyncDelayConfig {
 
     public static final String EXCHANGE = "reaction.sync.exchange";

@@ -15,6 +15,8 @@ import lombok.NoArgsConstructor;
 public class ContentScheduleEntity {
     private Long taskId;
     private Long userId;
+    /** 绑定的 postId（=draftId）。 */
+    private Long postId;
     private String contentData;
     private Long scheduleTime;
     private Integer status;

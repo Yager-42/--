@@ -15,7 +15,12 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PublishContentRequestDTO {
-    /** 复用已有内容的postId，空则创建新内容 */
+    /**
+     * postId（必填）。
+     *
+     * <p>新发帖：先调用 <code>PUT /api/v1/content/draft</code> 拿到 <code>draftId</code>，
+     * 再用 <code>postId=draftId</code> 调用 publish。</p>
+     */
     private Long postId;
     private Long userId;
     private String text;

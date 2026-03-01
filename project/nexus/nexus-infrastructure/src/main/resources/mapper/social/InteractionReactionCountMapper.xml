@@ -10,5 +10,13 @@
             update_time = VALUES(update_time)
     </insert>
 
+    <select id="selectCount" resultType="java.lang.Long">
+        SELECT count
+        FROM interaction_reaction_count
+        WHERE target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND reaction_type = #{reactionType}
+    </select>
+
 </mapper>
 

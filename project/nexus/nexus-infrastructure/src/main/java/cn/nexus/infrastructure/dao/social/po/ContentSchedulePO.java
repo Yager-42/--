@@ -11,6 +11,8 @@ import java.util.Date;
 public class ContentSchedulePO {
     private Long taskId;
     private Long userId;
+    /** 绑定的 postId（=draftId）。 */
+    private Long postId;
     private String contentData;
     private Date scheduleTime;
     private Integer status;

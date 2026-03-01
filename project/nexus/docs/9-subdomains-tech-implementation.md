@@ -117,13 +117,12 @@ flowchart TD
 - `POST /api/v1/notification/read/all`
 - MQ：`interaction.notify` 消费（写入通知收件箱）
 
-### 1.7 社交关系（关注/好友/分组）
+### 1.7 社交关系（关注/好友/屏蔽）
 - `POST /api/v1/relation/follow`
 - `POST /api/v1/relation/unfollow`
 - `POST /api/v1/relation/friend/request`
 - `POST /api/v1/relation/friend/decision`
 - `POST /api/v1/relation/block`
-- `POST /api/v1/relation/list`（分组管理）
 
 ### 1.8 风控与信任（扫描/决策/申诉）
 - `POST /api/v1/risk/decision`
@@ -387,7 +386,9 @@ flowchart TD
 你只要记住一句话：**一次 publish 请求，一定会先写一条 Attempt；只有“真正发布成功”才会写 `content_history` 新版本并更新 `content_post`。**
 
 处理步骤（按代码主线）：
-1. 计算 `targetPostId`：没传 `postId` 就新建一个
+1. `postId` **必填**：
+   - 新发帖：先 `PUT /api/v1/content/draft` 拿 `draftId`
+   - 再 `POST /api/v1/content/publish` 传 `postId=draftId`
 2. 获取分布式锁 `lock:content:post:<postId>`
 3. `findPostForUpdate` 行锁查现有 post，并校验“只能改自己的”
 4. 生成 `idempotent_token`（把 userId/postId/文本/媒体/位置/可见性/postTypes 拼起来做 SHA-256）
@@ -1597,19 +1598,18 @@ flowchart TD
 
 ---
 
-## 8. 子领域 7：社交关系（关注/好友/分组/屏蔽）
+## 8. 子领域 7：社交关系（关注/好友/屏蔽）
 
 入口代码：
 - HTTP：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/RelationController.java`
 - 领域服务：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/RelationService.java`
 
 关键依赖（你可以理解为“它要去问谁/改谁”）：
-- `IRelationRepository`：关系边/粉丝反向表/好友申请/分组（MySQL）
+- `IRelationRepository`：关系边/粉丝反向表/好友申请（MySQL）
 - `IRelationPolicyPort`：策略（是否拉黑/是否需要审批）
 - `IRelationAdjacencyCachePort`：关注邻接缓存（读关注列表/写 follow 边）
 - `IRelationCachePort`：关注数量缓存（用于关注上限判断）
 - `IFriendRequestIdempotentPort`：好友申请幂等锁（防重复写）
-- `IRelationGroupLockPort`：分组操作锁 + 幂等结果缓存
 - `IRelationEventPort`：关系事件发布（follow/unfollow/friend/block）
 
 关键设计（先讲清楚）：
@@ -1781,40 +1781,6 @@ flowchart TD
   E --> F["清理关注/好友/申请/粉丝表/缓存"]
   F --> G["发 onBlock 事件"]
   G --> H["返回 BLOCKED"]
-```
-
----
-
-### 8.6 `POST /api/v1/relation/list`（分组管理：action 驱动 + 锁 + 幂等 token）
-
-入口：`RelationController.manageGroup()` → `RelationService.manageGroup()`（事务）
-
-处理步骤（高层看就够用了）：  
-1. 规范化 action（默认 CREATE），memberIds 去重
-2. memberIds > 1000：直接返回“成员过多”
-3. 如果传了 `idempotentToken` 且已缓存结果：直接返回缓存结果（300s）
-4. 抢分布式锁（按 userId+action）：抢不到返回“操作过于频繁”
-5. 按 action 分支执行：
-   - `CREATE/UPDATE/DELETE/LIST/ADD_MEMBER/REMOVE_MEMBER/MOVE/MERGE`
-6. 保存幂等结果缓存，释放锁
-
-极端情况：
-- `LIST` 且没有任何分组：会返回一组“示例成员”（占位体验）
-
-流程图：
-```mermaid
-flowchart TD
-  A["请求 POST /relation/list"] --> B["normalize action + memberIds 去重"]
-  B --> C{成员>1000?}
-  C -- 是 --> D["返回 成员过多"]
-  C -- 否 --> E{命中 idempotentToken 缓存?}
-  E -- 是 --> F["直接返回缓存结果"]
-  E -- 否 --> G["tryLock(userId, action)"]
-  G --> H{拿到锁?}
-  H -- 否 --> I["返回 操作过于频繁"]
-  H -- 是 --> J["按 action 执行<br/>CREATE/UPDATE/DELETE/..."]
-  J --> K["缓存结果 300s + unlock"]
-  K --> L["返回 RelationGroupVO"]
 ```
 
 ---

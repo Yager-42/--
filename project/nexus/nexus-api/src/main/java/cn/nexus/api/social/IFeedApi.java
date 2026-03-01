@@ -12,8 +12,4 @@ public interface IFeedApi {
     Response<FeedTimelineResponseDTO> timeline(FeedTimelineRequestDTO requestDTO);
 
     Response<FeedTimelineResponseDTO> profile(Long targetId, ProfileFeedRequestDTO requestDTO);
-
-    Response<OperationResultDTO> submitNegativeFeedback(NegativeFeedbackRequestDTO requestDTO);
-
-    Response<OperationResultDTO> cancelNegativeFeedback(Long targetId, CancelNegativeFeedbackRequestDTO requestDTO);
 }

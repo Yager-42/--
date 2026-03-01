@@ -2,7 +2,6 @@ package cn.nexus.domain.social.adapter.repository;
 
 import cn.nexus.domain.social.model.entity.FriendRequestEntity;
 import cn.nexus.domain.social.model.entity.RelationEntity;
-import cn.nexus.domain.social.model.entity.RelationGroupEntity;
 
 import java.util.List;
 
@@ -49,6 +48,18 @@ public interface IRelationRepository {
      */
     int countFollowerIds(Long userId);
 
+    /**
+     * 只返回“大 V”关注对象：粉丝数 >= 阈值的 followingIds。
+     *
+     * <p>用于 FOLLOW 首页兜底：当关注列表来自缓存且可能被截断时，仅回源补齐大 V，避免回源全量关注。</p>
+     *
+     * @param userId            发起方（我）的用户 ID
+     * @param followerThreshold 粉丝阈值（>= threshold 视为大 V）
+     * @param limit             最多返回数量
+     * @return 大 V 的 targetId 列表（可空列表）
+     */
+    List<Long> listBigVFollowingIds(Long userId, int followerThreshold, int limit);
+
     FriendRequestEntity saveFriendRequest(FriendRequestEntity request);
 
     FriendRequestEntity findFriendRequest(Long requestId);
@@ -62,20 +73,4 @@ public interface IRelationRepository {
     int updateFriendRequestsStatus(java.util.List<Long> requestIds, Integer status);
 
     void deleteFriendRequestsBetween(Long sourceId, Long targetId);
-
-    RelationGroupEntity createGroup(RelationGroupEntity group);
-
-    RelationGroupEntity updateGroup(RelationGroupEntity group);
-
-    RelationGroupEntity deleteGroup(Long userId, Long groupId);
-
-    List<RelationGroupEntity> listGroups(Long userId);
-
-    void replaceGroupMembers(Long groupId, java.util.List<Long> memberIds);
-
-    java.util.List<Long> listGroupMembers(Long groupId);
-
-    void addGroupMembers(Long groupId, java.util.List<Long> memberIds);
-
-    void removeGroupMembers(Long groupId, java.util.List<Long> memberIds);
 }

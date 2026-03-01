@@ -16,6 +16,7 @@ public class FeedItemVO {
     private Long postId;
     private Long authorId;
     private String text;
+    private String summary;
     private Long publishTime;
     private String source;
 }

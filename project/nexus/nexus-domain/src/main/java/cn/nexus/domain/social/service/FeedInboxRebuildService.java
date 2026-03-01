@@ -2,7 +2,6 @@ package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedNegativeFeedbackRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
@@ -14,7 +13,6 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Feed Inbox 重建服务实现：离线拉（inbox miss）时，按关注列表回填最近一段时间的内容。
@@ -29,7 +27,6 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
     private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IContentRepository contentRepository;
     private final IFeedTimelineRepository feedTimelineRepository;
-    private final IFeedNegativeFeedbackRepository feedNegativeFeedbackRepository;
 
     /**
      * 每个关注对象拉取的最近内容条数（默认 20）。 {@code int}
@@ -57,14 +54,15 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
      * @param userId 用户 ID {@link Long}
      */
     @Override
-    public void rebuildIfNeeded(Long userId) {
+    public boolean rebuildIfNeeded(Long userId) {
         if (userId == null) {
-            return;
+            return false;
         }
         if (feedTimelineRepository.inboxExists(userId)) {
-            return;
+            return false;
         }
         doRebuild(userId);
+        return true;
     }
 
     @Override
@@ -89,7 +87,7 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
         }
 
         candidates.sort(postComparator());
-        List<FeedInboxEntryVO> entries = buildInboxEntries(userId, candidates);
+        List<FeedInboxEntryVO> entries = buildInboxEntries(candidates);
         feedTimelineRepository.replaceInbox(userId, entries);
     }
 
@@ -162,10 +160,9 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
         return Long.compare(b, a);
     }
 
-    private List<FeedInboxEntryVO> buildInboxEntries(Long userId, List<ContentPostEntity> candidates) {
+    private List<FeedInboxEntryVO> buildInboxEntries(List<ContentPostEntity> candidates) {
         int limit = Math.max(1, inboxSize);
         List<FeedInboxEntryVO> entries = new ArrayList<>(limit);
-        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
         for (ContentPostEntity post : candidates) {
             if (post == null) {
                 continue;
@@ -173,12 +170,6 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
             Long postId = post.getPostId();
             Long publishTimeMs = post.getCreateTime();
             if (postId == null || publishTimeMs == null) {
-                continue;
-            }
-            if (feedNegativeFeedbackRepository.contains(userId, postId)) {
-                continue;
-            }
-            if (hitNegativePostTypes(post, negativeTypes)) {
                 continue;
             }
             entries.add(FeedInboxEntryVO.builder()
@@ -190,21 +181,5 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
             }
         }
         return entries;
-    }
-
-    private boolean hitNegativePostTypes(ContentPostEntity post, Set<String> negativeTypes) {
-        if (post == null || negativeTypes == null || negativeTypes.isEmpty()) {
-            return false;
-        }
-        List<String> postTypes = post.getPostTypes();
-        if (postTypes == null || postTypes.isEmpty()) {
-            return false;
-        }
-        for (String postType : postTypes) {
-            if (postType != null && negativeTypes.contains(postType)) {
-                return true;
-            }
-        }
-        return false;
     }
 }

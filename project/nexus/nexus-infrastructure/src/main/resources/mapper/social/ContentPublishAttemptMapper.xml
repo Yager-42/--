@@ -59,6 +59,20 @@
         WHERE idempotent_token = #{idempotentToken}
     </select>
 
+    <select id="selectLatestActiveAttempt" resultMap="ContentPublishAttemptMap">
+        SELECT attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
+               attempt_status, risk_status, transcode_status,
+               snapshot_content, snapshot_media, location_info, visibility,
+               published_version_num, error_code, error_message,
+               create_time, update_time
+        FROM content_publish_attempt
+        WHERE post_id = #{postId}
+          AND user_id = #{userId}
+          AND attempt_status IN (#{statusCreated}, #{statusTranscoding}, #{statusPendingReview})
+        ORDER BY attempt_id DESC
+        LIMIT 1
+    </select>
+
     <update id="updateStatus">
         UPDATE content_publish_attempt
         <set>

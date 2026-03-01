@@ -107,7 +107,7 @@
 - [x] 写接口：
   - [x] `POST /api/v1/user/me/profile`（改 nickname/avatarUrl；nickname 变化写 Outbox）
   - [x] `POST /api/v1/user/me/privacy`（改 needApproval）
-  - [x] `POST /api/v1/internal/user/upsert`（update-only；缺行=NOT_FOUND；username 不一致=CONFLICT）
+  - [x] `POST /api/v1/internal/user/upsert`（update-only；缺行=NOT_FOUND；username 不一致=CONFLICT；status=DEACTIVATED 可停用）
 - [x] 读接口：
   - [x] `GET /api/v1/user/me/profile`
   - [x] `GET /api/v1/user/profile?targetUserId=...`（双向屏蔽任一为 true => NOT_FOUND）

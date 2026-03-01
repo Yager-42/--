@@ -1,6 +1,7 @@
 package cn.nexus.domain.user.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
@@ -213,5 +214,48 @@ class UserServiceTest {
         verify(userEventOutboxPort).tryPublishPending();
         verify(userPrivacyRepository, never()).upsertNeedApproval(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         verify(userStatusRepository, never()).upsertStatus(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void internalUpsert_deactivated_thenUserWrite_shouldThrowUserDeactivated() {
+        Long userId = 1001L;
+
+        java.util.concurrent.atomic.AtomicReference<String> statusRef =
+                new java.util.concurrent.atomic.AtomicReference<>(UserService.STATUS_ACTIVE);
+        java.util.concurrent.atomic.AtomicReference<Long> deactivatedTimeRef = new java.util.concurrent.atomic.AtomicReference<>();
+
+        when(userStatusRepository.getStatus(userId)).thenAnswer(inv -> statusRef.get());
+        Mockito.doAnswer(inv -> {
+                    String status = inv.getArgument(1);
+                    Long deactivatedTimeMs = inv.getArgument(2);
+                    statusRef.set(status);
+                    deactivatedTimeRef.set(deactivatedTimeMs);
+                    return null;
+                })
+                .when(userStatusRepository)
+                .upsertStatus(org.mockito.ArgumentMatchers.eq(userId),
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any());
+
+        when(userProfileRepository.get(userId)).thenReturn(UserProfileVO.builder()
+                .userId(userId)
+                .username("u1001")
+                .nickname("n0")
+                .avatarUrl("")
+                .build());
+
+        userService.internalUpsert(UserInternalUpsertRequestVO.builder()
+                .userId(userId)
+                .username("u1001")
+                .status(UserService.STATUS_DEACTIVATED)
+                .build());
+
+        assertEquals(UserService.STATUS_DEACTIVATED, statusRef.get());
+        assertNotNull(deactivatedTimeRef.get());
+
+        AppException ex = assertThrows(AppException.class,
+                () -> userService.updateMyProfile(userId, UserProfilePatchVO.builder().nickname("new").build()));
+        assertEquals(ResponseCode.USER_DEACTIVATED.getCode(), ex.getCode());
+        verify(userProfileRepository, never()).updatePatch(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 }

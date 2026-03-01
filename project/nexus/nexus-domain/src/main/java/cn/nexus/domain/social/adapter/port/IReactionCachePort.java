@@ -16,7 +16,7 @@ import java.util.Map;
 public interface IReactionCachePort {
 
     /**
-     * 在线写入：Redis 原子更新（Set 去重 + Count 计数 + ops 记录 + sync 标记）。
+     * 在线写入：Redis 原子更新（Bitmap 去重 + Count 计数 + ops 记录 + sync 标记）。
      *
      * @param userId     用户 ID {@link Long}
      * @param target     点赞目标 {@link ReactionTargetVO}
@@ -66,7 +66,7 @@ public interface IReactionCachePort {
     long getCountFromRedis(ReactionTargetVO target);
 
     /**
-     * 查询用户是否点过赞（以 Redis set 为准）。
+     * 查询用户是否点过赞（以 Redis bitmap 为准）。
      *
      * @param userId 用户 ID {@link Long}
      * @param target 点赞目标 {@link ReactionTargetVO}

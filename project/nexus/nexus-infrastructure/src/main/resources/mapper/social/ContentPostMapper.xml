@@ -6,6 +6,8 @@
         <id property="postId" column="post_id"/>
         <result property="userId" column="user_id"/>
         <result property="contentText" column="content_text"/>
+        <result property="summary" column="summary"/>
+        <result property="summaryStatus" column="summary_status"/>
         <result property="mediaType" column="media_type"/>
         <result property="mediaInfo" column="media_info"/>
         <result property="locationInfo" column="location_info"/>
@@ -22,13 +24,15 @@
     </insert>
 
     <select id="selectById" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, content_text, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE post_id = #{postId}
     </select>
 
     <select id="selectByIdForUpdate" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, content_text, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE post_id = #{postId}
         FOR UPDATE
@@ -47,12 +51,57 @@
           AND status = #{expectedStatus}
     </update>
 
+    <update id="updateStatusIfMatchAndVersion">
+        UPDATE content_post
+        SET status = #{status}
+        WHERE post_id = #{postId}
+          AND status = #{expectedStatus}
+          AND version_num = #{expectedVersion}
+    </update>
+
+    <update id="softDeleteIfMatchAndVersion">
+        UPDATE content_post
+        SET status = 6,
+            delete_time = #{deleteTime}
+        WHERE post_id = #{postId}
+          AND status = #{expectedStatus}
+          AND version_num = #{expectedVersion}
+    </update>
+
     <update id="updateStatusWithUser">
         UPDATE content_post
         SET status = #{status}
         WHERE post_id = #{postId}
           AND user_id = #{userId}
     </update>
+
+    <update id="updateSummary">
+        UPDATE content_post
+        SET summary = #{summary},
+            summary_status = #{summaryStatus}
+        WHERE post_id = #{postId}
+    </update>
+
+    <select id="selectSoftDeletedIdsBefore" resultType="java.lang.Long">
+        SELECT post_id
+        FROM content_post
+        WHERE status = 6
+          AND delete_time IS NOT NULL
+          AND delete_time &lt; #{cutoff}
+        ORDER BY delete_time ASC, post_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <delete id="deleteSoftDeletedByIds">
+        DELETE FROM content_post
+        WHERE status = 6
+          AND delete_time IS NOT NULL
+          AND delete_time &lt; #{cutoff}
+          AND post_id IN
+        <foreach collection="postIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
 
     <update id="updateContentAndVersion">
         UPDATE content_post
@@ -68,7 +117,8 @@
     </update>
 
     <select id="selectByIds" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, content_text, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE status = 2
           AND post_id IN
@@ -78,7 +128,8 @@
     </select>
 
     <select id="selectByUserPage" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, content_text, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE user_id = #{userId}
           AND status IN (1, 2)
@@ -91,7 +142,8 @@
     </select>
 
     <select id="selectPublishedPage" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, content_text, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE status = 2
         <if test="cursorTime != null and cursorPostId != null">

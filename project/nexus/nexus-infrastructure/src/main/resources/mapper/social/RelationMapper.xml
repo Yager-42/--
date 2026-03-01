@@ -64,4 +64,14 @@
             AND relation_type = #{relationType}
         </if>
     </select>
+
+    <select id="selectBigVFollowingIds" resultType="java.lang.Long">
+        SELECT r.target_id
+        FROM user_relation r
+        WHERE r.source_id = #{sourceId}
+          AND r.relation_type = #{relationType}
+          AND r.status = #{status}
+          AND (SELECT COUNT(1) FROM user_follower uf WHERE uf.user_id = r.target_id) &gt;= #{followerThreshold}
+        LIMIT #{limit}
+    </select>
 </mapper>

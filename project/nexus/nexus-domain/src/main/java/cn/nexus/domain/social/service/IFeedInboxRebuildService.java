@@ -14,8 +14,9 @@ public interface IFeedInboxRebuildService {
      * 在需要时重建用户 InboxTimeline（只在 inbox key miss 场景触发）。
      *
      * @param userId 用户 ID {@link Long}
+     * @return true=本次触发了重建；false=无需重建或参数非法
      */
-    void rebuildIfNeeded(Long userId);
+    boolean rebuildIfNeeded(Long userId);
 
     /**
      * 强制重建用户 InboxTimeline（不判断 inboxExists）。

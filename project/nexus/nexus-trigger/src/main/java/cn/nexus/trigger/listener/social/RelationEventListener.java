@@ -6,6 +6,7 @@ import cn.nexus.domain.social.service.IFeedFollowCompensationService;
 import cn.nexus.domain.social.service.IFeedService;
 import cn.nexus.domain.social.service.IInteractionService;
 import cn.nexus.domain.social.service.IRiskService;
+import cn.nexus.domain.social.service.FeedAuthorCategoryStateMachine;
 import cn.nexus.domain.social.adapter.port.IRelationEventInboxPort;
 import cn.nexus.infrastructure.adapter.social.port.RelationBlockEvent;
 import cn.nexus.infrastructure.adapter.social.port.RelationFollowEvent;
@@ -29,6 +30,7 @@ public class RelationEventListener {
     private final IInteractionService interactionService;
     private final IRiskService riskService;
     private final IRelationEventInboxPort relationEventInboxPort;
+    private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine;
 
     @RabbitListener(queues = "relation.follow.queue")
     public void consumeFollow(RelationFollowEvent event) {
@@ -69,8 +71,10 @@ public class RelationEventListener {
         }
         if ("ACTIVE".equalsIgnoreCase(event.status())) {
             feedFollowCompensationService.onFollow(event.sourceId(), event.targetId());
+            feedAuthorCategoryStateMachine.onFollowerCountChanged(event.targetId());
         } else if ("UNFOLLOW".equalsIgnoreCase(event.status())) {
             feedFollowCompensationService.onUnfollow(event.sourceId(), event.targetId());
+            feedAuthorCategoryStateMachine.onFollowerCountChanged(event.targetId());
         }
         NotificationListVO list = interactionService.notifications(event.targetId(), null);
         riskService.userStatus(event.sourceId());
@@ -89,6 +93,8 @@ public class RelationEventListener {
         feedService.profile(event.targetId(), event.sourceId(), null, 1);
         interactionService.notifications(event.sourceId(), null);
         interactionService.notifications(event.targetId(), null);
+        feedAuthorCategoryStateMachine.onFollowerCountChanged(event.sourceId());
+        feedAuthorCategoryStateMachine.onFollowerCountChanged(event.targetId());
         relationEventInboxPort.markDone(fp);
     }
 
@@ -102,6 +108,8 @@ public class RelationEventListener {
         OperationResultVO result = riskService.userStatus(event.targetId()) != null
                 ? OperationResultVO.builder().success(true).status("BLOCK_REFRESHED").build()
                 : OperationResultVO.builder().success(false).status("BLOCK_REFRESH_FAILED").build();
+        feedAuthorCategoryStateMachine.onFollowerCountChanged(event.sourceId());
+        feedAuthorCategoryStateMachine.onFollowerCountChanged(event.targetId());
         relationEventInboxPort.markDone(fp);
         log.debug("Block fanout status={}", result.getStatus());
     }

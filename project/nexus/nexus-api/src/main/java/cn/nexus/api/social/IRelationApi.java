@@ -23,6 +23,4 @@ public interface IRelationApi {
     Response<FriendDecisionResponseDTO> friendDecision(FriendDecisionRequestDTO requestDTO);
 
     Response<BlockResponseDTO> block(BlockRequestDTO requestDTO);
-
-    Response<RelationGroupResponseDTO> manageGroup(RelationGroupRequestDTO requestDTO);
 }

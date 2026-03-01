@@ -29,4 +29,11 @@
         WHERE draft_id = #{draftId}
     </select>
 
+    <select id="selectByIdForUpdate" resultMap="ContentDraftMap">
+        SELECT draft_id, user_id, draft_content, media_ids, device_id, client_version, update_time
+        FROM content_draft
+        WHERE draft_id = #{draftId}
+        FOR UPDATE
+    </select>
+
 </mapper>

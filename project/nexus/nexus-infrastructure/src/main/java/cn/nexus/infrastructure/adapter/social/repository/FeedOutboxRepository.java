@@ -26,6 +26,7 @@ import java.util.Set;
 public class FeedOutboxRepository implements IFeedOutboxRepository {
 
     private static final String KEY_OUTBOX_PREFIX = "feed:outbox:";
+    private static final String KEY_OUTBOX_TMP_PREFIX = "feed:outbox:tmp:";
 
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedOutboxProperties feedOutboxProperties;
@@ -37,7 +38,7 @@ public class FeedOutboxRepository implements IFeedOutboxRepository {
         }
         String key = outboxKey(authorId);
         stringRedisTemplate.opsForZSet().add(key, postId.toString(), publishTimeMs.doubleValue());
-        expireIfNeeded(key);
+        stringRedisTemplate.expire(key, ttl());
         trimToMaxSize(key);
     }
 
@@ -50,13 +51,39 @@ public class FeedOutboxRepository implements IFeedOutboxRepository {
     }
 
     @Override
+    public void replaceOutbox(Long authorId, List<FeedInboxEntryVO> entries) {
+        if (authorId == null) {
+            return;
+        }
+        String outboxKey = outboxKey(authorId);
+        if (entries == null || entries.isEmpty()) {
+            stringRedisTemplate.delete(outboxKey);
+            return;
+        }
+
+        String tmpKey = outboxTmpKey(authorId, System.currentTimeMillis());
+        for (FeedInboxEntryVO entry : entries) {
+            if (entry == null || entry.getPostId() == null || entry.getPublishTimeMs() == null) {
+                continue;
+            }
+            stringRedisTemplate.opsForZSet()
+                    .add(tmpKey, entry.getPostId().toString(), entry.getPublishTimeMs().doubleValue());
+        }
+
+        stringRedisTemplate.expire(tmpKey, ttl());
+        stringRedisTemplate.rename(tmpKey, outboxKey);
+        stringRedisTemplate.expire(outboxKey, ttl());
+        trimToMaxSize(outboxKey);
+    }
+
+    @Override
     public List<FeedInboxEntryVO> pageOutbox(Long authorId, Long cursorTimeMs, Long cursorPostId, int limit) {
         if (authorId == null) {
             return List.of();
         }
         int normalizedLimit = Math.max(1, limit);
         String key = outboxKey(authorId);
-        expireIfNeeded(key);
+        stringRedisTemplate.expire(key, ttl());
 
         long safeCursorTime = cursorTimeMs == null ? Long.MAX_VALUE : cursorTimeMs;
         long safeCursorPostId = cursorPostId == null ? Long.MAX_VALUE : cursorPostId;
@@ -111,19 +138,13 @@ public class FeedOutboxRepository implements IFeedOutboxRepository {
         return KEY_OUTBOX_PREFIX + authorId;
     }
 
+    private String outboxTmpKey(Long authorId, long epochMs) {
+        return KEY_OUTBOX_TMP_PREFIX + authorId + ":" + epochMs;
+    }
+
     private Duration ttl() {
         int ttlDays = Math.max(1, feedOutboxProperties.getTtlDays());
         return Duration.ofDays(ttlDays);
-    }
-
-    private void expireIfNeeded(String key) {
-        if (key == null || key.isBlank()) {
-            return;
-        }
-        Long ttlSeconds = stringRedisTemplate.getExpire(key);
-        if (ttlSeconds == null || ttlSeconds < 0) {
-            stringRedisTemplate.expire(key, ttl());
-        }
     }
 
     private void trimToMaxSize(String key) {

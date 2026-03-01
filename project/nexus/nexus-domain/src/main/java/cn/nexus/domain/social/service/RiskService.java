@@ -19,6 +19,12 @@ import cn.nexus.domain.social.model.valobj.RiskRuleVO;
 import cn.nexus.domain.social.model.valobj.RiskSignalVO;
 import cn.nexus.domain.social.model.valobj.TextScanResultVO;
 import cn.nexus.domain.social.model.valobj.UserRiskStatusVO;
+import cn.nexus.domain.social.service.risk.HasMediaMatcher;
+import cn.nexus.domain.social.service.risk.RateLimitMatcher;
+import cn.nexus.domain.social.service.risk.RegexMatcher;
+import cn.nexus.domain.social.service.risk.RiskThenActionFactory;
+import cn.nexus.domain.social.service.risk.RiskWhenMatcher;
+import cn.nexus.domain.social.service.risk.TextContainsAnyMatcher;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.event.risk.ImageScanRequestedEvent;
 import cn.nexus.types.event.risk.LlmScanRequestedEvent;
@@ -26,9 +32,7 @@ import cn.nexus.types.event.risk.ReviewCaseCreatedEvent;
 import cn.nexus.types.exception.AppException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RAtomicLong;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -38,7 +42,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -48,14 +51,13 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Pattern;
+import java.util.Locale;
 
 /**
  * 风控服务实现。
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class RiskService implements IRiskService {
 
     private final ISocialIdPort socialIdPort;
@@ -78,6 +80,70 @@ public class RiskService implements IRiskService {
 
     @Value("${risk.sample.salt:}")
     private String sampleSalt;
+
+    private final Map<String, RiskWhenMatcher> whenMatchers;
+    private final Map<String, RiskThenActionFactory> thenFactories;
+
+    public RiskService(ISocialIdPort socialIdPort,
+                       IRiskDecisionLogRepository decisionLogRepository,
+                       IRiskCaseRepository caseRepository,
+                       IRiskRuleVersionRepository ruleVersionRepository,
+                       IRiskPunishmentRepository punishmentRepository,
+                       IRiskTaskPort riskTaskPort,
+                       RedissonClient redissonClient,
+                       ObjectMapper objectMapper) {
+        this.socialIdPort = socialIdPort;
+        this.decisionLogRepository = decisionLogRepository;
+        this.caseRepository = caseRepository;
+        this.ruleVersionRepository = ruleVersionRepository;
+        this.punishmentRepository = punishmentRepository;
+        this.riskTaskPort = riskTaskPort;
+        this.redissonClient = redissonClient;
+        this.objectMapper = objectMapper;
+
+        // 注册表：新增一种 when/then 类型，只需要新增实现类并在这里注册。
+        this.whenMatchers = Map.of(
+                "has_media", new HasMediaMatcher(),
+                "text_contains_any", new TextContainsAnyMatcher(),
+                "regex", new RegexMatcher(),
+                "rate_limit", new RateLimitMatcher(redissonClient)
+        );
+        this.thenFactories = Map.of(
+                "block", (rule, signals) -> RiskDecisionVO.builder()
+                        .decisionId(socialIdPort.nextId())
+                        .result("BLOCK")
+                        .reasonCode(safe(rule.getReasonCode(), "RULE_BLOCK"))
+                        .actions(List.of(RiskActionVO.builder().type("BLOCK").paramsJson("{\"reason\":\"rule\"}").build()))
+                        .signals(signals)
+                        .build(),
+                "limit", (rule, signals) -> {
+                    Map<String, Object> then = rule.getThen() == null ? Map.of() : rule.getThen();
+                    int ttl = toInt(then.get("ttlSeconds"), 600);
+                    return RiskDecisionVO.builder()
+                            .decisionId(socialIdPort.nextId())
+                            .result("LIMIT")
+                            .reasonCode(safe(rule.getReasonCode(), "RULE_LIMIT"))
+                            .actions(List.of(RiskActionVO.builder().type("RATE_LIMIT").paramsJson("{\"ttlSeconds\":" + ttl + "}").build()))
+                            .signals(signals)
+                            .ttlSeconds(ttl)
+                            .build();
+                },
+                "quarantine", (rule, signals) -> RiskDecisionVO.builder()
+                        .decisionId(socialIdPort.nextId())
+                        .result("REVIEW")
+                        .reasonCode(safe(rule.getReasonCode(), "RULE_REVIEW"))
+                        .actions(List.of(RiskActionVO.builder().type("DEGRADE_VISIBILITY").paramsJson("{\"visibility\":\"QUARANTINE\"}").build()))
+                        .signals(signals)
+                        .build(),
+                "allow", (rule, signals) -> RiskDecisionVO.builder()
+                        .decisionId(socialIdPort.nextId())
+                        .result("PASS")
+                        .reasonCode(safe(rule.getReasonCode(), "PASS"))
+                        .actions(List.of(RiskActionVO.builder().type("ALLOW").paramsJson("{}").build()))
+                        .signals(signals)
+                        .build()
+        );
+    }
 
     private static final String DEFAULT_RULES_JSON = "{"
             + "\"version\":1,"
@@ -330,42 +396,18 @@ public class RiskService implements IRiskService {
     private RiskDecisionVO buildDecisionFromThen(RiskRuleVO rule, List<RiskSignalVO> signals) {
         Map<String, Object> then = rule.getThen() == null ? Map.of() : rule.getThen();
         String type = String.valueOf(then.getOrDefault("type", "allow"));
-        if ("block".equalsIgnoreCase(type)) {
+        RiskThenActionFactory factory = thenFactories.get(type.toLowerCase(Locale.ROOT));
+        if (factory == null) {
+            // 未注册的 then.type：保持默认 PASS（与原逻辑一致）
             return RiskDecisionVO.builder()
                     .decisionId(socialIdPort.nextId())
-                    .result("BLOCK")
-                    .reasonCode(safe(rule.getReasonCode(), "RULE_BLOCK"))
-                    .actions(List.of(RiskActionVO.builder().type("BLOCK").paramsJson("{\"reason\":\"rule\"}").build()))
+                    .result("PASS")
+                    .reasonCode(safe(rule.getReasonCode(), "PASS"))
+                    .actions(List.of(RiskActionVO.builder().type("ALLOW").paramsJson("{}").build()))
                     .signals(signals)
                     .build();
         }
-        if ("limit".equalsIgnoreCase(type)) {
-            int ttl = toInt(then.get("ttlSeconds"), 600);
-            return RiskDecisionVO.builder()
-                    .decisionId(socialIdPort.nextId())
-                    .result("LIMIT")
-                    .reasonCode(safe(rule.getReasonCode(), "RULE_LIMIT"))
-                    .actions(List.of(RiskActionVO.builder().type("RATE_LIMIT").paramsJson("{\"ttlSeconds\":" + ttl + "}").build()))
-                    .signals(signals)
-                    .ttlSeconds(ttl)
-                    .build();
-        }
-        if ("quarantine".equalsIgnoreCase(type)) {
-            return RiskDecisionVO.builder()
-                    .decisionId(socialIdPort.nextId())
-                    .result("REVIEW")
-                    .reasonCode(safe(rule.getReasonCode(), "RULE_REVIEW"))
-                    .actions(List.of(RiskActionVO.builder().type("DEGRADE_VISIBILITY").paramsJson("{\"visibility\":\"QUARANTINE\"}").build()))
-                    .signals(signals)
-                    .build();
-        }
-        return RiskDecisionVO.builder()
-                .decisionId(socialIdPort.nextId())
-                .result("PASS")
-                .reasonCode(safe(rule.getReasonCode(), "PASS"))
-                .actions(List.of(RiskActionVO.builder().type("ALLOW").paramsJson("{}").build()))
-                .signals(signals)
-                .build();
+        return factory.build(rule, signals);
     }
 
     private boolean hit(Map<String, Object> when, RiskEventVO event, Map<String, Long> counters) {
@@ -373,84 +415,11 @@ public class RiskService implements IRiskService {
             return false;
         }
         String type = String.valueOf(when.getOrDefault("type", ""));
-        if ("has_media".equalsIgnoreCase(type)) {
-            return event.getMediaUrls() != null && !event.getMediaUrls().isEmpty();
-        }
-        if ("text_contains_any".equalsIgnoreCase(type)) {
-            return hitTextContainsAny(when, event.getContentText());
-        }
-        if ("regex".equalsIgnoreCase(type)) {
-            return hitRegex(when, event.getContentText());
-        }
-        if ("rate_limit".equalsIgnoreCase(type)) {
-            return hitRateLimit(when, event, counters);
-        }
-        return false;
-    }
-
-    private boolean hitTextContainsAny(Map<String, Object> when, String text) {
-        if (text == null || text.isBlank()) {
+        RiskWhenMatcher matcher = whenMatchers.get(type.toLowerCase(Locale.ROOT));
+        if (matcher == null) {
             return false;
         }
-        Object k = when.get("keywords");
-        if (!(k instanceof List<?> list) || list.isEmpty()) {
-            return false;
-        }
-        boolean ci = Boolean.TRUE.equals(when.get("caseInsensitive"));
-        String content = ci ? text.toLowerCase() : text;
-        for (Object raw : list) {
-            if (raw == null) {
-                continue;
-            }
-            String kw = String.valueOf(raw);
-            String needle = ci ? kw.toLowerCase() : kw;
-            if (!needle.isBlank() && content.contains(needle)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hitRegex(Map<String, Object> when, String text) {
-        if (text == null || text.isBlank()) {
-            return false;
-        }
-        Object p = when.get("pattern");
-        if (p == null) {
-            return false;
-        }
-        Pattern pattern = Pattern.compile(String.valueOf(p), Pattern.CASE_INSENSITIVE);
-        return pattern.matcher(text).find();
-    }
-
-    private boolean hitRateLimit(Map<String, Object> when, RiskEventVO event, Map<String, Long> counters) {
-        Integer window = toIntObj(when.get("windowSeconds"));
-        Integer threshold = toIntObj(when.get("threshold"));
-        if (window == null || threshold == null || window <= 0) {
-            return false;
-        }
-        long cnt = incrCounter(event.getUserId(), event.getActionType(), window, counters);
-        return cnt > threshold;
-    }
-
-    private long incrCounter(Long userId, String actionType, int windowSeconds, Map<String, Long> counters) {
-        if (userId == null || actionType == null || actionType.isBlank()) {
-            return 0L;
-        }
-        String key = "risk:cnt:" + userId + ":" + actionType + ":" + windowSeconds;
-        if (counters != null) {
-            Long cached = counters.get(key);
-            if (cached != null) {
-                return cached;
-            }
-        }
-        RAtomicLong counter = redissonClient.getAtomicLong(key);
-        long v = counter.incrementAndGet();
-        counter.expire(Duration.ofSeconds(windowSeconds));
-        if (counters != null) {
-            counters.put(key, v);
-        }
-        return v;
+        return matcher.hit(when, event, counters);
     }
 
     private RiskDecisionVO persist(RiskEventVO event, String requestHash, RiskDecisionVO decision) {

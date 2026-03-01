@@ -3,22 +3,23 @@ package cn.nexus.domain.social.service;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRecommendationPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedNegativeFeedbackRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedRecommendSessionRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
+import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
 import cn.nexus.domain.social.model.valobj.FeedNeighborsCursor;
 import cn.nexus.domain.social.model.valobj.FeedPopularCursor;
 import cn.nexus.domain.social.model.valobj.FeedRecommendCursor;
 import cn.nexus.domain.social.model.valobj.FeedTimelineVO;
-import cn.nexus.domain.social.model.valobj.OperationResultVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,7 +36,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * 分发与 Feed 服务实现：提供 timeline/profile 与负反馈能力。
+ * 分发与 Feed 服务实现：提供 timeline/profile 等读侧能力。
  *
  * @author codex
  * @since 2026-01-12
@@ -48,14 +49,17 @@ public class FeedService implements IFeedService {
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
     private static final int CANDIDATE_FACTOR = 3;
+    private static final int FOLLOW_SEEN_TTL_DAYS = 14;
+    private static final int RELATION_BLOCK = 3;
 
     private final IContentRepository contentRepository;
     private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IRelationRepository relationRepository;
+    private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedOutboxRepository feedOutboxRepository;
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
-    private final IFeedNegativeFeedbackRepository feedNegativeFeedbackRepository;
+    private final IFeedFollowSeenRepository feedFollowSeenRepository;
     private final IFeedInboxRebuildService feedInboxRebuildService;
     private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private final IFeedRecommendSessionRepository feedRecommendSessionRepository;
@@ -159,8 +163,9 @@ public class FeedService implements IFeedService {
         }
 
         boolean homePage = cursor == null || cursor.isBlank();
+        boolean rebuilt = false;
         if (homePage) {
-            feedInboxRebuildService.rebuildIfNeeded(userId);
+            rebuilt = feedInboxRebuildService.rebuildIfNeeded(userId);
         }
 
         MaxIdCursor maxIdCursor = homePage ? new MaxIdCursor(null, null) : resolveMaxIdCursor(cursor);
@@ -168,19 +173,37 @@ public class FeedService implements IFeedService {
             return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
         }
 
-        int scanLimit = normalizedLimit * CANDIDATE_FACTOR;
+        int scanFactor = homePage ? CANDIDATE_FACTOR * 2 : CANDIDATE_FACTOR;
+        int scanLimit = normalizedLimit * Math.max(1, scanFactor);
         List<FeedInboxEntryVO> inboxCandidates = feedTimelineRepository.pageInboxEntries(
                 userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), scanLimit
         );
+
+        // 首页触发 inbox 重建时：优先用 inbox 返回，避免额外读取 bigV outbox/pool 造成首屏延迟。
+        if (homePage && rebuilt) {
+            List<FeedInboxEntryVO> candidates = inboxCandidates == null ? List.of() : inboxCandidates;
+            candidates = filterFollowSeenCandidates(userId, candidates);
+            String nextCursor = candidates.isEmpty() || candidates.get(candidates.size() - 1).getPostId() == null
+                    ? null
+                    : candidates.get(candidates.size() - 1).getPostId().toString();
+            List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit);
+            markFollowSeen(userId, items);
+            return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
+        }
+
         List<Long> followings = listFollowings(userId);
         List<FeedInboxEntryVO> bigvCandidates = listBigVCandidates(userId, followings, maxIdCursor, scanLimit, normalizedLimit);
         List<FeedInboxEntryVO> candidates = mergeAndDedup(inboxCandidates, bigvCandidates, scanLimit);
+        if (homePage) {
+            candidates = filterFollowSeenCandidates(userId, candidates);
+        }
 
         String nextCursor = candidates.isEmpty() || candidates.get(candidates.size() - 1).getPostId() == null
                 ? null
                 : candidates.get(candidates.size() - 1).getPostId().toString();
 
         List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit);
+        markFollowSeen(userId, items);
         return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
     }
 
@@ -206,15 +229,6 @@ public class FeedService implements IFeedService {
         int scanBudget = Math.max(1, normalizedLimit) * scanFactor;
         int appendBatch = Math.max(1, normalizedLimit) * prefetchFactor;
 
-        Set<Long> negativePostIds = feedNegativeFeedbackRepository.listPostIds(userId);
-        if (negativePostIds == null) {
-            negativePostIds = Set.of();
-        }
-        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
-        if (negativeTypes == null) {
-            negativeTypes = Set.of();
-        }
-
         EnsureRecommendResult ensureResult = ensureRecommendCandidates(userId, sessionId, scanIndex, scanBudget, appendBatch, maxRounds);
 
         List<FeedItemVO> items = new ArrayList<>(normalizedLimit);
@@ -238,7 +252,7 @@ public class FeedService implements IFeedService {
 
             List<Long> toFetch = new ArrayList<>(batch.size());
             for (Long candidateId : batch) {
-                if (candidateId == null || negativePostIds.contains(candidateId)) {
+                if (candidateId == null) {
                     continue;
                 }
                 toFetch.add(candidateId);
@@ -254,14 +268,8 @@ public class FeedService implements IFeedService {
                 if (candidateId == null) {
                     continue;
                 }
-                if (negativePostIds.contains(candidateId)) {
-                    continue;
-                }
                 ContentPostEntity post = postById.get(candidateId);
                 if (post == null) {
-                    continue;
-                }
-                if (hitNegativePostTypes(post, negativeTypes)) {
                     continue;
                 }
                 Long authorId = post.getUserId();
@@ -272,6 +280,7 @@ public class FeedService implements IFeedService {
                         .postId(post.getPostId())
                         .authorId(authorId)
                         .text(post.getContentText())
+                        .summary(post.getSummary() == null ? "" : post.getSummary())
                         .publishTime(post.getCreateTime())
                         .source("RECOMMEND")
                         .build());
@@ -303,15 +312,6 @@ public class FeedService implements IFeedService {
         int scanBudget = Math.max(1, normalizedLimit) * scanFactor;
         int appendBatch = Math.max(1, normalizedLimit) * prefetchFactor;
 
-        Set<Long> negativePostIds = feedNegativeFeedbackRepository.listPostIds(userId);
-        if (negativePostIds == null) {
-            negativePostIds = Set.of();
-        }
-        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
-        if (negativeTypes == null) {
-            negativeTypes = Set.of();
-        }
-
         List<FeedItemVO> items = new ArrayList<>(normalizedLimit);
         Set<Long> seenAuthors = new HashSet<>();
         long idx = Math.max(0L, offset);
@@ -330,7 +330,7 @@ public class FeedService implements IFeedService {
 
             List<Long> toFetch = new ArrayList<>(candidates.size());
             for (Long candidateId : candidates) {
-                if (candidateId == null || negativePostIds.contains(candidateId)) {
+                if (candidateId == null) {
                     continue;
                 }
                 toFetch.add(candidateId);
@@ -343,14 +343,11 @@ public class FeedService implements IFeedService {
                 if (scanned > scanBudget) {
                     break;
                 }
-                if (candidateId == null || negativePostIds.contains(candidateId)) {
+                if (candidateId == null) {
                     continue;
                 }
                 ContentPostEntity post = postById.get(candidateId);
                 if (post == null) {
-                    continue;
-                }
-                if (hitNegativePostTypes(post, negativeTypes)) {
                     continue;
                 }
                 Long authorId = post.getUserId();
@@ -361,6 +358,7 @@ public class FeedService implements IFeedService {
                         .postId(post.getPostId())
                         .authorId(authorId)
                         .text(post.getContentText())
+                        .summary(post.getSummary() == null ? "" : post.getSummary())
                         .publishTime(post.getCreateTime())
                         .source("POPULAR")
                         .build());
@@ -389,15 +387,6 @@ public class FeedService implements IFeedService {
         int scanFactor = Math.max(1, recommendScanFactor);
         int scanBudget = Math.max(1, normalizedLimit) * scanFactor;
 
-        Set<Long> negativePostIds = feedNegativeFeedbackRepository.listPostIds(userId);
-        if (negativePostIds == null) {
-            negativePostIds = Set.of();
-        }
-        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
-        if (negativeTypes == null) {
-            negativeTypes = Set.of();
-        }
-
         long idx = Math.max(0L, offset);
         int needN = Math.max(1, safeNeighborsN(idx, scanBudget));
         List<Long> all = recommendationPort.neighbors(seedPostId, needN);
@@ -413,7 +402,7 @@ public class FeedService implements IFeedService {
 
         List<Long> toFetch = new ArrayList<>(slice.size());
         for (Long candidateId : slice) {
-            if (candidateId == null || negativePostIds.contains(candidateId)) {
+            if (candidateId == null) {
                 continue;
             }
             toFetch.add(candidateId);
@@ -429,14 +418,11 @@ public class FeedService implements IFeedService {
             if (scanned > scanBudget) {
                 break;
             }
-            if (candidateId == null || negativePostIds.contains(candidateId)) {
+            if (candidateId == null) {
                 continue;
             }
             ContentPostEntity post = postById.get(candidateId);
             if (post == null) {
-                continue;
-            }
-            if (hitNegativePostTypes(post, negativeTypes)) {
                 continue;
             }
             Long authorId = post.getUserId();
@@ -447,6 +433,7 @@ public class FeedService implements IFeedService {
                     .postId(post.getPostId())
                     .authorId(authorId)
                     .text(post.getContentText())
+                    .summary(post.getSummary() == null ? "" : post.getSummary())
                     .publishTime(post.getCreateTime())
                     .source("NEIGHBORS")
                     .build());
@@ -685,10 +672,32 @@ public class FeedService implements IFeedService {
         if (bigvFollowerThreshold <= 0) {
             return List.of();
         }
-        if (shouldUseBigVPool(followings)) {
-            return listPoolCandidates(userId, followings, cursor, normalizedLimit);
+
+        List<Long> mergedFollowings = followings;
+        boolean homePage = cursor != null && cursor.cursorTimeMs() == null && cursor.cursorPostId() == null;
+        if (homePage && followings.size() == maxFollowings) {
+            int limit = Math.max(0, maxBigvFollowings);
+            List<Long> bigvFollowings = relationRepository.listBigVFollowingIds(userId, bigvFollowerThreshold, limit);
+            if (bigvFollowings != null && !bigvFollowings.isEmpty()) {
+                Set<Long> seen = new HashSet<>(followings);
+                List<Long> merged = new ArrayList<>(followings.size() + bigvFollowings.size());
+                merged.addAll(followings);
+                for (Long id : bigvFollowings) {
+                    if (id == null || id.equals(userId)) {
+                        continue;
+                    }
+                    if (seen.add(id)) {
+                        merged.add(id);
+                    }
+                }
+                mergedFollowings = merged;
+            }
         }
-        List<Long> bigvAuthors = pickBigVAuthors(followings);
+
+        if (shouldUseBigVPool(mergedFollowings)) {
+            return listPoolCandidates(userId, mergedFollowings, cursor, normalizedLimit);
+        }
+        List<Long> bigvAuthors = pickBigVAuthors(mergedFollowings);
         if (bigvAuthors.isEmpty()) {
             return List.of();
         }
@@ -768,20 +777,30 @@ public class FeedService implements IFeedService {
         if (limit == 0) {
             return List.of();
         }
+        Map<Long, Integer> categories = feedAuthorCategoryRepository.batchGetCategory(followings);
         List<Long> bigv = new ArrayList<>(Math.min(followings.size(), limit));
+        int threshold = Math.max(0, bigvFollowerThreshold);
         for (Long authorId : followings) {
             if (authorId == null) {
                 continue;
             }
-            int followerCount = relationRepository.countFollowerIds(authorId);
-            if (followerCount >= bigvFollowerThreshold) {
+            Integer category = categories == null ? null : categories.get(authorId);
+            if (category == null) {
+                int followerCount = relationRepository.countFollowerIds(authorId);
+                int newCategory = (threshold > 0 && followerCount >= threshold)
+                        ? FeedAuthorCategoryEnumVO.BIGV.getCode()
+                        : FeedAuthorCategoryEnumVO.NORMAL.getCode();
+                feedAuthorCategoryRepository.setCategory(authorId, newCategory);
+                category = newCategory;
+            }
+            if (category == FeedAuthorCategoryEnumVO.BIGV.getCode()) {
                 bigv.add(authorId);
             }
             if (bigv.size() >= limit) {
                 break;
             }
         }
-        return bigv;
+        return bigv.isEmpty() ? List.of() : bigv;
     }
 
     private List<FeedInboxEntryVO> mergeAndDedup(List<FeedInboxEntryVO> inbox, List<FeedInboxEntryVO> extra, int limit) {
@@ -874,23 +893,42 @@ public class FeedService implements IFeedService {
 
         cleanupMissingIndexes(userId, candidateIds, posts);
 
-        Set<Long> negativePostIds = feedNegativeFeedbackRepository.listPostIds(userId);
-        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(userId);
+        // FOLLOW 时间线：读侧做关注/拉黑过滤，保证取消关注/拉黑立刻生效（不追求写侧强一致）。
+        Set<Long> allowedAuthors = null;
+        if (userId != null && source != null && "FOLLOW".equalsIgnoreCase(source.trim())) {
+            allowedAuthors = new HashSet<>();
+            allowedAuthors.add(userId);
+            int limit = Math.max(0, maxFollowings);
+            if (limit > 0) {
+                List<Long> followings = relationAdjacencyCachePort.listFollowing(userId, limit);
+                if (followings != null) {
+                    for (Long id : followings) {
+                        if (id != null) {
+                            allowedAuthors.add(id);
+                        }
+                    }
+                }
+            }
+        }
         List<FeedItemVO> items = new ArrayList<>(Math.min(posts.size(), normalizedLimit));
         for (ContentPostEntity post : posts) {
             if (post == null) {
                 continue;
             }
-            if (post.getPostId() != null && negativePostIds.contains(post.getPostId())) {
-                continue;
-            }
-            if (hitNegativePostTypes(post, negativeTypes)) {
-                continue;
+            if (allowedAuthors != null) {
+                Long authorId = post.getUserId();
+                if (authorId == null || !allowedAuthors.contains(authorId)) {
+                    continue;
+                }
+                if (isBlockedBetween(authorId, userId)) {
+                    continue;
+                }
             }
             items.add(FeedItemVO.builder()
                     .postId(post.getPostId())
                     .authorId(post.getUserId())
                     .text(post.getContentText())
+                    .summary(post.getSummary() == null ? "" : post.getSummary())
                     .publishTime(post.getCreateTime())
                     .source(source)
                     .build());
@@ -901,20 +939,64 @@ public class FeedService implements IFeedService {
         return items;
     }
 
-    private boolean hitNegativePostTypes(ContentPostEntity post, Set<String> negativeTypes) {
-        if (post == null || negativeTypes == null || negativeTypes.isEmpty()) {
+    private boolean isBlockedBetween(Long sourceId, Long targetId) {
+        if (sourceId == null || targetId == null) {
             return false;
         }
-        List<String> postTypes = post.getPostTypes();
-        if (postTypes == null || postTypes.isEmpty()) {
+        if (sourceId.equals(targetId)) {
             return false;
         }
-        for (String postType : postTypes) {
-            if (postType != null && negativeTypes.contains(postType)) {
-                return true;
+        return relationRepository.findRelation(sourceId, targetId, RELATION_BLOCK) != null
+                || relationRepository.findRelation(targetId, sourceId, RELATION_BLOCK) != null;
+    }
+
+    private List<FeedInboxEntryVO> filterFollowSeenCandidates(Long userId, List<FeedInboxEntryVO> candidates) {
+        if (userId == null || candidates == null || candidates.isEmpty()) {
+            return candidates == null ? List.of() : candidates;
+        }
+        List<FeedInboxEntryVO> filtered = new ArrayList<>(candidates.size());
+        for (FeedInboxEntryVO entry : candidates) {
+            if (entry == null || entry.getPostId() == null) {
+                continue;
+            }
+            try {
+                if (feedFollowSeenRepository.isSeen(userId, entry.getPostId())) {
+                    continue;
+                }
+            } catch (Exception e) {
+                // best-effort：读取失败不影响主链路
+                log.warn("feed follow seen check failed, userId={}, postId={}", userId, entry.getPostId(), e);
+            }
+            filtered.add(entry);
+        }
+        return filtered;
+    }
+
+    private void markFollowSeen(Long userId, List<FeedItemVO> items) {
+        if (userId == null || items == null || items.isEmpty()) {
+            return;
+        }
+        boolean touched = false;
+        for (FeedItemVO item : items) {
+            if (item == null || item.getPostId() == null) {
+                continue;
+            }
+            try {
+                feedFollowSeenRepository.markSeen(userId, item.getPostId());
+                touched = true;
+            } catch (Exception e) {
+                // best-effort：失败不影响主链路
+                log.warn("feed follow mark seen failed, userId={}, postId={}", userId, item.getPostId(), e);
             }
         }
-        return false;
+        if (!touched) {
+            return;
+        }
+        try {
+            feedFollowSeenRepository.expire(userId, FOLLOW_SEEN_TTL_DAYS);
+        } catch (Exception e) {
+            log.warn("feed follow seen expire failed, userId={}", userId, e);
+        }
     }
 
     private void cleanupMissingIndexes(Long userId, List<Long> candidateIds, List<ContentPostEntity> foundPosts) {
@@ -958,6 +1040,13 @@ public class FeedService implements IFeedService {
         if (targetId == null) {
             return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
         }
+        if (visitorId != null) {
+            boolean blocked1 = relationRepository.findRelation(targetId, visitorId, RELATION_BLOCK) != null;
+            boolean blocked2 = relationRepository.findRelation(visitorId, targetId, RELATION_BLOCK) != null;
+            if (blocked1 || blocked2) {
+                return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
+            }
+        }
         int normalizedLimit = normalizeLimit(limit);
         ContentPostPageVO page = contentRepository.listUserPosts(targetId, cursor, normalizedLimit);
         List<ContentPostEntity> posts = page.getPosts() == null ? List.of() : page.getPosts();
@@ -973,78 +1062,12 @@ public class FeedService implements IFeedService {
                     .postId(post.getPostId())
                     .authorId(post.getUserId())
                     .text(post.getContentText())
+                    .summary(post.getSummary() == null ? "" : post.getSummary())
                     .publishTime(post.getCreateTime())
                     .source("PROFILE")
                     .build());
         }
         return FeedTimelineVO.builder().items(items).nextCursor(page.getNextCursor()).build();
-    }
-
-    /**
-     * 提交负反馈：当前实现仅记录 targetId，用于读侧过滤。
-     *
-     * @param userId     用户 ID {@link Long}
-     * @param targetId   目标 ID（通常为 postId） {@link Long}
-     * @param type       负反馈类型（占位） {@link String}
-     * @param reasonCode 原因码（占位） {@link String}
-     * @param extraTags  额外标签（占位） {@link List} {@link String}
-     * @return 操作结果 {@link OperationResultVO}
-     */
-    @Override
-    public OperationResultVO negativeFeedback(Long userId, Long targetId, String type, String reasonCode, List<String> extraTags) {
-        if (userId == null || targetId == null) {
-            return OperationResultVO.builder()
-                    .success(false)
-                    .id(targetId)
-                    .status("INVALID")
-                    .message("参数错误")
-                    .build();
-        }
-        feedNegativeFeedbackRepository.add(userId, targetId, type, reasonCode);
-
-        // 负反馈类型：必须是该帖的 postTypes 之一；前端不保证，后端必须校验并忽略非法输入。
-        String normalizedType = type == null ? null : type.trim();
-        if (normalizedType != null && !normalizedType.isEmpty()) {
-            ContentPostEntity post = contentRepository.findPost(targetId);
-            List<String> postTypes = post == null ? null : post.getPostTypes();
-            if (postTypes != null && postTypes.contains(normalizedType)) {
-                feedNegativeFeedbackRepository.saveSelectedPostType(userId, targetId, normalizedType);
-            }
-        }
-
-        return OperationResultVO.builder()
-                .success(true)
-                .id(targetId)
-                .status("RECORDED")
-                .message(reasonCode)
-                .build();
-    }
-
-    /**
-     * 撤销负反馈。
-     *
-     * @param userId   用户 ID {@link Long}
-     * @param targetId 目标 ID {@link Long}
-     * @return 操作结果 {@link OperationResultVO}
-     */
-    @Override
-    public OperationResultVO cancelNegativeFeedback(Long userId, Long targetId) {
-        if (userId == null || targetId == null) {
-            return OperationResultVO.builder()
-                    .success(false)
-                    .id(targetId)
-                    .status("INVALID")
-                    .message("参数错误")
-                    .build();
-        }
-        feedNegativeFeedbackRepository.remove(userId, targetId);
-        feedNegativeFeedbackRepository.removeSelectedPostType(userId, targetId);
-        return OperationResultVO.builder()
-                .success(true)
-                .id(targetId)
-                .status("CANCELLED")
-                .message("已撤销负反馈")
-                .build();
     }
 
     private int normalizeLimit(Integer limit) {

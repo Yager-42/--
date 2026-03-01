@@ -22,4 +22,10 @@ public interface IRelationDao {
     List<RelationPO> selectByTarget(@Param("targetId") Long targetId, @Param("relationType") Integer relationType);
 
     Integer countByTarget(@Param("targetId") Long targetId, @Param("relationType") Integer relationType);
+
+    List<Long> selectBigVFollowingIds(@Param("sourceId") Long sourceId,
+                                      @Param("relationType") Integer relationType,
+                                      @Param("status") Integer status,
+                                      @Param("followerThreshold") Integer followerThreshold,
+                                      @Param("limit") Integer limit);
 }

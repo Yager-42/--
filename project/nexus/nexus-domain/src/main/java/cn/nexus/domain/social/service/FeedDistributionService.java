@@ -1,7 +1,6 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedCoreFansRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
@@ -32,7 +31,6 @@ public class FeedDistributionService implements IFeedDistributionService {
     private final IRelationRepository relationRepository;
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedOutboxRepository feedOutboxRepository;
-    private final IFeedCoreFansRepository feedCoreFansRepository;
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
 
     /**
@@ -48,12 +46,6 @@ public class FeedDistributionService implements IFeedDistributionService {
      */
     @Value("${feed.bigv.followerThreshold:500000}")
     private int bigvFollowerThreshold;
-
-    /**
-     * 大 V 发布时最多推送的铁粉数量（默认 2000）。
-     */
-    @Value("${feed.bigv.coreFanMaxPush:2000}")
-    private int coreFanMaxPush;
 
     /**
      * 执行 fanout：将发布内容写入在线用户的 InboxTimeline。
@@ -80,7 +72,6 @@ public class FeedDistributionService implements IFeedDistributionService {
         int followerCount = relationRepository.countFollowerIds(authorId);
         if (followerCount > 0 && bigvFollowerThreshold > 0 && followerCount >= bigvFollowerThreshold) {
             feedBigVPoolRepository.addToPool(authorId, postId, publishTimeMs);
-            pushToCoreFans(authorId, postId, publishTimeMs);
             return;
         }
 
@@ -153,39 +144,6 @@ public class FeedDistributionService implements IFeedDistributionService {
             wrote++;
         }
         return new FanoutWriteStat(candidates.size(), wrote, skippedOffline);
-    }
-
-    private void pushToCoreFans(Long authorId, Long postId, Long publishTimeMs) {
-        int limit = Math.max(0, coreFanMaxPush);
-        if (limit == 0) {
-            return;
-        }
-        List<Long> coreFans = feedCoreFansRepository.listCoreFans(authorId, limit);
-        if (coreFans == null || coreFans.isEmpty()) {
-            return;
-        }
-
-        List<Long> candidates = new ArrayList<>(coreFans.size());
-        for (Long followerId : coreFans) {
-            if (followerId == null || followerId.equals(authorId)) {
-                continue;
-            }
-            candidates.add(followerId);
-        }
-        if (candidates.isEmpty()) {
-            return;
-        }
-
-        Set<Long> online = feedTimelineRepository.filterOnlineUsers(candidates);
-        if (online.isEmpty()) {
-            return;
-        }
-        for (Long followerId : candidates) {
-            if (!online.contains(followerId)) {
-                continue;
-            }
-            feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
-        }
     }
 
     private record FanoutWriteStat(int candidates, int wrote, int skippedOffline) {

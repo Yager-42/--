@@ -12,6 +12,8 @@ public class ContentPostPO {
     private Long postId;
     private Long userId;
     private String contentText;
+    private String summary;
+    private Integer summaryStatus;
     private Integer mediaType;
     private String mediaInfo;
     private String locationInfo;

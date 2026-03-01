@@ -51,4 +51,13 @@ public interface ICommentDao {
                                      @Param("limit") Integer limit);
 
     List<CommentPO> selectRecentRootBriefs(@Param("postId") Long postId, @Param("limit") Integer limit);
+
+    /**
+     * 物理清理：删除超过指定时间的软删评论（分批）。
+     *
+     * @param cutoff update_time 早于该时间的记录会被清理
+     * @param limit  单次最多清理条数
+     * @return 实际删除行数
+     */
+    int deleteSoftDeletedBefore(@Param("cutoff") java.util.Date cutoff, @Param("limit") Integer limit);
 }

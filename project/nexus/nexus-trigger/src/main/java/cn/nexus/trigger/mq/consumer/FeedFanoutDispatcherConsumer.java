@@ -1,11 +1,13 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedCoreFansRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
+import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
+import cn.nexus.domain.social.service.FeedAuthorCategoryStateMachine;
 import cn.nexus.trigger.mq.config.FeedFanoutConfig;
 import cn.nexus.types.event.FeedFanoutTask;
 import cn.nexus.types.event.PostPublishedEvent;
@@ -16,10 +18,6 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
 
 /**
  * Feed fanout dispatcher：接收 PostPublishedEvent 并拆分为多个 {@link FeedFanoutTask} 切片任务。
@@ -41,10 +39,11 @@ public class FeedFanoutDispatcherConsumer {
     private final RabbitTemplate rabbitTemplate;
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedOutboxRepository feedOutboxRepository;
-    private final IFeedCoreFansRepository feedCoreFansRepository;
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
     private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private final IRelationRepository relationRepository;
+    private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
+    private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine;
 
     /**
      * fanout 切片大小，默认 200（复用现有配置键）。
@@ -59,12 +58,6 @@ public class FeedFanoutDispatcherConsumer {
      */
     @Value("${feed.bigv.followerThreshold:500000}")
     private int bigvFollowerThreshold;
-
-    /**
-     * 大 V 发布时最多推送的铁粉数量（默认 2000）。
-     */
-    @Value("${feed.bigv.coreFanMaxPush:2000}")
-    private int coreFanMaxPush;
 
     /**
      * 消费内容发布事件，拆分为切片任务并投递。
@@ -104,16 +97,19 @@ public class FeedFanoutDispatcherConsumer {
         feedGlobalLatestRepository.addToLatest(postId, publishTimeMs);
 
         // 2) 大 V 默认不做“全量写扩散”，避免发布一条写入海量粉丝 inbox
-        int followerCount = relationRepository.countFollowerIds(authorId);
-        if (followerCount > 0 && isBigV(followerCount)) {
+        Integer category = feedAuthorCategoryRepository.getCategory(authorId);
+        if (category == null) {
+            feedAuthorCategoryStateMachine.onFollowerCountChanged(authorId);
+            category = feedAuthorCategoryRepository.getCategory(authorId);
+        }
+        if (category != null && category == FeedAuthorCategoryEnumVO.BIGV.getCode()) {
             feedBigVPoolRepository.addToPool(authorId, postId, publishTimeMs);
-            pushToCoreFans(authorId, postId, publishTimeMs);
-            log.info("skip fanout for bigv author, postId={}, authorId={}, followerCount={}, threshold={}",
-                    postId, authorId, followerCount, bigvFollowerThreshold);
+            log.info("skip fanout for bigv author, postId={}, authorId={}, category={}", postId, authorId, category);
             return;
         }
 
         // 3) 计算切片数量并投递 fanout task（失败重试只重试某一片）
+        int followerCount = relationRepository.countFollowerIds(authorId);
         int pageSize = Math.max(1, batchSize);
         if (followerCount <= 0) {
             return;
@@ -135,42 +131,4 @@ public class FeedFanoutDispatcherConsumer {
         return followerCount >= bigvFollowerThreshold;
     }
 
-    private void pushToCoreFans(Long authorId, Long postId, Long publishTimeMs) {
-        int limit = Math.max(0, coreFanMaxPush);
-        if (limit == 0) {
-            return;
-        }
-        List<Long> coreFans = feedCoreFansRepository.listCoreFans(authorId, limit);
-        if (coreFans == null || coreFans.isEmpty()) {
-            return;
-        }
-
-        List<Long> candidates = new ArrayList<>(coreFans.size());
-        for (Long followerId : coreFans) {
-            if (followerId == null || followerId.equals(authorId)) {
-                continue;
-            }
-            candidates.add(followerId);
-        }
-        if (candidates.isEmpty()) {
-            return;
-        }
-
-        Set<Long> online = feedTimelineRepository.filterOnlineUsers(candidates);
-        if (online.isEmpty()) {
-            return;
-        }
-        int wrote = 0;
-        int skippedOffline = 0;
-        for (Long followerId : candidates) {
-            if (!online.contains(followerId)) {
-                skippedOffline++;
-                continue;
-            }
-            feedTimelineRepository.addToInbox(followerId, postId, publishTimeMs);
-            wrote++;
-        }
-        log.info("feed corefans pushed, postId={}, authorId={}, wrote={}, skippedOffline={}",
-                postId, authorId, wrote, skippedOffline);
-    }
 }

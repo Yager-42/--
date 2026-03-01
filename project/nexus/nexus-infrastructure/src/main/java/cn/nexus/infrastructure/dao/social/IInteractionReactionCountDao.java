@@ -2,6 +2,7 @@ package cn.nexus.infrastructure.dao.social;
 
 import cn.nexus.infrastructure.dao.social.po.InteractionReactionCountPO;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 /**
  * 互动-态势计数表 DAO。
@@ -13,5 +14,9 @@ import org.apache.ibatis.annotations.Mapper;
 public interface IInteractionReactionCountDao {
 
     int insertOrUpdate(InteractionReactionCountPO po);
+
+    Long selectCount(@Param("targetType") String targetType,
+                     @Param("targetId") Long targetId,
+                     @Param("reactionType") String reactionType);
 }
 

@@ -5,6 +5,7 @@
     <resultMap id="ContentScheduleMap" type="cn.nexus.infrastructure.dao.social.po.ContentSchedulePO">
         <id property="taskId" column="task_id"/>
         <result property="userId" column="user_id"/>
+        <result property="postId" column="post_id"/>
         <result property="contentData" column="content_data"/>
         <result property="scheduleTime" column="schedule_time"/>
         <result property="status" column="status"/>
@@ -16,8 +17,8 @@
     </resultMap>
 
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentSchedulePO">
-        INSERT INTO content_schedule(task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent)
-        VALUES(#{taskId}, #{userId}, #{contentData}, #{scheduleTime}, #{status}, #{retryCount}, #{idempotentToken}, #{isCanceled}, #{lastError}, #{alarmSent})
+        INSERT INTO content_schedule(task_id, user_id, post_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent)
+        VALUES(#{taskId}, #{userId}, #{postId}, #{contentData}, #{scheduleTime}, #{status}, #{retryCount}, #{idempotentToken}, #{isCanceled}, #{lastError}, #{alarmSent})
     </insert>
 
     <update id="updateStatus">
@@ -38,7 +39,7 @@
     </update>
 
     <select id="selectPending" resultMap="ContentScheduleMap">
-        SELECT task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
+        SELECT task_id, user_id, post_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
         FROM content_schedule
         WHERE status = 0
           AND schedule_time <= #{before}
@@ -49,15 +50,25 @@
     </select>
 
     <select id="selectById" resultMap="ContentScheduleMap">
-        SELECT task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
+        SELECT task_id, user_id, post_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
         FROM content_schedule
         WHERE task_id = #{taskId}
     </select>
 
     <select id="selectByToken" resultMap="ContentScheduleMap">
-        SELECT task_id, user_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
+        SELECT task_id, user_id, post_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
         FROM content_schedule
         WHERE idempotent_token = #{idempotentToken}
+    </select>
+
+    <select id="selectActiveByPostId" resultMap="ContentScheduleMap">
+        SELECT task_id, user_id, post_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
+        FROM content_schedule
+        WHERE post_id = #{postId}
+          AND status = 0
+          AND (is_canceled IS NULL OR is_canceled = 0)
+        ORDER BY schedule_time ASC
+        LIMIT 1
     </select>
 
     <update id="cancel">

@@ -10,4 +10,6 @@ public interface IContentDraftDao {
     int insertOrUpdate(ContentDraftPO po);
 
     ContentDraftPO selectById(@Param("draftId") Long draftId);
+
+    ContentDraftPO selectByIdForUpdate(@Param("draftId") Long draftId);
 }

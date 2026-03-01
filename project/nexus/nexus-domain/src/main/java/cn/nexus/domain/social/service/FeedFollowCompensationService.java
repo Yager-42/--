@@ -1,7 +1,6 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedNegativeFeedbackRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
@@ -10,7 +9,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Set;
 
 /**
  * Feed follow 补偿服务实现：在线用户刚关注后，立刻把“新关注的人”的最近 K 条内容写入 inbox。
@@ -26,8 +24,6 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
 
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IContentRepository contentRepository;
-    private final IFeedNegativeFeedbackRepository feedNegativeFeedbackRepository;
-    private final IFeedInboxRebuildService feedInboxRebuildService;
 
     /**
      * 刚关注后回填的“最近内容条数”（默认 20）。
@@ -57,15 +53,8 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
             return;
         }
 
-        Set<String> negativeTypes = feedNegativeFeedbackRepository.listPostTypes(followerId);
         for (ContentPostEntity post : posts) {
             if (post == null || post.getPostId() == null || post.getCreateTime() == null) {
-                continue;
-            }
-            if (feedNegativeFeedbackRepository.contains(followerId, post.getPostId())) {
-                continue;
-            }
-            if (hitNegativePostTypes(post, negativeTypes)) {
                 continue;
             }
             feedTimelineRepository.addToInbox(followerId, post.getPostId(), post.getCreateTime());
@@ -73,35 +62,19 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
     }
 
     /**
-     * 取消关注补偿：对在线用户强制重建 inbox，确保下一次刷新不再返回已取消关注者内容。
+     * 取消关注补偿：不再强制重建 inbox；由读侧过滤保证取消关注立刻生效。
      *
-     * <p>说明：当前 inbox 索引里没有 authorId，无法按作者做精确删除；强制重建是最简单可行的做法。</p>
+     * <p>说明：inbox 索引里没有 authorId，写侧做精确删除成本高；这里选择读侧过滤。</p>
      */
     @Override
     public void onUnfollow(Long followerId, Long followeeId) {
         if (followerId == null || followeeId == null || followerId.equals(followeeId)) {
             return;
         }
-        // 离线用户下次首页会走 rebuildIfNeeded；这里只处理在线用户的“立刻生效”体验。
+        // 离线用户下次首页会走 rebuildIfNeeded；这里仅用于“立刻生效”体验。
         if (!feedTimelineRepository.inboxExists(followerId)) {
             return;
         }
-        feedInboxRebuildService.forceRebuild(followerId);
-    }
-
-    private boolean hitNegativePostTypes(ContentPostEntity post, Set<String> negativeTypes) {
-        if (post == null || negativeTypes == null || negativeTypes.isEmpty()) {
-            return false;
-        }
-        List<String> postTypes = post.getPostTypes();
-        if (postTypes == null || postTypes.isEmpty()) {
-            return false;
-        }
-        for (String postType : postTypes) {
-            if (postType != null && negativeTypes.contains(postType)) {
-                return true;
-            }
-        }
-        return false;
+        // 读侧会做关注/拉黑过滤，取消关注无需强制重建 inbox。
     }
 }

@@ -15,6 +15,6 @@ public class ContentDraftPO {
     /** 草稿关联的媒体标识列表（逗号/JSON） */
     private String mediaIds;
     private String deviceId;
-    private String clientVersion;
+    private Long clientVersion;
     private Date updateTime;
 }

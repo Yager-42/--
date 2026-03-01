@@ -19,6 +19,6 @@ public class ContentDraftEntity {
     /** 草稿关联的媒体标识列表（如 MinIO 对象键），用逗号分隔或 JSON 字符串 */
     private String mediaIds;
     private String deviceId;
-    private String clientVersion;
+    private Long clientVersion;
     private Long updateTime;
 }

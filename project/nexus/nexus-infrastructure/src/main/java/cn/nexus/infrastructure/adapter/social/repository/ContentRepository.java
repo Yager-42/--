@@ -6,6 +6,7 @@ import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
@@ -21,6 +22,8 @@ import cn.nexus.infrastructure.dao.social.po.ContentPostTypePO;
 import cn.nexus.infrastructure.dao.social.po.ContentSchedulePO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +34,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -47,10 +51,17 @@ public class ContentRepository implements IContentRepository {
     private final IContentPostTypeDao contentPostTypeDao;
     private final IContentHistoryDao contentHistoryDao;
     private final IContentScheduleDao contentScheduleDao;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final ObjectMapper objectMapper;
 
     private static final String HOTKEY_PREFIX = "post__";
     private static final int L1_MAX_SIZE = 100_000;
     private static final Duration L1_TTL = Duration.ofSeconds(2);
+
+    private static final String POST_REDIS_KEY_PREFIX = "interact:content:post:";
+    private static final String POST_REDIS_NULL_VALUE = "NULL";
+    private static final long POST_REDIS_TTL_SECONDS = 60;
+    private static final long POST_REDIS_NULL_TTL_SECONDS = 30;
 
     /**
      * Feed 回表热点优化：只缓存热点 postId，短 TTL。
@@ -72,6 +83,13 @@ public class ContentRepository implements IContentRepository {
     @Transactional(readOnly = true)
     public ContentDraftEntity findDraft(Long draftId) {
         ContentDraftPO po = contentDraftDao.selectById(draftId);
+        return toDraftEntity(po);
+    }
+
+    @Override
+    @Transactional(readOnly = false)
+    public ContentDraftEntity findDraftForUpdate(Long draftId) {
+        ContentDraftPO po = contentDraftDao.selectByIdForUpdate(draftId);
         return toDraftEntity(po);
     }
 
@@ -134,7 +152,9 @@ public class ContentRepository implements IContentRepository {
             return List.of();
         }
 
-        // L1 只服务“热点 postId”：先查缓存，miss 的再批量回源 DB。
+        ValueOperations<String, String> valueOps = stringRedisTemplate.opsForValue();
+
+        // L1 只服务“热点 postId”：先查缓存，miss 的再批量走 L2/DB。
         Map<Long, ContentPostEntity> resultById = new HashMap<>();
         List<Long> missIds = new ArrayList<>(postIds.size());
         for (Long id : postIds) {
@@ -153,28 +173,89 @@ public class ContentRepository implements IContentRepository {
         }
 
         if (!missIds.isEmpty()) {
-            // 去重：避免 IN(...) 出现大量重复值（返回顺序由调用方重排，不依赖 DAO）。
+            // 去重：避免 multiGet / IN(...) 出现大量重复值。
             java.util.LinkedHashSet<Long> dedup = new java.util.LinkedHashSet<>(missIds);
-            List<Long> queryIds = new ArrayList<>(dedup);
-            List<ContentPostPO> list = contentPostDao.selectByIds(queryIds);
-            if (list != null && !list.isEmpty()) {
-                List<ContentPostEntity> dbEntities = new ArrayList<>(list.size());
-                for (ContentPostPO po : list) {
-                    ContentPostEntity entity = toPostEntity(po);
-                    if (entity == null || entity.getPostId() == null) {
-                        continue;
+            List<Long> uniqMissIds = new ArrayList<>(dedup);
+
+            // L2（Redis）：批量 multiGet，命中则补进结果；命中 NULL 则直接视为不存在（不回表）。
+            List<Long> dbMissIds = new ArrayList<>(uniqMissIds.size());
+            try {
+                List<String> keys = new ArrayList<>(uniqMissIds.size());
+                for (Long id : uniqMissIds) {
+                    keys.add(postRedisKey(id));
+                }
+                List<String> cached = valueOps.multiGet(keys);
+                if (cached != null && cached.size() == keys.size()) {
+                    for (int i = 0; i < uniqMissIds.size(); i++) {
+                        Long id = uniqMissIds.get(i);
+                        String json = cached.get(i);
+                        if (json == null) {
+                            dbMissIds.add(id);
+                            continue;
+                        }
+                        if (POST_REDIS_NULL_VALUE.equals(json)) {
+                            continue;
+                        }
+                        ContentPostEntity entity = parsePostCache(json);
+                        if (entity == null || entity.getPostId() == null) {
+                            dbMissIds.add(id);
+                            continue;
+                        }
+                        resultById.put(id, entity);
+                        if (isHotKeySafe(hotkeyKey(id))) {
+                            postCache.put(id, copyPost(entity));
+                        }
                     }
-                    dbEntities.add(entity);
+                } else {
+                    dbMissIds.addAll(uniqMissIds);
+                }
+            } catch (Exception ignored) {
+                // Redis 异常视为 miss：仍回源 DB
+                dbMissIds.addAll(uniqMissIds);
+            }
+
+            if (!dbMissIds.isEmpty()) {
+                List<ContentPostPO> list = contentPostDao.selectByIds(dbMissIds);
+                List<ContentPostEntity> dbEntities = new ArrayList<>(list == null ? 0 : list.size());
+                if (list != null && !list.isEmpty()) {
+                    for (ContentPostPO po : list) {
+                        ContentPostEntity entity = toPostEntity(po);
+                        if (entity == null || entity.getPostId() == null) {
+                            continue;
+                        }
+                        dbEntities.add(entity);
+                    }
                 }
                 fillPostTypes(dbEntities);
+
+                java.util.Set<Long> dbHitIds = new java.util.HashSet<>();
                 for (ContentPostEntity entity : dbEntities) {
                     Long id = entity.getPostId();
                     if (id == null) {
                         continue;
                     }
+                    dbHitIds.add(id);
                     resultById.put(id, entity);
                     if (isHotKeySafe(hotkeyKey(id))) {
                         postCache.put(id, copyPost(entity));
+                    }
+                    try {
+                        String json = objectMapper.writeValueAsString(entity);
+                        valueOps.set(postRedisKey(id), json, POST_REDIS_TTL_SECONDS, TimeUnit.SECONDS);
+                    } catch (Exception ignored) {
+                        // 缓存写失败视为 miss，不影响主链路
+                    }
+                }
+
+                // DB 仍 miss：写负缓存，避免重复打 DB。
+                for (Long id : dbMissIds) {
+                    if (id == null || dbHitIds.contains(id)) {
+                        continue;
+                    }
+                    try {
+                        valueOps.set(postRedisKey(id), POST_REDIS_NULL_VALUE, POST_REDIS_NULL_TTL_SECONDS, TimeUnit.SECONDS);
+                    } catch (Exception ignored) {
+                        // ignore
                     }
                 }
             }
@@ -217,6 +298,32 @@ public class ContentRepository implements IContentRepository {
             return false;
         }
         int rows = contentPostDao.updateStatusIfMatch(postId, status, expectedStatus);
+        boolean updated = rows > 0;
+        if (updated) {
+            invalidatePostCache(postId);
+        }
+        return updated;
+    }
+
+    @Override
+    public boolean updatePostStatusIfMatchVersion(Long postId, Integer status, Integer expectedStatus, Integer expectedVersion) {
+        if (postId == null || status == null || expectedStatus == null || expectedVersion == null) {
+            return false;
+        }
+        int rows = contentPostDao.updateStatusIfMatchAndVersion(postId, status, expectedStatus, expectedVersion);
+        boolean updated = rows > 0;
+        if (updated) {
+            invalidatePostCache(postId);
+        }
+        return updated;
+    }
+
+    @Override
+    public boolean updatePostSummary(Long postId, String summary, Integer summaryStatus) {
+        if (postId == null || summaryStatus == null) {
+            return false;
+        }
+        int rows = contentPostDao.updateSummary(postId, summary, summaryStatus);
         boolean updated = rows > 0;
         if (updated) {
             invalidatePostCache(postId);
@@ -277,6 +384,39 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    public boolean softDeleteIfMatchStatusAndVersion(Long postId, Integer expectedStatus, Integer expectedVersion, Long deleteTimeMs) {
+        if (postId == null || expectedStatus == null || expectedVersion == null) {
+            return false;
+        }
+        Date deleteTime = deleteTimeMs == null ? new Date() : new Date(deleteTimeMs);
+        boolean deleted = contentPostDao.softDeleteIfMatchAndVersion(postId, deleteTime, expectedStatus, expectedVersion) > 0;
+        if (deleted) {
+            invalidatePostCache(postId);
+        }
+        return deleted;
+    }
+
+    @Override
+    public int deleteSoftDeletedBefore(Date cutoff, int limit) {
+        if (cutoff == null || limit <= 0) {
+            return 0;
+        }
+        List<Long> postIds = contentPostDao.selectSoftDeletedIdsBefore(cutoff, limit);
+        if (postIds == null || postIds.isEmpty()) {
+            return 0;
+        }
+        for (Long postId : postIds) {
+            if (postId == null) {
+                continue;
+            }
+            // 先清理关联映射，避免产生脏数据。
+            contentPostTypeDao.deleteByPostId(postId);
+            invalidatePostCache(postId);
+        }
+        return contentPostDao.deleteSoftDeletedByIds(postIds, cutoff);
+    }
+
+    @Override
     public ContentScheduleEntity createSchedule(ContentScheduleEntity schedule) {
         contentScheduleDao.insert(toSchedulePO(schedule));
         return schedule;
@@ -326,11 +466,41 @@ public class ContentRepository implements IContentRepository {
         return contentScheduleDao.updateSchedule(taskId, userId, scheduleTime == null ? null : new Date(scheduleTime), contentData, idempotentToken, reason) > 0;
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public ContentScheduleEntity findActiveScheduleByPostId(Long postId) {
+        return toScheduleEntity(contentScheduleDao.selectActiveByPostId(postId));
+    }
+
     private void invalidatePostCache(Long postId) {
         if (postId == null) {
             return;
         }
         postCache.invalidate(postId);
+        try {
+            stringRedisTemplate.delete(postRedisKey(postId));
+        } catch (Exception ignored) {
+            // Redis 异常视为 cache miss，不影响主链路
+        }
+    }
+
+    private String postRedisKey(Long postId) {
+        return POST_REDIS_KEY_PREFIX + postId;
+    }
+
+    private ContentPostEntity parsePostCache(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            ContentPostEntity entity = objectMapper.readValue(json, ContentPostEntity.class);
+            if (entity != null && entity.getPostTypes() == null) {
+                entity.setPostTypes(List.of());
+            }
+            return entity;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private ContentPostEntity copyPost(ContentPostEntity post) {
@@ -343,6 +513,8 @@ public class ContentRepository implements IContentRepository {
                 .postId(post.getPostId())
                 .userId(post.getUserId())
                 .contentText(post.getContentText())
+                .summary(post.getSummary())
+                .summaryStatus(post.getSummaryStatus())
                 .postTypes(safeTypes)
                 .mediaType(post.getMediaType())
                 .mediaInfo(post.getMediaInfo())
@@ -402,6 +574,8 @@ public class ContentRepository implements IContentRepository {
         po.setPostId(entity.getPostId());
         po.setUserId(entity.getUserId());
         po.setContentText(entity.getContentText());
+        po.setSummary(entity.getSummary());
+        po.setSummaryStatus(entity.getSummaryStatus());
         po.setMediaType(entity.getMediaType());
         po.setMediaInfo(entity.getMediaInfo());
         po.setLocationInfo(entity.getLocationInfo());
@@ -421,6 +595,8 @@ public class ContentRepository implements IContentRepository {
                 .postId(po.getPostId())
                 .userId(po.getUserId())
                 .contentText(po.getContentText())
+                .summary(po.getSummary())
+                .summaryStatus(po.getSummaryStatus())
                 .postTypes(List.of())
                 .mediaType(po.getMediaType())
                 .mediaInfo(po.getMediaInfo())
@@ -526,6 +702,7 @@ public class ContentRepository implements IContentRepository {
         ContentSchedulePO po = new ContentSchedulePO();
         po.setTaskId(entity.getTaskId());
         po.setUserId(entity.getUserId());
+        po.setPostId(entity.getPostId());
         po.setContentData(entity.getContentData());
         po.setScheduleTime(entity.getScheduleTime() == null ? null : new Date(entity.getScheduleTime()));
         po.setStatus(entity.getStatus());
@@ -544,6 +721,7 @@ public class ContentRepository implements IContentRepository {
         return ContentScheduleEntity.builder()
                 .taskId(po.getTaskId())
                 .userId(po.getUserId())
+                .postId(po.getPostId())
                 .contentData(po.getContentData())
                 .scheduleTime(po.getScheduleTime() == null ? null : po.getScheduleTime().getTime())
                 .status(po.getStatus())

@@ -3,6 +3,7 @@ package cn.nexus.trigger.mq.consumer;
 import cn.nexus.trigger.mq.config.ReactionSyncDelayConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "reaction.sync.mode", havingValue = "rabbit")
 public class ReactionSyncDLQConsumer {
 
     @RabbitListener(queues = ReactionSyncDelayConfig.DLX_QUEUE)

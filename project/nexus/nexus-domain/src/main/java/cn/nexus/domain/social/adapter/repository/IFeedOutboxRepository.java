@@ -32,6 +32,14 @@ public interface IFeedOutboxRepository {
     void removeFromOutbox(Long authorId, Long postId);
 
     /**
+     * 替换写入作者 Outbox（原子替换，用于重建）。
+     *
+     * @param authorId 作者用户 ID {@link Long}
+     * @param entries  索引条目列表 {@link List} {@link FeedInboxEntryVO}
+     */
+    void replaceOutbox(Long authorId, List<FeedInboxEntryVO> entries);
+
+    /**
      * 分页读取作者 Outbox 的索引条目（Max_ID 语义：publishTimeMs desc + postId desc）。
      *
      * @param authorId      作者用户 ID {@link Long}

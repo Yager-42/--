@@ -2,6 +2,7 @@ package cn.nexus.domain.social.adapter.repository;
 
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.CommentViewVO;
+import java.util.Date;
 import java.util.List;
 
 /**
@@ -48,6 +49,15 @@ public interface ICommentRepository {
      * @return true=本次至少删除了 1 条回复；false=没有需要删除的回复
      */
     boolean softDeleteByRootId(Long rootId, Long nowMs);
+
+    /**
+     * 物理清理：删除超过指定时间的软删评论（分批）。
+     *
+     * @param cutoff update_time 早于该时间的记录会被清理
+     * @param limit  单次最多清理条数
+     * @return 实际删除行数
+     */
+    int deleteSoftDeletedBefore(Date cutoff, int limit);
 
     void addReplyCount(Long rootCommentId, Long delta);
 

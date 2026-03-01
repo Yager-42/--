@@ -124,4 +124,12 @@
         ORDER BY create_time DESC, comment_id DESC
         LIMIT #{limit}
     </select>
+
+    <delete id="deleteSoftDeletedBefore">
+        DELETE FROM interaction_comment
+        WHERE status = 2
+          AND update_time &lt; #{cutoff}
+        ORDER BY update_time ASC, comment_id ASC
+        LIMIT #{limit}
+    </delete>
 </mapper>

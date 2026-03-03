@@ -22,4 +22,14 @@
         </foreach>
     </delete>
 
+    <select id="selectExists" resultType="java.lang.Integer">
+        SELECT 1
+        FROM interaction_reaction
+        WHERE target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND reaction_type = #{reactionType}
+          AND user_id = #{userId}
+        LIMIT 1
+    </select>
+
 </mapper>

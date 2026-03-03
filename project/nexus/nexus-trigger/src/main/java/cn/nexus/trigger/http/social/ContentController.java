@@ -11,6 +11,7 @@ import cn.nexus.domain.social.service.IContentService;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
 import cn.nexus.trigger.http.social.dto.ScheduleCancelRequestDTO;
+import cn.nexus.trigger.http.social.support.ContentDetailQueryService;
 import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,8 @@ public class ContentController implements IContentApi {
     private IContentService contentService;
     @Resource
     private cn.nexus.trigger.mq.producer.ContentScheduleProducer contentScheduleProducer;
+    @Resource
+    private ContentDetailQueryService contentDetailQueryService;
 
     @PostMapping("/media/upload/session")
     @Override
@@ -146,6 +149,24 @@ public class ContentController implements IContentApi {
         } catch (Exception e) {
             log.error("content delete api failed, postId={}", postId, e);
             return Response.<OperationResultDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
+    }
+
+    @GetMapping("/content/{postId}")
+    public Response<ContentDetailResponseDTO> detail(@PathVariable("postId") Long postId,
+                                                     @RequestParam(value = "userId", required = false) Long ignoredUserId) {
+        try {
+            UserContext.requireUserId();
+            ContentDetailResponseDTO dto = contentDetailQueryService.query(postId);
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
+        } catch (AppException e) {
+            return Response.<ContentDetailResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("content detail api failed, postId={}", postId, e);
+            return Response.<ContentDetailResponseDTO>builder()
                     .code(ResponseCode.UN_ERROR.getCode())
                     .info(ResponseCode.UN_ERROR.getInfo())
                     .build();

@@ -2,6 +2,8 @@ package cn.nexus.domain.social.adapter.port;
 
 import cn.nexus.domain.social.model.valobj.UploadSessionVO;
 
+import java.io.InputStream;
+
 /**
  * 媒体存储端口：生成直传上传会话（预签名 URL 等凭证）。
  */
@@ -27,4 +29,17 @@ public interface IMediaStoragePort {
      * @return 可读取的 URL
      */
     String generateReadUrl(String sessionId);
+
+    /**
+     * 服务端直传：用于 /file/upload 这类 multipart 入口。
+     *
+     * <p>注意：该方法是 playbook 兼容入口；业务主链路仍建议走预签名直传。</p>
+     *
+     * @param originalFilename 原始文件名（用于保留后缀，可为空）
+     * @param fileType         MIME（可为空）
+     * @param fileSize         文件大小（字节，可为空）
+     * @param inputStream      文件流（由调用方负责关闭）
+     * @return 可读 URL（例如预签名 GET URL）
+     */
+    String uploadFile(String originalFilename, String fileType, Long fileSize, InputStream inputStream);
 }

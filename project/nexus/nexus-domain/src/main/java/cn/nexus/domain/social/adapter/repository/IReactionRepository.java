@@ -35,5 +35,10 @@ public interface IReactionRepository {
      * @param count  最新计数 {@code long}
      */
     void upsertCount(ReactionTargetVO target, long count);
+
+    /**
+     * 查询用户是否对 target 存在事实（DB 真相）。
+     */
+    boolean exists(ReactionTargetVO target, Long userId);
 }
 

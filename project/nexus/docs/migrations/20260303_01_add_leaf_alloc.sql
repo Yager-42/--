@@ -1,0 +1,10 @@
+-- xiaohashu playbook: Leaf segment id (MySQL)
+
+CREATE TABLE IF NOT EXISTS `leaf_alloc` (
+  `biz_tag` VARCHAR(128) NOT NULL COMMENT '业务标识',
+  `max_id` BIGINT NOT NULL DEFAULT 0 COMMENT '当前最大ID',
+  `step` INT NOT NULL DEFAULT 1000 COMMENT '号段步长',
+  `description` VARCHAR(256) DEFAULT '' COMMENT '描述',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`biz_tag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Leaf号段表';

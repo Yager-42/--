@@ -17,7 +17,10 @@ public class CommentPO {
     private Long rootId;
     private Long parentId;
     private Long replyToId;
-    private String content;
+    /**
+     * Comment body UUID stored in KV (comment_content).
+     */
+    private String contentId;
     private Integer status;
     private Long likeCount;
     private Long replyCount;

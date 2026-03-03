@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS `interaction_comment` (
   `root_id` BIGINT NULL COMMENT '一级评论为NULL；回复为所属一级评论ID',
   `parent_id` BIGINT NULL COMMENT '直接回复的评论ID（用于展示/定位）',
   `reply_to_id` BIGINT NULL COMMENT '显示“回复@谁”的目标评论ID（用于展示）',
-  `content` LONGTEXT NOT NULL COMMENT '评论内容',
+  `content_id` CHAR(36) NOT NULL COMMENT '评论正文UUID（KV键）',
   `status` TINYINT NOT NULL COMMENT '0待审核；1正常；2删除（软删）',
   `like_count` BIGINT NOT NULL DEFAULT 0 COMMENT '一级评论点赞数（最终一致）',
   `reply_count` BIGINT NOT NULL DEFAULT 0 COMMENT '一级评论回复数（最终一致）',

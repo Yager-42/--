@@ -95,5 +95,20 @@ public class ReactionRepository implements IReactionRepository {
         po.setCount(Math.max(0L, count));
         reactionCountDao.insertOrUpdate(po);
     }
+
+    @Override
+    public boolean exists(ReactionTargetVO target, Long userId) {
+        if (target == null || userId == null) {
+            return false;
+        }
+        String targetType = target.getTargetType() == null ? null : target.getTargetType().getCode();
+        Long targetId = target.getTargetId();
+        String reactionType = target.getReactionType() == null ? null : target.getReactionType().getCode();
+        if (targetType == null || targetType.isBlank() || targetId == null || reactionType == null || reactionType.isBlank()) {
+            return false;
+        }
+        Integer exists = reactionDao.selectExists(targetType, targetId, reactionType, userId);
+        return exists != null && exists == 1;
+    }
 }
 

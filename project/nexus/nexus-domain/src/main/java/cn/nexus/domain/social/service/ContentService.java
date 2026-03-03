@@ -1,8 +1,10 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
+import cn.nexus.domain.social.adapter.port.IContentCacheEvictPort;
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
 import cn.nexus.domain.social.adapter.port.IMediaTranscodePort;
+import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IContentPublishAttemptRepository;
@@ -31,6 +33,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 内容领域服务实现。
@@ -43,10 +46,12 @@ public class ContentService implements IContentService {
 
     private final ISocialIdPort socialIdPort;
     private final IContentRepository contentRepository;
+    private final IPostContentKvPort postContentKvPort;
     private final IContentPublishAttemptRepository contentPublishAttemptRepository;
     private final IMediaStoragePort mediaStoragePort;
     private final IMediaTranscodePort mediaTranscodePort;
     private final IContentEventOutboxPort contentEventOutboxPort;
+    private final IContentCacheEvictPort contentCacheEvictPort;
     private final IRiskService riskService;
     private final RedissonClient redissonClient;
 
@@ -440,6 +445,9 @@ public class ContentService implements IContentService {
                     post.getVersionNum(),
                     socialIdPort.now());
             if (ok) {
+                if (post.getContentUuid() != null && !post.getContentUuid().isBlank()) {
+                    postContentKvPort.delete(post.getContentUuid());
+                }
                 dispatchDeleteAfterCommit(postId, userId, post.getVersionNum());
             }
             return OperationResultVO.builder()
@@ -620,15 +628,23 @@ public class ContentService implements IContentService {
             int currentVersion = post == null || post.getVersionNum() == null ? 0 : post.getVersionNum();
             int newVersion = currentVersion + 1;
 
+            String newContentUuid = UUID.randomUUID().toString();
+            postContentKvPort.add(newContentUuid, content == null ? "" : content);
+            String oldUuid = post == null ? null : post.getContentUuid();
+
             boolean ok = contentRepository.updatePostStatusAndContent(
                     postId,
                     STATUS_PUBLISHED,
                     newVersion,
                     true,
-                    content,
+                    newContentUuid,
                     post == null ? null : post.getMediaInfo(),
                     post == null ? null : post.getLocationInfo(),
                     post == null ? 0 : post.getVisibility());
+
+            if (ok && oldUuid != null && !oldUuid.isBlank() && !oldUuid.equals(newContentUuid)) {
+                postContentKvPort.delete(oldUuid);
+            }
             contentRepository.saveHistory(cn.nexus.domain.social.model.entity.ContentHistoryEntity.builder()
                     .historyId(socialIdPort.nextId())
                     .postId(postId)
@@ -978,11 +994,15 @@ public class ContentService implements IContentService {
     }
 
     private void upsertPost(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, int status, int versionNum, boolean edited) {
+        String newContentUuid = UUID.randomUUID().toString();
+        postContentKvPort.add(newContentUuid, text == null ? "" : text);
+
         ContentPostEntity post = contentRepository.findPost(postId);
         if (post == null) {
             post = ContentPostEntity.builder()
                     .postId(postId)
                     .userId(userId)
+                    .contentUuid(newContentUuid)
                     .contentText(text)
                     .mediaType(deriveMediaType(mediaInfo))
                     .mediaInfo(mediaInfo)
@@ -998,9 +1018,14 @@ public class ContentService implements IContentService {
             if (userId != null && post.getUserId() != null && !post.getUserId().equals(userId)) {
                 throw new IllegalStateException("post 所属用户不匹配");
             }
-            boolean ok = contentRepository.updatePostStatusAndContent(postId, status, versionNum, edited, text, mediaInfo, location, parseVisibility(visibility));
+            String oldUuid = post.getContentUuid();
+            boolean ok = contentRepository.updatePostStatusAndContent(postId, status, versionNum, edited, newContentUuid, mediaInfo, location, parseVisibility(visibility));
             if (!ok) {
                 throw new IllegalStateException("post 更新失败，可能存在版本冲突 postId=" + postId);
+            }
+
+            if (oldUuid != null && !oldUuid.isBlank() && !oldUuid.equals(newContentUuid)) {
+                postContentKvPort.delete(oldUuid);
             }
         }
     }
@@ -1051,6 +1076,11 @@ public class ContentService implements IContentService {
 
         // 防御：若未来有人把 publish() 改成“事务外调用”，至少还能尝试投递。
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            try {
+                contentCacheEvictPort.evictPost(postId);
+            } catch (Exception e) {
+                log.warn("evict content caches failed, postId={}", postId, e);
+            }
             contentEventOutboxPort.tryPublishPending();
             return;
         }
@@ -1058,6 +1088,7 @@ public class ContentService implements IContentService {
             @Override
             public void afterCommit() {
                 try {
+                    contentCacheEvictPort.evictPost(postId);
                     contentEventOutboxPort.tryPublishPending();
                 } catch (Exception e) {
                     log.error("content outbox tryPublishPending failed after commit, postId={}, userId={}", postId, userId, e);
@@ -1075,6 +1106,11 @@ public class ContentService implements IContentService {
         contentEventOutboxPort.savePostSummaryGenerate(postId, operatorId, versionNum, tsMs);
 
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            try {
+                contentCacheEvictPort.evictPost(postId);
+            } catch (Exception e) {
+                log.warn("evict content caches failed, postId={}", postId, e);
+            }
             contentEventOutboxPort.tryPublishPending();
             return;
         }
@@ -1082,6 +1118,7 @@ public class ContentService implements IContentService {
             @Override
             public void afterCommit() {
                 try {
+                    contentCacheEvictPort.evictPost(postId);
                     contentEventOutboxPort.tryPublishPending();
                 } catch (Exception e) {
                     log.error("content outbox tryPublishPending failed after commit, postId={}, operatorId={}", postId, operatorId, e);
@@ -1097,6 +1134,11 @@ public class ContentService implements IContentService {
         contentEventOutboxPort.savePostDeleted(postId, operatorId, versionNum, socialIdPort.now());
 
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            try {
+                contentCacheEvictPort.evictPost(postId);
+            } catch (Exception e) {
+                log.warn("evict content caches failed, postId={}", postId, e);
+            }
             contentEventOutboxPort.tryPublishPending();
             return;
         }
@@ -1104,6 +1146,7 @@ public class ContentService implements IContentService {
             @Override
             public void afterCommit() {
                 try {
+                    contentCacheEvictPort.evictPost(postId);
                     contentEventOutboxPort.tryPublishPending();
                 } catch (Exception e) {
                     log.error("content outbox tryPublishPending failed after commit, postId={}, operatorId={}", postId, operatorId, e);

@@ -2,103 +2,153 @@ package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
 import cn.nexus.domain.social.model.valobj.UploadSessionVO;
-import cn.nexus.infrastructure.config.MinioMediaProperties;
-import io.minio.BucketExistsArgs;
-import io.minio.GetPresignedObjectUrlArgs;
-import io.minio.MakeBucketArgs;
-import io.minio.MinioClient;
-import io.minio.http.Method;
-import jakarta.annotation.PostConstruct;
+import cn.nexus.infrastructure.adapter.social.port.storage.MediaStorageStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 基于 MinIO 的媒体上传会话实现：返回预签名 PUT URL。
+ * Media storage router.
+ *
+ * <p>storage.type can be hot-switched by updating Redis key.</p>
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class MediaStoragePort implements IMediaStoragePort {
 
-    private final MinioMediaProperties properties;
-    private MinioClient client;
+    private static final String DEFAULT_TYPE = "minio";
 
-    @PostConstruct
+    private final StringRedisTemplate stringRedisTemplate;
+    private final List<MediaStorageStrategy> strategies;
+
+    @Value("${storage.type:minio}")
+    private String storageType;
+
+    @Value("${storage.redis-key:storage:type}")
+    private String storageTypeRedisKey;
+
+    private final AtomicReference<MediaStorageStrategy> current = new AtomicReference<>();
+    private final AtomicReference<String> currentType = new AtomicReference<>(DEFAULT_TYPE);
+
+    @jakarta.annotation.PostConstruct
     public void init() {
-        this.client = MinioClient.builder()
-                .endpoint(properties.getEndpoint())
-                .credentials(properties.getAccessKey(), properties.getSecretKey())
-                .build();
+        switchTo(normalizeType(storageType));
+        refreshFromRedisOnce();
+    }
+
+    @Scheduled(fixedDelayString = "${storage.refresh-ms:2000}")
+    public void refreshFromRedisOnce() {
+        String key = normalizeRedisKey(storageTypeRedisKey);
+        if (key == null) {
+            return;
+        }
+        try {
+            String raw = stringRedisTemplate.opsForValue().get(key);
+            String desired = normalizeType(raw);
+            if (desired == null) {
+                return;
+            }
+            if (desired.equals(currentType.get())) {
+                return;
+            }
+            switchTo(desired);
+        } catch (Exception e) {
+            // Redis unavailable -> keep current
+            log.warn("refresh storage.type from redis failed, key={}", key, e);
+        }
     }
 
     @Override
     public UploadSessionVO generateUploadSession(String sessionId, String fileType, Long fileSize, String crc32) {
-        String objectName = buildObjectName(sessionId);
-        try {
-            ensureBucket();
-            int expiry = (int) Math.max(properties.getExpirySeconds(), 60);
-            Map<String, String> headers = Map.of("Content-Type", fileType);
-            String uploadUrl = client.getPresignedObjectUrl(
-                    GetPresignedObjectUrlArgs.builder()
-                            .method(Method.PUT)
-                            .bucket(properties.getBucket())
-                            .object(objectName)
-                            .extraHeaders(headers)
-                            .expiry(expiry)
-                            .build()
-            );
-            return UploadSessionVO.builder()
-                    .uploadUrl(uploadUrl)
-                    .token(uploadUrl) // 预签名 URL 已携带签名参数，可直接作为 token
-                    .sessionId(sessionId)
-                    .build();
-        } catch (Exception e) {
-            log.error("生成 MinIO 上传会话失败, sessionId={}, object={}, err={}", sessionId, objectName, e.getMessage(), e);
-            throw new RuntimeException("生成上传凭证失败", e);
-        }
+        MediaStorageStrategy s = requireCurrent();
+        return s.generateUploadSession(sessionId, fileType, fileSize, crc32);
     }
 
     @Override
     public String generateReadUrl(String sessionId) {
-        if (sessionId == null || sessionId.isBlank()) {
-            return null;
-        }
-        String objectName = buildObjectName(sessionId);
-        try {
-            ensureBucket();
-            int expiry = (int) Math.max(properties.getExpirySeconds(), 60);
-            return client.getPresignedObjectUrl(
-                    GetPresignedObjectUrlArgs.builder()
-                            .method(Method.GET)
-                            .bucket(properties.getBucket())
-                            .object(objectName)
-                            .expiry(expiry)
-                            .build()
-            );
-        } catch (Exception e) {
-            log.warn("生成 MinIO 读取 URL 失败, sessionId={}, object={}, err={}", sessionId, objectName, e.getMessage(), e);
-            return null;
-        }
+        MediaStorageStrategy s = requireCurrent();
+        return s.generateReadUrl(sessionId);
     }
 
-    private void ensureBucket() throws Exception {
-        if (client.bucketExists(BucketExistsArgs.builder().bucket(properties.getBucket()).build())) {
-            return;
-        }
-        client.makeBucket(MakeBucketArgs.builder().bucket(properties.getBucket()).build());
+    @Override
+    public String uploadFile(String originalFilename, String fileType, Long fileSize, InputStream inputStream) {
+        MediaStorageStrategy s = requireCurrent();
+        return s.uploadFile(originalFilename, fileType, fileSize, inputStream);
     }
 
-    private String buildObjectName(String sessionId) {
-        String prefix = properties.getBasePath();
-        if (prefix == null || prefix.isBlank()) {
-            return sessionId;
+    private MediaStorageStrategy requireCurrent() {
+        MediaStorageStrategy s = current.get();
+        if (s != null) {
+            return s;
         }
-        if (prefix.endsWith("/")) {
-            return prefix + sessionId;
+        switchTo(DEFAULT_TYPE);
+        s = current.get();
+        if (s == null) {
+            throw new IllegalStateException("no media storage strategy available");
         }
-        return prefix + "/" + sessionId;
+        return s;
+    }
+
+    private void switchTo(String desiredType) {
+        String target = desiredType == null ? DEFAULT_TYPE : desiredType;
+
+        Map<String, MediaStorageStrategy> byType = indexStrategies(strategies);
+        MediaStorageStrategy picked = byType.get(target);
+        if (picked == null) {
+            picked = byType.get(DEFAULT_TYPE);
+        }
+        if (picked == null && !byType.isEmpty()) {
+            picked = byType.values().iterator().next();
+        }
+        if (picked == null) {
+            throw new IllegalStateException("no media storage strategy available");
+        }
+
+        current.set(picked);
+        currentType.set(picked.type());
+        log.info("media storage switched, type={} -> {}", desiredType, picked.type());
+    }
+
+    private Map<String, MediaStorageStrategy> indexStrategies(List<MediaStorageStrategy> list) {
+        Map<String, MediaStorageStrategy> m = new HashMap<>();
+        if (list == null) {
+            return m;
+        }
+        for (MediaStorageStrategy s : list) {
+            if (s == null) {
+                continue;
+            }
+            String t = normalizeType(s.type());
+            if (t != null) {
+                m.put(t, s);
+            }
+        }
+        return m;
+    }
+
+    private String normalizeType(String t) {
+        if (t == null) {
+            return null;
+        }
+        String v = t.trim().toLowerCase();
+        return v.isEmpty() ? null : v;
+    }
+
+    private String normalizeRedisKey(String k) {
+        if (k == null) {
+            return null;
+        }
+        String v = k.trim();
+        return v.isEmpty() ? null : v;
     }
 }

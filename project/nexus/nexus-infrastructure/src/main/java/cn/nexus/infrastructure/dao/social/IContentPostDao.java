@@ -11,6 +11,8 @@ public interface IContentPostDao {
 
     ContentPostPO selectById(@Param("postId") Long postId);
 
+    Long selectUserId(@Param("postId") Long postId);
+
     int updateStatus(@Param("postId") Long postId, @Param("status") Integer status);
 
     int updateStatusIfMatch(@Param("postId") Long postId, @Param("status") Integer status, @Param("expectedStatus") Integer expectedStatus);
@@ -47,7 +49,7 @@ public interface IContentPostDao {
     int deleteSoftDeletedByIds(@Param("postIds") java.util.List<Long> postIds, @Param("cutoff") java.util.Date cutoff);
 
     int updateContentAndVersion(@Param("postId") Long postId,
-                                @Param("contentText") String contentText,
+                                @Param("contentUuid") String contentUuid,
                                 @Param("mediaInfo") String mediaInfo,
                                 @Param("locationInfo") String locationInfo,
                                 @Param("versionNum") Integer versionNum,

@@ -21,5 +21,10 @@ public interface IInteractionReactionDao {
                     @Param("targetId") Long targetId,
                     @Param("reactionType") String reactionType,
                     @Param("userIds") List<Long> userIds);
+
+    Integer selectExists(@Param("targetType") String targetType,
+                         @Param("targetId") Long targetId,
+                         @Param("reactionType") String reactionType,
+                         @Param("userId") Long userId);
 }
 

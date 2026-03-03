@@ -3,7 +3,7 @@
 CREATE TABLE `content_post` (
   `post_id` BIGINT NOT NULL COMMENT '内容ID (Sharding Key)',
   `user_id` BIGINT NOT NULL,
-  `content_text` TEXT COMMENT '文本内容',
+  `content_uuid` CHAR(36) NOT NULL COMMENT '正文UUID（KV键）',
   `media_type` TINYINT DEFAULT 0 COMMENT '类型: 0纯文, 1图文, 2视频',
   `media_info` JSON COMMENT '媒体资源信息',
   `location_info` JSON COMMENT '地理位置信息',

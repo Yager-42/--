@@ -142,3 +142,34 @@ search:
 reaction:
   sync:
     mode: redis
+
+storage:
+  type: minio
+  redis-key: storage:type
+  refresh-ms: 2000
+
+# Sa-Token（用于 Authorization: Bearer token）
+sa-token:
+  token-name: Authorization
+  token-prefix: Bearer
+  is-log: false
+
+# Like/Unlike MQ consumers (batch ~= BufferTrigger 1000/1s)
+mq:
+  like-unlike:
+    consumer:
+      concurrency: 1
+      prefetch: 1000
+      batch-size: 1000
+      receive-timeout-ms: 1000
+      retry:
+        max-attempts: 5
+        initial-interval-ms: 200
+        multiplier: 2.0
+        max-interval-ms: 5000
+
+mq-consumer:
+  like-unlike:
+    rate-limit: 200
+  count-like2db:
+    rate-limit: 50

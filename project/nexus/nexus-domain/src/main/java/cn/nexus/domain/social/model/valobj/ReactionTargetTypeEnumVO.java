@@ -15,7 +15,14 @@ import lombok.Getter;
 @AllArgsConstructor
 public enum ReactionTargetTypeEnumVO {
     POST("POST", "帖子"),
-    COMMENT("COMMENT", "评论");
+    COMMENT("COMMENT", "评论"),
+
+    /**
+     * 计数/派生目标：用户（例如某用户收到的点赞数）。
+     *
+     * <p>注意：当前对外接口并不开放对 USER 目标的“点赞事实写入”，仅用于计数链路。</p>
+     */
+    USER("USER", "用户");
 
     private final String code;
     private final String desc;

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.kv.IPostContentDao">
+
+    <resultMap id="PostContentMap" type="cn.nexus.infrastructure.dao.kv.po.PostContentPO">
+        <id property="uuid" column="uuid"/>
+        <result property="content" column="content"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <insert id="upsert">
+        INSERT INTO post_content(uuid, content)
+        VALUES(#{uuid}, #{content})
+        ON DUPLICATE KEY UPDATE content = #{content}, update_time = NOW()
+    </insert>
+
+    <select id="selectByUuid" resultMap="PostContentMap">
+        SELECT uuid, content, create_time, update_time
+        FROM post_content
+        WHERE uuid = #{uuid}
+        LIMIT 1
+    </select>
+
+    <select id="selectByUuids" resultMap="PostContentMap">
+        SELECT uuid, content, create_time, update_time
+        FROM post_content
+        WHERE uuid IN
+        <foreach collection="uuids" item="u" open="(" separator="," close=")">
+            #{u}
+        </foreach>
+    </select>
+
+    <delete id="deleteByUuid">
+        DELETE FROM post_content WHERE uuid = #{uuid}
+    </delete>
+
+</mapper>

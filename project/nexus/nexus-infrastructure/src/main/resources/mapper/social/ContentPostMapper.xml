@@ -5,7 +5,7 @@
     <resultMap id="ContentPostMap" type="cn.nexus.infrastructure.dao.social.po.ContentPostPO">
         <id property="postId" column="post_id"/>
         <result property="userId" column="user_id"/>
-        <result property="contentText" column="content_text"/>
+        <result property="contentUuid" column="content_uuid"/>
         <result property="summary" column="summary"/>
         <result property="summaryStatus" column="summary_status"/>
         <result property="mediaType" column="media_type"/>
@@ -19,19 +19,26 @@
     </resultMap>
 
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentPostPO">
-        INSERT INTO content_post(post_id, user_id, content_text, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time)
-        VALUES(#{postId}, #{userId}, #{contentText}, #{mediaType}, #{mediaInfo}, #{locationInfo}, #{status}, #{visibility}, #{versionNum}, #{isEdited}, NOW())
+        INSERT INTO content_post(post_id, user_id, content_uuid, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time)
+        VALUES(#{postId}, #{userId}, #{contentUuid}, #{mediaType}, #{mediaInfo}, #{locationInfo}, #{status}, #{visibility}, #{versionNum}, #{isEdited}, NOW())
     </insert>
 
     <select id="selectById" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, summary, summary_status,
+        SELECT post_id, user_id, content_uuid, summary, summary_status,
                media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE post_id = #{postId}
     </select>
 
+    <select id="selectUserId" resultType="java.lang.Long">
+        SELECT user_id
+        FROM content_post
+        WHERE post_id = #{postId}
+        LIMIT 1
+    </select>
+
     <select id="selectByIdForUpdate" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, summary, summary_status,
+        SELECT post_id, user_id, content_uuid, summary, summary_status,
                media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE post_id = #{postId}
@@ -105,7 +112,7 @@
 
     <update id="updateContentAndVersion">
         UPDATE content_post
-        SET content_text = #{contentText},
+        SET content_uuid = #{contentUuid},
             media_info = #{mediaInfo},
             location_info = #{locationInfo},
             version_num = #{versionNum},
@@ -117,7 +124,7 @@
     </update>
 
     <select id="selectByIds" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, summary, summary_status,
+        SELECT post_id, user_id, content_uuid, summary, summary_status,
                media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE status = 2
@@ -128,7 +135,7 @@
     </select>
 
     <select id="selectByUserPage" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, summary, summary_status,
+        SELECT post_id, user_id, content_uuid, summary, summary_status,
                media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE user_id = #{userId}
@@ -142,7 +149,7 @@
     </select>
 
     <select id="selectPublishedPage" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_text, summary, summary_status,
+        SELECT post_id, user_id, content_uuid, summary, summary_status,
                media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
         FROM content_post
         WHERE status = 2

@@ -86,7 +86,7 @@ public interface IContentRepository {
     boolean updatePostSummary(Long postId, String summary, Integer summaryStatus);
 
     boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
-                                       String contentText, String mediaInfo, String locationInfo, Integer visibility);
+                                       String contentUuid, String mediaInfo, String locationInfo, Integer visibility);
 
     void saveHistory(ContentHistoryEntity history);
 

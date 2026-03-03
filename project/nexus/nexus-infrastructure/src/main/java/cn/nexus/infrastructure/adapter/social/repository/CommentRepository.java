@@ -3,11 +3,18 @@ package cn.nexus.infrastructure.adapter.social.repository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.CommentViewVO;
+import cn.nexus.domain.social.model.valobj.kv.CommentContentItemVO;
+import cn.nexus.domain.social.model.valobj.kv.CommentContentKeyVO;
+import cn.nexus.domain.social.model.valobj.kv.CommentContentResultVO;
 import cn.nexus.infrastructure.dao.social.ICommentDao;
 import cn.nexus.infrastructure.dao.social.po.CommentPO;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -17,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
@@ -39,6 +47,7 @@ public class CommentRepository implements ICommentRepository {
     private static final long JITTER_MS = 500L;
 
     private final ICommentDao commentDao;
+    private final ICommentContentKvPort commentContentKvPort;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
@@ -131,14 +140,18 @@ public class CommentRepository implements ICommentRepository {
         // DB：回源查 missIds；命中写回 L2(5s+jitter)+回填 L1；miss 写 "NULL"(2s+jitter)。
         List<CommentPO> list = commentDao.selectByIds(stillMiss);
         Map<Long, CommentViewVO> found = new HashMap<>();
+        List<ContentKey> contentKeys = new ArrayList<>();
         if (list != null) {
             for (CommentPO po : list) {
                 CommentViewVO vo = toView(po);
                 if (vo != null && vo.getCommentId() != null) {
                     found.put(vo.getCommentId(), vo);
+                    contentKeys.add(ContentKey.from(po));
                 }
             }
         }
+
+        fillContentsFromKv(found, contentKeys);
 
         for (Long id : stillMiss) {
             if (id == null) {
@@ -161,6 +174,17 @@ public class CommentRepository implements ICommentRepository {
     @Override
     public void insert(Long commentId, Long postId, Long userId, Long rootId, Long parentId, Long replyToId, String content, Integer status, Long nowMs) {
         Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
+
+        String contentId = UUID.randomUUID().toString();
+        String ym = yearMonth(now);
+        // Store body to KV first; both tables are in the same MySQL and share the outer transaction.
+        commentContentKvPort.batchAdd(List.of(CommentContentItemVO.builder()
+                .postId(postId)
+                .yearMonth(ym)
+                .contentId(contentId)
+                .content(content == null ? "" : content)
+                .build()));
+
         CommentPO po = new CommentPO();
         po.setCommentId(commentId);
         po.setPostId(postId);
@@ -168,7 +192,7 @@ public class CommentRepository implements ICommentRepository {
         po.setRootId(rootId);
         po.setParentId(parentId);
         po.setReplyToId(replyToId);
-        po.setContent(content == null ? "" : content);
+        po.setContentId(contentId);
         po.setStatus(status == null ? 1 : status);
         po.setLikeCount(0L);
         po.setReplyCount(0L);
@@ -336,12 +360,107 @@ public class CommentRepository implements ICommentRepository {
                 .rootId(po.getRootId())
                 .parentId(po.getParentId())
                 .replyToId(po.getReplyToId())
-                .content(po.getContent())
+                .content(null)
                 .status(po.getStatus())
                 .likeCount(po.getLikeCount())
                 .replyCount(po.getReplyCount())
                 .createTime(ct == null ? null : ct.getTime())
                 .build();
+    }
+
+    private void fillContentsFromKv(Map<Long, CommentViewVO> found, List<ContentKey> keys) {
+        if (found == null || found.isEmpty() || keys == null || keys.isEmpty()) {
+            return;
+        }
+
+        Map<Long, List<ContentKey>> byPost = new HashMap<>();
+        for (ContentKey k : keys) {
+            if (k == null || k.commentId == null || k.postId == null) {
+                continue;
+            }
+            if (k.contentId == null || k.contentId.isBlank()) {
+                continue;
+            }
+            String ym = yearMonth(k.createTime);
+            if (ym == null) {
+                continue;
+            }
+            byPost.computeIfAbsent(k.postId, x -> new ArrayList<>()).add(new ContentKey(k.commentId, k.postId, k.contentId, k.createTime, ym));
+        }
+
+        if (byPost.isEmpty()) {
+            return;
+        }
+
+        for (Map.Entry<Long, List<ContentKey>> en : byPost.entrySet()) {
+            Long postId = en.getKey();
+            List<ContentKey> list = en.getValue();
+            if (postId == null || list == null || list.isEmpty()) {
+                continue;
+            }
+
+            List<CommentContentKeyVO> req = new ArrayList<>(list.size());
+            for (ContentKey k : list) {
+                if (k == null || k.yearMonth == null || k.contentId == null) {
+                    continue;
+                }
+                req.add(CommentContentKeyVO.builder().yearMonth(k.yearMonth).contentId(k.contentId).build());
+            }
+            if (req.isEmpty()) {
+                continue;
+            }
+
+            Map<String, String> contentById = new HashMap<>();
+            try {
+                List<CommentContentResultVO> rows = commentContentKvPort.batchFind(postId, req);
+                if (rows != null) {
+                    for (CommentContentResultVO r : rows) {
+                        if (r == null || r.getContentId() == null) {
+                            continue;
+                        }
+                        contentById.put(r.getContentId(), r.getContent());
+                    }
+                }
+            } catch (Exception e) {
+                // KV unavailable: keep content null/empty, do not break comment list.
+                continue;
+            }
+
+            for (ContentKey k : list) {
+                if (k == null || k.commentId == null) {
+                    continue;
+                }
+                CommentViewVO vo = found.get(k.commentId);
+                if (vo == null) {
+                    continue;
+                }
+                String c = contentById.get(k.contentId);
+                vo.setContent(c == null ? "" : c);
+            }
+        }
+    }
+
+    private String yearMonth(Date time) {
+        if (time == null) {
+            return null;
+        }
+        try {
+            Instant instant = time.toInstant();
+            LocalDateTime dt = LocalDateTime.ofInstant(instant, ZoneId.of("Asia/Shanghai"));
+            int m = dt.getMonthValue();
+            return dt.getYear() + "-" + (m < 10 ? ("0" + m) : String.valueOf(m));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private record ContentKey(Long commentId, Long postId, String contentId, Date createTime, String yearMonth) {
+        private static ContentKey from(CommentPO po) {
+            if (po == null) {
+                return null;
+            }
+            return new ContentKey(po.getCommentId(), po.getPostId(), po.getContentId(), po.getCreateTime(), null);
+        }
     }
 
     private CommentViewVO copy(CommentViewVO v) {

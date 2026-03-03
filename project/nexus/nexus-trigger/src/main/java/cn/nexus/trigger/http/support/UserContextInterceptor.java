@@ -1,5 +1,6 @@
 package cn.nexus.trigger.http.support;
 
+import cn.dev33.satoken.stp.StpUtil;
 import cn.nexus.api.response.Response;
 import cn.nexus.types.enums.ResponseCode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,7 +38,14 @@ public class UserContextInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        String raw = request.getHeader(UserContext.HEADER_USER_ID);
+        Long tokenUserId = resolveUserIdFromToken();
+        if (tokenUserId != null) {
+            UserContext.setUserId(tokenUserId);
+            return true;
+        }
+
+        // 兼容多种 Header：playbook=userId，历史实现=X-User-Id
+        String raw = headerFirstNonBlank(request, "userId", UserContext.HEADER_USER_ID);
         if (raw == null || raw.isBlank()) {
             writeIllegalParameter(response);
             return false;
@@ -64,6 +72,30 @@ public class UserContextInterceptor implements HandlerInterceptor {
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType("application/json;charset=UTF-8");
         response.getWriter().write(objectMapper.writeValueAsString(body));
+    }
+
+    private Long resolveUserIdFromToken() {
+        try {
+            return StpUtil.getLoginIdAsLong();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String headerFirstNonBlank(HttpServletRequest request, String... headerNames) {
+        if (request == null || headerNames == null) {
+            return null;
+        }
+        for (String name : headerNames) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            String v = request.getHeader(name);
+            if (v != null && !v.isBlank()) {
+                return v;
+            }
+        }
+        return null;
     }
 }
 

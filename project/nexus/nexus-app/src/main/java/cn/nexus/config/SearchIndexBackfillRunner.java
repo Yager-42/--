@@ -2,6 +2,8 @@ package cn.nexus.config;
 
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
+import cn.nexus.infrastructure.dao.kv.IPostContentDao;
+import cn.nexus.infrastructure.dao.kv.po.PostContentPO;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
 import cn.nexus.infrastructure.dao.social.IContentPostTypeDao;
 import cn.nexus.infrastructure.dao.social.IUserBaseDao;
@@ -55,17 +57,20 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
     private final IUserBaseDao userBaseDao;
     private final ISearchEnginePort searchEnginePort;
     private final StringRedisTemplate stringRedisTemplate;
+    private final IPostContentDao postContentDao;
 
     public SearchIndexBackfillRunner(IContentPostDao contentPostDao,
-                                    IContentPostTypeDao contentPostTypeDao,
-                                    IUserBaseDao userBaseDao,
-                                    ISearchEnginePort searchEnginePort,
-                                    StringRedisTemplate stringRedisTemplate) {
+                                     IContentPostTypeDao contentPostTypeDao,
+                                     IUserBaseDao userBaseDao,
+                                     ISearchEnginePort searchEnginePort,
+                                     StringRedisTemplate stringRedisTemplate,
+                                     IPostContentDao postContentDao) {
         this.contentPostDao = contentPostDao;
         this.contentPostTypeDao = contentPostTypeDao;
         this.userBaseDao = userBaseDao;
         this.searchEnginePort = searchEnginePort;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.postContentDao = postContentDao;
     }
 
     @Override
@@ -106,6 +111,7 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
 
             Map<Long, List<String>> typesByPostId = loadPostTypes(postIds);
             Map<Long, String> nicknameByUserId = loadNicknames(userIds);
+            Map<String, String> contentByUuid = loadPostContents(page);
 
             for (ContentPostPO po : page) {
                 if (po == null || po.getPostId() == null) {
@@ -127,6 +133,11 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
                     long createTimeMs = po.getCreateTime() == null ? System.currentTimeMillis() : po.getCreateTime().getTime();
                     Integer mediaType = po.getMediaType() == null ? ContentMediaTypeEnumVO.TEXT.getCode() : po.getMediaType();
                     String nickname = nicknameByUserId.getOrDefault(po.getUserId(), "");
+                    String contentText = "";
+                    String uuid = po.getContentUuid();
+                    if (uuid != null && !uuid.isBlank()) {
+                        contentText = contentByUuid.getOrDefault(uuid.trim(), "");
+                    }
 
                     SearchDocumentVO doc = SearchDocumentVO.builder()
                             .entityIdStr(String.valueOf(postId))
@@ -134,7 +145,7 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
                             .postId(postId)
                             .authorId(po.getUserId())
                             .authorNickname(nickname)
-                            .contentText(po.getContentText() == null ? "" : po.getContentText())
+                            .contentText(contentText)
                             .postTypes(normalizePostTypes(typesByPostId.get(postId)))
                             .mediaType(mediaType)
                             .build();
@@ -218,6 +229,44 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
             map.put(row.getUserId(), nickname == null ? "" : nickname);
         }
         return map;
+    }
+
+    private Map<String, String> loadPostContents(List<ContentPostPO> page) {
+        if (page == null || page.isEmpty()) {
+            return Map.of();
+        }
+        java.util.LinkedHashSet<String> dedup = new java.util.LinkedHashSet<>();
+        for (ContentPostPO po : page) {
+            if (po == null) {
+                continue;
+            }
+            String uuid = po.getContentUuid();
+            if (uuid == null || uuid.isBlank()) {
+                continue;
+            }
+            dedup.add(uuid.trim());
+        }
+        if (dedup.isEmpty()) {
+            return Map.of();
+        }
+        List<String> uuids = new ArrayList<>(dedup);
+        try {
+            List<PostContentPO> rows = postContentDao.selectByUuids(uuids);
+            if (rows == null || rows.isEmpty()) {
+                return Map.of();
+            }
+            Map<String, String> map = new HashMap<>(rows.size());
+            for (PostContentPO row : rows) {
+                if (row == null || row.getUuid() == null) {
+                    continue;
+                }
+                map.put(row.getUuid(), row.getContent() == null ? "" : row.getContent());
+            }
+            return map;
+        } catch (Exception e) {
+            log.warn("load post contents from kv failed, size={}", uuids.size(), e);
+            return Map.of();
+        }
     }
 
     private List<String> normalizePostTypes(List<String> raw) {

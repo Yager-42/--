@@ -6,6 +6,8 @@ import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
+import cn.nexus.infrastructure.dao.kv.IPostContentDao;
+import cn.nexus.infrastructure.dao.kv.po.PostContentPO;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -51,6 +53,7 @@ public class ContentRepository implements IContentRepository {
     private final IContentPostTypeDao contentPostTypeDao;
     private final IContentHistoryDao contentHistoryDao;
     private final IContentScheduleDao contentScheduleDao;
+    private final IPostContentDao postContentKvDao;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
@@ -131,6 +134,7 @@ public class ContentRepository implements IContentRepository {
 
         ContentPostEntity post = toPostEntity(contentPostDao.selectById(postId));
         fillPostTypes(post == null ? List.of() : List.of(post));
+        fillPostContent(post == null ? List.of() : List.of(post));
         if (hot && post != null) {
             postCache.put(postId, copyPost(post));
         }
@@ -142,6 +146,7 @@ public class ContentRepository implements IContentRepository {
     public ContentPostEntity findPostForUpdate(Long postId) {
         ContentPostEntity post = toPostEntity(contentPostDao.selectByIdForUpdate(postId));
         fillPostTypes(post == null ? List.of() : List.of(post));
+        fillPostContent(post == null ? List.of() : List.of(post));
         return post;
     }
 
@@ -227,6 +232,7 @@ public class ContentRepository implements IContentRepository {
                     }
                 }
                 fillPostTypes(dbEntities);
+                fillPostContent(dbEntities);
 
                 java.util.Set<Long> dbHitIds = new java.util.HashSet<>();
                 for (ContentPostEntity entity : dbEntities) {
@@ -285,6 +291,7 @@ public class ContentRepository implements IContentRepository {
         }
         List<ContentPostEntity> posts = list.stream().map(this::toPostEntity).filter(Objects::nonNull).collect(Collectors.toList());
         fillPostTypes(posts);
+        fillPostContent(posts);
         ContentPostEntity last = posts.get(posts.size() - 1);
         String nextCursor = last.getCreateTime() == null || last.getPostId() == null
                 ? null
@@ -333,11 +340,11 @@ public class ContentRepository implements IContentRepository {
 
     @Override
     public boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
-                                              String contentText, String mediaInfo, String locationInfo, Integer visibility) {
+                                              String contentUuid, String mediaInfo, String locationInfo, Integer visibility) {
         Integer expectedVersion = versionNum == null ? null : Math.max(0, versionNum - 1);
         int rows = contentPostDao.updateContentAndVersion(
                 postId,
-                contentText,
+                contentUuid,
                 mediaInfo,
                 locationInfo,
                 versionNum,
@@ -484,6 +491,16 @@ public class ContentRepository implements IContentRepository {
         }
     }
 
+    /**
+     * Evict local L1 only (for MQ broadcast).
+     */
+    public void evictLocalPostCache(Long postId) {
+        if (postId == null) {
+            return;
+        }
+        postCache.invalidate(postId);
+    }
+
     private String postRedisKey(Long postId) {
         return POST_REDIS_KEY_PREFIX + postId;
     }
@@ -512,6 +529,7 @@ public class ContentRepository implements IContentRepository {
         return ContentPostEntity.builder()
                 .postId(post.getPostId())
                 .userId(post.getUserId())
+                .contentUuid(post.getContentUuid())
                 .contentText(post.getContentText())
                 .summary(post.getSummary())
                 .summaryStatus(post.getSummaryStatus())
@@ -573,7 +591,7 @@ public class ContentRepository implements IContentRepository {
         ContentPostPO po = new ContentPostPO();
         po.setPostId(entity.getPostId());
         po.setUserId(entity.getUserId());
-        po.setContentText(entity.getContentText());
+        po.setContentUuid(entity.getContentUuid());
         po.setSummary(entity.getSummary());
         po.setSummaryStatus(entity.getSummaryStatus());
         po.setMediaType(entity.getMediaType());
@@ -594,7 +612,8 @@ public class ContentRepository implements IContentRepository {
         return ContentPostEntity.builder()
                 .postId(po.getPostId())
                 .userId(po.getUserId())
-                .contentText(po.getContentText())
+                .contentUuid(po.getContentUuid())
+                .contentText(null)
                 .summary(po.getSummary())
                 .summaryStatus(po.getSummaryStatus())
                 .postTypes(List.of())
@@ -643,6 +662,65 @@ public class ContentRepository implements IContentRepository {
             }
             List<String> types = typesByPostId.get(post.getPostId());
             post.setPostTypes(types == null ? List.of() : types);
+        }
+    }
+
+    private void fillPostContent(List<ContentPostEntity> posts) {
+        if (posts == null || posts.isEmpty()) {
+            return;
+        }
+
+        java.util.LinkedHashSet<String> dedup = new java.util.LinkedHashSet<>();
+        for (ContentPostEntity post : posts) {
+            if (post == null) {
+                continue;
+            }
+            if (post.getContentText() != null) {
+                continue;
+            }
+            String uuid = post.getContentUuid();
+            if (uuid == null || uuid.isBlank()) {
+                continue;
+            }
+            dedup.add(uuid.trim());
+        }
+        if (dedup.isEmpty()) {
+            return;
+        }
+
+        List<String> uuids = new ArrayList<>(dedup);
+        List<PostContentPO> rows;
+        try {
+            rows = postContentKvDao.selectByUuids(uuids);
+        } catch (Exception e) {
+            // KV 不可用视为正文缺失，不影响主链路
+            log.warn("fill post content from kv failed, size={}", uuids.size(), e);
+            return;
+        }
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+
+        Map<String, String> contentByUuid = new HashMap<>(rows.size());
+        for (PostContentPO row : rows) {
+            if (row == null || row.getUuid() == null) {
+                continue;
+            }
+            contentByUuid.put(row.getUuid(), row.getContent());
+        }
+
+        for (ContentPostEntity post : posts) {
+            if (post == null) {
+                continue;
+            }
+            if (post.getContentText() != null) {
+                continue;
+            }
+            String uuid = post.getContentUuid();
+            if (uuid == null || uuid.isBlank()) {
+                continue;
+            }
+            post.setContentText(contentByUuid.get(uuid.trim()));
         }
     }
 

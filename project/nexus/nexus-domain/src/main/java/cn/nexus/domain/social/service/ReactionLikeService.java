@@ -2,15 +2,22 @@ package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionDelayPort;
+import cn.nexus.domain.social.adapter.port.ILikeUnlikeEventPort;
+import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
+import cn.nexus.domain.social.adapter.port.IPostLikeCachePort;
 import cn.nexus.domain.social.adapter.port.IInteractionNotifyEventPort;
 import cn.nexus.domain.social.adapter.port.IRecommendFeedbackEventPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.*;
+import cn.nexus.domain.social.model.valobj.like.PostLikeApplyResultVO;
+import cn.nexus.domain.social.model.valobj.like.PostLikeApplyStatusEnumVO;
+import cn.nexus.domain.social.model.valobj.like.PostLikeCacheStateVO;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
 import cn.nexus.types.event.interaction.EventType;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
+import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import cn.nexus.types.event.recommend.RecommendFeedbackEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +51,10 @@ public class ReactionLikeService implements IReactionLikeService {
     private final IInteractionNotifyEventPort interactionNotifyEventPort;
     private final IRecommendFeedbackEventPort recommendFeedbackEventPort;
 
+    private final IPostLikeCachePort postLikeCachePort;
+    private final ILikeUnlikeEventPort likeUnlikeEventPort;
+    private final IPostAuthorPort postAuthorPort;
+
     /**
      * 在线写：只做 Redis 原子更新 + 必要时投递延迟消息 + 打结构化日志。
      */
@@ -53,6 +64,10 @@ public class ReactionLikeService implements IReactionLikeService {
         requireTarget(target);
         requireNonNull(action, "action");
         requireLikeOnly(target);
+
+        if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
+            return applyPostLike(userId, target, action, requestId);
+        }
 
         String rid = (requestId == null || requestId.isBlank()) ? ("rid-" + socialIdPort.nextId()) : requestId.trim();
         int desiredState = action.desiredState();
@@ -85,6 +100,102 @@ public class ReactionLikeService implements IReactionLikeService {
                 .build();
     }
 
+    private ReactionResultVO applyPostLike(Long userId, ReactionTargetVO target, ReactionActionEnumVO action, String requestId) {
+        String rid = (requestId == null || requestId.isBlank()) ? ("rid-" + socialIdPort.nextId()) : requestId.trim();
+        long nowMs = socialIdPort.now();
+        Long postId = target == null ? null : target.getTargetId();
+        Long creatorId = postId == null ? null : postAuthorPort.getPostAuthorId(postId);
+        if (postId == null || creatorId == null) {
+            throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
+        }
+
+        // 防御：Redis cntKey 丢失时先用 DB count 表回填基线，避免从 0 开始导致“计数跳变”。
+        try {
+            ReactionTargetVO cntTarget = ReactionTargetVO.builder()
+                    .targetType(ReactionTargetTypeEnumVO.POST)
+                    .targetId(postId)
+                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .build();
+            reactionCachePort.getCountFromRedis(cntTarget);
+        } catch (Exception ignored) {
+        }
+        try {
+            ReactionTargetVO creatorTarget = ReactionTargetVO.builder()
+                    .targetType(ReactionTargetTypeEnumVO.USER)
+                    .targetId(creatorId)
+                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .build();
+            reactionCachePort.getCountFromRedis(creatorTarget);
+        } catch (Exception ignored) {
+        }
+
+        PostLikeApplyResultVO apply;
+        if (action.desiredState() == 1) {
+            apply = postLikeCachePort.tryLike(userId, postId, nowMs);
+            if (apply != null && apply.getStatus() != null && apply.getStatus() == PostLikeApplyStatusEnumVO.NEED_DB_CHECK.getCode()) {
+                boolean exists = reactionRepository.exists(target, userId);
+                if (!exists) {
+                    apply = postLikeCachePort.forceLike(userId, postId, nowMs);
+                } else {
+                    apply = PostLikeApplyResultVO.builder().status(PostLikeApplyStatusEnumVO.ALREADY.getCode()).delta(0).currentCount(apply.getCurrentCount()).build();
+                }
+            }
+        } else {
+            apply = postLikeCachePort.tryUnlike(userId, postId, nowMs);
+            if (apply != null && apply.getStatus() != null && apply.getStatus() == PostLikeApplyStatusEnumVO.NEED_DB_CHECK.getCode()) {
+                boolean exists = reactionRepository.exists(target, userId);
+                if (exists) {
+                    apply = postLikeCachePort.forceUnlike(userId, postId, nowMs);
+                } else {
+                    apply = PostLikeApplyResultVO.builder().status(PostLikeApplyStatusEnumVO.ALREADY.getCode()).delta(0).currentCount(apply.getCurrentCount()).build();
+                }
+            }
+        }
+
+        int delta = apply == null || apply.getDelta() == null ? 0 : apply.getDelta();
+        long currentCount = apply == null || apply.getCurrentCount() == null ? 0L : apply.getCurrentCount();
+
+        // 派生计数：作者收到的点赞数（与关系落库/计数落库链路解耦）。
+        if (delta != 0) {
+            try {
+                postLikeCachePort.applyCreatorLikeDelta(creatorId, delta);
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (delta == 1) {
+            LikeUnlikePostEvent event = new LikeUnlikePostEvent();
+            event.setEventId(rid);
+            event.setUserId(userId);
+            event.setPostId(postId);
+            event.setPostCreatorId(creatorId == null ? 0L : creatorId);
+            event.setType(1);
+            event.setCreateTime(nowMs);
+            likeUnlikeEventPort.publishLike(event);
+            publishNotifyLikeAdded(rid, userId, target);
+        }
+
+        if (delta == -1) {
+            LikeUnlikePostEvent event = new LikeUnlikePostEvent();
+            event.setEventId(rid);
+            event.setUserId(userId);
+            event.setPostId(postId);
+            event.setPostCreatorId(creatorId == null ? 0L : creatorId);
+            event.setType(0);
+            event.setCreateTime(nowMs);
+            likeUnlikeEventPort.publishUnlike(event);
+            publishRecommendUnlike(rid, userId, target);
+        }
+
+        log.info(buildEventJson(rid, userId, target, action, action.desiredState(), delta, currentCount, false));
+        return ReactionResultVO.builder()
+                .requestId(rid)
+                .currentCount(currentCount)
+                .delta(delta)
+                .success(true)
+                .build();
+    }
+
     /**
      * 读接口：以 Redis 为准查询 state + 当前计数。
      */
@@ -93,6 +204,18 @@ public class ReactionLikeService implements IReactionLikeService {
         requireNonNull(userId, "userId");
         requireTarget(target);
         requireLikeOnly(target);
+
+        if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
+            PostLikeCacheStateVO cache = postLikeCachePort.cacheState(userId, target.getTargetId());
+            if (cache != null && cache.getLiked() != null) {
+                long cnt = cache.getCurrentCount() == null ? 0L : cache.getCurrentCount();
+                return ReactionStateVO.builder().state(Boolean.TRUE.equals(cache.getLiked())).currentCount(Math.max(0L, cnt)).build();
+            }
+            boolean exists = reactionRepository.exists(target, userId);
+            long cnt = cache == null || cache.getCurrentCount() == null ? 0L : cache.getCurrentCount();
+            return ReactionStateVO.builder().state(exists).currentCount(Math.max(0L, cnt)).build();
+        }
+
         boolean state = reactionCachePort.getState(userId, target);
         long cnt = reactionCachePort.getCount(target);
         return ReactionStateVO.builder().state(state).currentCount(cnt).build();

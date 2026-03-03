@@ -17,6 +17,10 @@ import java.util.List;
 public class ContentPostEntity {
     private Long postId;
     private Long userId;
+    /**
+     * Post body UUID stored in KV.
+     */
+    private String contentUuid;
     private String contentText;
     /**
      * AI 生成摘要（异步写回）。

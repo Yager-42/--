@@ -3,8 +3,8 @@
 <mapper namespace="cn.nexus.infrastructure.dao.social.ICommentDao">
 
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.CommentPO">
-        INSERT INTO interaction_comment(comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content, status, like_count, reply_count, create_time, update_time)
-        VALUES(#{commentId}, #{postId}, #{userId}, #{rootId}, #{parentId}, #{replyToId}, #{content}, #{status}, #{likeCount}, #{replyCount}, #{createTime}, #{updateTime})
+        INSERT INTO interaction_comment(comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content_id, status, like_count, reply_count, create_time, update_time)
+        VALUES(#{commentId}, #{postId}, #{userId}, #{rootId}, #{parentId}, #{replyToId}, #{contentId}, #{status}, #{likeCount}, #{replyCount}, #{createTime}, #{updateTime})
     </insert>
 
     <select id="selectBriefById" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
@@ -15,7 +15,7 @@
     </select>
 
     <select id="selectByIds" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
-        SELECT comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content, status, like_count, reply_count, create_time, update_time
+        SELECT comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content_id, status, like_count, reply_count, create_time, update_time
         FROM interaction_comment
         WHERE comment_id IN
         <foreach collection="commentIds" item="id" open="(" separator="," close=")">

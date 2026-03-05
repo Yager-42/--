@@ -37,6 +37,7 @@ public interface IContentRepository {
 
     ContentPostEntity findPost(Long postId);
     ContentPostEntity findPostForUpdate(Long postId);
+    ContentPostEntity findPostMeta(Long postId);
 
     /**
      * 批量查询已发布内容（用于 timeline 批量回表）。

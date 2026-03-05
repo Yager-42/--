@@ -3,7 +3,9 @@ package cn.nexus.infrastructure.adapter.social.repository;
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDao;
+import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDeltaInboxDao;
 import cn.nexus.infrastructure.dao.social.IInteractionReactionDao;
+import cn.nexus.infrastructure.dao.social.po.InteractionReactionCountDeltaInboxPO;
 import cn.nexus.infrastructure.dao.social.po.InteractionReactionCountPO;
 import cn.nexus.infrastructure.dao.social.po.InteractionReactionPO;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +30,7 @@ public class ReactionRepository implements IReactionRepository {
 
     private final IInteractionReactionDao reactionDao;
     private final IInteractionReactionCountDao reactionCountDao;
+    private final IInteractionReactionCountDeltaInboxDao reactionCountDeltaInboxDao;
 
     @Override
     public void batchUpsert(ReactionTargetVO target, List<Long> userIds) {
@@ -94,6 +97,61 @@ public class ReactionRepository implements IReactionRepository {
         po.setReactionType(target.getReactionType().getCode());
         po.setCount(Math.max(0L, count));
         reactionCountDao.insertOrUpdate(po);
+    }
+
+    @Override
+    public void incrCount(ReactionTargetVO target, long delta) {
+        if (target == null) {
+            return;
+        }
+        if (delta == 0L) {
+            return;
+        }
+        reactionCountDao.incrCount(
+                target.getTargetType().getCode(),
+                target.getTargetId(),
+                target.getReactionType().getCode(),
+                delta
+        );
+    }
+
+    @Override
+    public boolean applyCountDeltaOnce(ReactionTargetVO target, String eventId, long delta) {
+        if (target == null || target.getTargetType() == null || target.getReactionType() == null) {
+            return false;
+        }
+        if (eventId == null || eventId.isBlank()) {
+            return false;
+        }
+        if (delta == 0L) {
+            return false;
+        }
+
+        String targetType = target.getTargetType().getCode();
+        Long targetId = target.getTargetId();
+        String reactionType = target.getReactionType().getCode();
+        if (targetType == null || targetType.isBlank() || targetId == null || reactionType == null || reactionType.isBlank()) {
+            return false;
+        }
+
+        InteractionReactionCountDeltaInboxPO inbox = new InteractionReactionCountDeltaInboxPO();
+        inbox.setEventId(eventId.trim());
+        inbox.setTargetType(targetType);
+        inbox.setTargetId(targetId);
+        inbox.setReactionType(reactionType);
+
+        int inserted = reactionCountDeltaInboxDao.insertIgnore(inbox);
+        if (inserted <= 0) {
+            return false;
+        }
+
+        reactionCountDao.incrCount(
+                targetType,
+                targetId,
+                reactionType,
+                delta
+        );
+        return true;
     }
 
     @Override

@@ -6,45 +6,98 @@
 
 ---
 
+## 重要更新（2026-03-02）
+
+本执行文档早期版本假设通过 `nexus-xhs-*` 隔离子工程来复现手册（包括“隔离 Spring Boot 版本”“独立微服务+网关”“强制 RocketMQ/Cassandra/Leaf/Nacos/Zookeeper”等）。
+
+当前策略已改为：把 `docs/xiaohashu_project_implementation_playbook.md` 当作“改进清单”，直接融入现有 Nexus 工程（DDD 分层：`nexus-app/nexus-trigger/nexus-domain/nexus-infrastructure`），不再做隔离子工程。
+
+因此，下文中与 `nexus-xhs-*`、隔离版本、强制组件替换相关的内容，统一视为“历史草案”。以以下内容为准：
+
+- `project/nexus/.codex/context-scan.json`：现状扫描与章节映射（事实）
+- `project/nexus/operations-log.md`：关键取舍与决策
+- Shrimp 任务列表：分阶段执行与验收标准
+
+---
+
 ## 0. 固定输入（用户已确认，写死不要再问）
 
-用户选择：`1.B + 2.B + 3.B`，含义如下：
+用户最新确认（以本段为准）：
 
-1) 架构：**多个微服务 + 网关**  
-2) 技术栈：必须对齐手册关键词：**SaToken / Leaf / Cassandra / RocketMQ**  
-3) 基础设施：**Cassandra + Aliyun OSS + Nacos** 都可以用
+1) 范围：只硬替换三条链路：缓存一致性 / 点赞 / 计数  
+2) 目标：把 `docs/xiaohashu_project_implementation_playbook.md` 作为“改进方案”融入现有 `project/nexus`，不做隔离子工程  
+3) 技术栈对齐：仅对齐三链路相关栈：**RocketMQ / RedisBloom / BufferTrigger**  
+4) 数据库：以 nexus 现有 SQL 表为基准演进（`docs/social_schema.sql` 等），无真实数据，可重建/迁移  
+5) 兼容性：对外 HTTP API 不变（路径/DTO/返回语义尽量不破坏）
 
-额外提醒（手册原设计的硬要求）：
-- Leaf 的 Snowflake 模式需要 **Zookeeper**（用于分配 workerId）。如果环境里没有 ZK：先做 Segment（号段），Snowflake 标记为“待补齐”。
+说明：playbook 里的其它关键词（SaToken/Leaf/Cassandra/Nacos 等）不在本轮范围，后续需要时再拆任务。
 
 ## 0.1 执行硬规则（缺失就停，不许猜）
 
 这份文档的目的：把实现变成“照抄 + 填空”，避免 Codex agent 自己拍脑袋决定细节。
 
 硬规则（违反就会跑偏）：
-1) 看到 `\<TODO>`：**立刻停下**，不许继续写实现；只允许问 1~3 个问题，让用户把“附录B 填空表”补齐。  
-2) DDL / Topic / Tag / Redis Key / 配置键名 / 版本：**必须以附录A 为准**，禁止自创新名字、禁止“差不多就行”。  
-3) 组件不许替换：必须用 **SaToken / Leaf / Cassandra / RocketMQ / Nacos / Aliyun OSS**（以及 **RedisBloom**）。  
-4) 环境能力不满足就停：比如没有 Zookeeper（Snowflake 做不了）、Redis 不支持 `BF.*`（Bloom 做不了）、RocketMQ 禁止创建 Topic（MQ 链路做不了）。  
-5) 零意外破坏：尽量新建 `nexus-xhs-*` 模块并行实现；不要改挂 `project/nexus/nexus-app` 的现有用户可见行为。  
+1) **范围硬限制**：只允许修改三条链路（缓存一致性/点赞/计数）涉及的代码与 SQL，禁止扩散到 SaToken/Leaf/Cassandra/Nacos/网关/微服务拆分等其它章节。  
+2) **名字不许乱**：三条链路涉及的 DDL / Topic / Tag / Redis Key / 配置键名必须以 playbook 为准（例如 Topic：`DeleteNoteLocalCacheTopic` / `DelayDeleteNoteRedisCacheTopic` / `LikeUnlikeTopic` / `CountNoteLike2DBTopic`）。  
+3) **避免双写**：旧的点赞延迟同步链路（`ReactionSync*` / `IReactionDelayPort` / `syncTarget` 触发器）必须被禁用或移除，避免与新链路并行导致双写与计数翻倍。  
+4) **不破坏 userspace**：HTTP 路由与 DTO 语义保持不变；只替换内部实现与数据结构。  
+5) **验证优先**：每一步都要可编译、可验证；中间件环境缺失时，至少保证 `mvn test` 通过，并提供可复现实操步骤文档。  
+
+---
+
+## 0.2 你现在没有“落地环境”怎么办（默认：本地 docker-compose）
+
+用户反馈：项目仍在编码期，没有现成可用的中间件环境；且本机当前无法使用 `docker` 命令。
+
+因此本轮统一决策（写死，不再问）：
+1) 以“代码可编译 + 单测/伪集成验证”为主（`mvn test`）  
+2) 同时补齐 `project/nexus/.tools/xhs/docker-compose.yml` 作为未来一键环境，但不阻塞本轮交付  
+3) RocketMQ/RedisBloom 等依赖的真实联调，留到环境具备后按文档复验
+
+## 0.3 三链路契约（Topic / Redis Key / SQL 映射，写死别发明）
+
+### 0.3.1 缓存一致性（playbook 6）
+
+- Redis key（详情缓存）：`interact:content:post:<postId>`
+- Topic（广播删本地缓存）：`DeleteNoteLocalCacheTopic`（广播模式，payload：`postId`）
+- Topic（延迟再删 Redis）：`DelayDeleteNoteRedisCacheTopic`（延时约 1s，payload：`postId`）
+
+### 0.3.2 点赞/取消点赞（playbook 7）
+
+- Redis key（按 userId 拆分，避免热 key）：
+  - Bloom（Post）：`bloom:note:likes:<userId>`
+  - ZSet（Post，最近 100 条）：`user:note:likes:<userId>`
+  - Bloom（Comment）：`bloom:comment:likes:<userId>`（如果实现 comment like）
+  - ZSet（Comment，最近 100 条）：`user:comment:likes:<userId>`（如果实现 comment like）
+- MQ：
+  - Topic：`LikeUnlikeTopic`
+  - Tag：`Like` / `Unlike`
+  - hashKey：`userId`（保证同一用户消息有序）
+- MySQL：
+  - 事实表：`interaction_reaction`（在现有表上新增 `status(0/1)`，主键不变）
+
+### 0.3.3 计数（playbook 8）
+
+- Redis key（Hash）：
+  - `count:note:<noteId>`（field：`likeTotal`）
+  - `count:user:<userId>`（field：`likeTotal`）
+- MQ：
+  - Topic：`CountNoteLike2DBTopic`（payload：`[{noteId, creatorId, count}]`）
+- MySQL：
+  - 计数表（note）：复用 `interaction_reaction_count`，用 `(target_type=POST,target_id=noteId,reaction_type=LIKE)` 承载 `likeTotal`
+  - 计数表（user）：新增 `interaction_user_count(user_id, like_total, update_time)`
 
 ---
 
 ## 1. 你要交付什么（Definition of Done）
 
-最终以“能跑通手册验收”为准。最低交付包括：
+最终以“三链路硬替换可验证”为准。最低交付包括：
 
-1) Gateway：SaToken 鉴权 + 注入 `userId` 到下游 Header  
-2) ID 服务：Leaf Segment + Leaf Snowflake（含 leaf_alloc 表 + leaf.properties）  
-3) KV 服务：Cassandra 的 `note_content` / `comment_content`（含 batch 接口）  
-4) Note 服务：发布 / 详情 / 更新 / 删除 + 二级缓存 + 防穿透  
-5) 缓存一致性：延时双删（Redis）+ 广播删本地缓存（Caffeine）+ RocketMQ  
-6) 点赞高并发：Bloom + ZSet + MQ 异步落库 + 消费端 RateLimiter  
-7) Count 服务：BufferTrigger（1000 条/1s）→ Redis 计数 → 异步落库  
-8) OSS 服务：MinIO + Aliyun OSS（策略模式）+ Nacos 动态切换
-
-交付验收方式（你要能演示）：
-- 按手册每一节的“怎么验证”跑通。
+1) 缓存一致性（playbook 6）：延时双删 Redis + RocketMQ 广播删本地缓存  
+2) 点赞（playbook 7）：RedisBloom + ZSet + RocketMQ LikeUnlikeTopic 异步落库 + 消费端 RateLimiter  
+3) 计数（playbook 8）：BufferTrigger(1000条/1s) 聚合 LikeUnlikeTopic → CountNoteLike2DBTopic → 增量落库  
+4) SQL 资产：基于 nexus 现有表的增量迁移（migrations）+ 重建用 `00_init.sql`  
+5) 验证产物：`.codex/testing.md`、`verification.md`、`.codex/review-report.md`
 
 ---
 
@@ -52,21 +105,28 @@
 
 ### 2.1 不破坏旧系统
 
-`project/nexus` 现有代码已经有一套“社交骨架”。但这次目标是“复现小红书手册”，技术栈和拆分方式不同。
+`project/nexus` 现有代码已经有一套“社交骨架”。本轮目标不是“全量复现手册项目”，而是把手册里最关键且已确认范围的三条链路，硬替换进现有实现。
 
 硬规则：
-- 不强行重写旧的 `nexus-domain/nexus-trigger/...`（除非为公共能力抽取，且不影响旧接口）。
-- 新增一组 **xhs 专用微服务模块**，和旧代码并存。
+- 不新增隔离子工程/微服务模块；直接在现有 DDD 分层内实现（`nexus-trigger/nexus-domain/nexus-infrastructure`）。  
+- 其它链路（RabbitMQ/Kafka/Outbox/搜索等）不强制改动，避免牵一发动全身。  
 
 ### 2.2 只做两件事：对齐 + 补齐
 
-- 对齐：把手册里的“接口/表/Key/Topic/配置”在 Nexus 里复刻出来（名字尽量照抄）。  
-- 补齐：缺的能力用最短路径补上，先跑通链路，再优化。
+- 对齐：三条链路涉及的 Topic/Key/表结构/限流/聚合策略按 playbook 照抄（只在与 Nexus 现有契约冲突时做最小改动）。  
+- 补齐：缺的能力用最短路径补上，先跑通链路，再优化。  
+
+### 2.3 版本与模块隔离策略（保证不搞挂 nexus-app）
+
+本轮不做版本隔离子工程。
+
+注意：引入 RocketMQ starter 时必须选择与 Spring Boot 3.2/Jakarta 兼容的版本，以保证现有 `nexus-app` 不被依赖冲突搞挂。
 
 ---
 
 ## 3. 目标微服务清单（建议模块名 + 本地端口）
 
+本章节及后续“微服务拆分/网关/SaToken/Leaf/Cassandra/Nacos”等内容已作废，保留仅作历史参考。
 > 端口只是建议，方便本地同时跑起来。
 
 1) `nexus-xhs-gateway`（8080）  
@@ -191,16 +251,20 @@ MQ Topic（示例，照手册）：
 ### 阶段 0：工程骨架与一键启动（先把地基打好）
 
 目标：
-- 新增 7 个 xhs 微服务 Maven 模块，并且都能启动到 health。
+- 新增 `nexus-xhs` 父模块（隔离版本），并在其下新增：7 个可运行微服务 + 1 个共享 starter；全部都能启动到 health。  
+- 一键拉起本地中间件环境（docker-compose）。
 
 必须做的事：
-1) 修改 `project/nexus/pom.xml`：加入新 modules  
-2) 为每个服务新增 `...Application.java` 与 `application.yml`  
-3) 增加本地启动文档（建议新增）：`project/nexus/docs/xhs-local-dev.md`  
-4) 增加 `docker-compose`（建议新增）：`project/nexus/.tools/xhs/docker-compose.yml`
+1) 修改 `project/nexus/pom.xml`：只新增 1 个 module：`nexus-xhs`（避免污染旧模块依赖）  
+2) 新增 `project/nexus/nexus-xhs/pom.xml`：声明 xhs 子模块（`nexus-xhs-*`）  
+3) 新增共享 starter：`nexus-xhs-framework-biz-context`（ThreadLocal + Feign 透传 userId）  
+4) 为 7 个服务模块新增 `...Application.java` 与本地 `application-dev.yml`（先能启动，再逐步迁移到 Nacos 配置）  
+5) 增加本地启动文档：`project/nexus/docs/xhs-local-dev.md`  
+6) 增加本地中间件：`project/nexus/.tools/xhs/docker-compose.yml`（见附录B 默认值）
 
 验收：
-- 7 个服务都能启动，能分别访问 `/actuator/health`（或你自定义 `/health`）
+- `docker compose -f project/nexus/.tools/xhs/docker-compose.yml up -d` 后，本地中间件全部可用  
+- 7 个服务都能启动，分别访问 `/actuator/health` 返回 UP（或你自定义 `/health`）
 
 ### 阶段 1：Gateway 鉴权 + userId 透传（手册第 1 节）
 
@@ -255,16 +319,15 @@ MQ Topic（示例，照手册）：
 
 目标：
 - 跑通 `/note/publish` + `/note/detail`  
-- detail 走：本地缓存 → Redis → DB + 并发 RPC（KV/User/Count）
+- detail 走：本地缓存 → Redis → DB + 并发 RPC（KV/User）
 
 实现要点（照手册）：  
 1) MySQL 元数据表：`t_note`（字段含：note_id/creator_id/visible/content_uuid...）  
 2) detail：用 `CompletableFuture` 并发拿：
    - 用户信息（User 服务）
    - 正文（KV 服务）
-   - 计数（Count/Redis）
 3) 缓存策略：
-   - 本地缓存（Caffeine）：短 TTL（比如 2s）  
+   - 本地缓存（Caffeine）：TTL=1 小时（与手册仓库一致，依赖 MQ 广播删本地缓存）  
    - Redis：长 TTL（1 天 + 随机秒）  
    - NOT_FOUND 写 `"null"`（短 TTL）
 
@@ -297,6 +360,7 @@ MQ Topic（示例，照手册）：
 2) Redis ZSet：最近 100 条点赞（Lua 原子更新）  
 3) 发 RocketMQ：`LikeUnlikeTopic`（asyncSendOrderly，hashKey=userId）  
 4) 消费者落库：RateLimiter + 合并去抖 + upsert `t_note_like`
+5) RateLimiter 配置键（Nacos，可热更新）：`mq-consumer.like-unlike.rate-limit`（本地默认：5000）
 
 验收：
 - 重复点赞返回“已点赞”  
@@ -316,6 +380,7 @@ MQ Topic（示例，照手册）：
    - `HINCRBY count:user:<userId> likeTotal`  
    - 再发 MQ 到 `CountNoteLike2DBTopic`
 4) 落库消费者：RateLimiter + 事务更新 `t_note_count` / `t_user_count`
+5) RateLimiter 配置键（Nacos，可热更新）：`mq-consumer.count-fans-following.rate-limit`（本地默认：5000；手册仓库 Count 服务复用这个 key）
 
 验收：
 - Redis 计数实时变化  
@@ -340,19 +405,21 @@ MQ Topic（示例，照手册）：
 
 ## 7. 允许的“最少提问”（只有卡住才问，最多 1~3 个）
 
-你只能在两类情况提问：
-1) **附录B** 里任何一项还是 `<TODO>`  
-2) 你发现环境不满足 **附录A 契约**（比如：Redis 不支持 RedisBloom、Snowflake 没有 Zookeeper、RocketMQ 禁止创建 Topic）
+当前阶段（本地 docker-compose）：你不需要向用户要任何环境信息。附录B 已经给出“本地默认值”，直接照做。
+
+只有当出现以下情况之一，才允许提问（每次最多 1~3 个）：  
+1) 用户明确要求接入“公司/线上/已有环境”（不再使用本地 docker-compose）  
+2) 你发现当前环境不满足 **附录A 契约**（比如：Redis 不支持 RedisBloom、Snowflake 没有 Zookeeper、RocketMQ 禁止创建 Topic）
 
 提问必须满足：
 - 每次最多问 1~3 个问题  
 - 问题要“二选一”或“让用户填表”，不要开放式发散  
 - 没拿到回答前：**禁止继续实现**（包括“先用别的替代”）
 
-推荐提问模板（复制后改 `<TODO>`）：
-1) 你现在的 Nacos：`server-addr=<TODO>`，`namespace=<TODO>`，`group=<TODO>`。我是否有写配置权限？（有/没有）  
-2) 你的 RocketMQ NameServer：`<TODO>`。是否允许创建 Topic？（允许/不允许；若不允许请给我“已创建的 Topic 列表”）  
-3) 你的 Redis：`<TODO>`。是否支持 RedisBloom（能执行 `BF.EXISTS`）？（支持/不支持）
+推荐提问模板（只在情况 1 发生时使用；把示例值替换成真实值）：
+1) 你的 Nacos：`server-addr=127.0.0.1:8848`，`namespace=""`（public），`group=DEFAULT_GROUP`。我是否有写配置权限？（有/没有）  
+2) 你的 RocketMQ NameServer：`127.0.0.1:9876`。是否允许创建 Topic？（允许/不允许；若不允许请给我“已创建的 Topic 列表”）  
+3) 你的 Redis：`127.0.0.1:6379`（password 空，db=0）。是否支持 RedisBloom（能执行 `BF.EXISTS`）？（支持/不支持）
 
 ---
 
@@ -688,7 +755,7 @@ CREATE TABLE comment_content (
 - 值：`FindNoteDetailRspVO` 的 JSON（字段见 A4.5）
 - TTL：
   - 正常数据：`86400 + random(0..86400)` 秒（1 天 + 随机 0~1 天）
-  - NOT_FOUND：写入字符串 `\"null\"`，TTL 随机 `60~120` 秒
+  - NOT_FOUND：写入字符串 `"null"`，TTL 随机 `60~120` 秒
 - 本地缓存（Caffeine）：
   - Key：noteId（Long）
   - Value：详情 JSON（String）
@@ -745,17 +812,17 @@ spring:
   cloud:
     nacos:
       config:
-        server-addr: <TODO>
+        server-addr: 127.0.0.1:8848
         prefix: ${spring.application.name}
-        group: <TODO>
-        namespace: <TODO>
+        group: DEFAULT_GROUP
+        namespace: ""
         file-extension: yaml
         refresh-enabled: true
       discovery:
         enabled: true
-        group: <TODO>
-        namespace: <TODO>
-        server-addr: <TODO>
+        group: DEFAULT_GROUP
+        namespace: ""
+        server-addr: 127.0.0.1:8848
 ```
 
 DataId 命名（Spring Cloud Alibaba 默认规则）：  
@@ -765,13 +832,13 @@ DataId 命名（Spring Cloud Alibaba 默认规则）：
 
 ```properties
 leaf.segment.enable=true
-leaf.jdbc.url=jdbc:mysql://<TODO_HOST>:3306/leaf?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&useSSL=false&serverTimezone=Asia/Shanghai
-leaf.jdbc.username=<TODO>
-leaf.jdbc.password=<TODO>
+leaf.jdbc.url=jdbc:mysql://127.0.0.1:3306/leaf?useUnicode=true&characterEncoding=utf-8&autoReconnect=true&useSSL=false&serverTimezone=Asia/Shanghai
+leaf.jdbc.username=root
+leaf.jdbc.password=root
 
 leaf.snowflake.enable=true
-leaf.snowflake.zk.address=<TODO_ZK_HOST>:2181
-leaf.snowflake.port=<TODO_PORT>
+leaf.snowflake.zk.address=127.0.0.1:2181
+leaf.snowflake.port=2222
 ```
 
 #### A9.3 OSS（Nacos 动态切换必须进 Nacos）
@@ -782,28 +849,28 @@ leaf.snowflake.port=<TODO_PORT>
 
 ---
 
-## 附录B：环境填空表（环境地址/账号/权限）【必须填，否则停】
+## 附录B：本地默认环境表（docker-compose）
 
-> 你先把下面所有 `<TODO>` 填完，再让 Codex agent 开始“阶段 0”。  
-> 任何一项不确定：按第 7 节规则提问，不许猜。
+> 你现在没有线上/公司环境，因此这里给出“本地 docker-compose 默认值”。Codex agent 直接按这份表写配置即可。  
+> 当你将来要接入真实环境：把本表替换成真实值（并按第 7 节“最少提问”确认 1~3 个关键点）。
 
 ### B1. Nacos（配置中心 + 注册发现）
 
 | 项 | 值 |
 | --- | --- |
-| Nacos server-addr | `<TODO>`（例：`http://127.0.0.1:8848`） |
-| Nacos namespace | `<TODO>`（例：`xiaohashu`） |
-| Nacos group | `<TODO>`（例：`DEFAULT_GROUP`） |
-| 我是否有写配置权限 | `<TODO>`（有/没有） |
+| Nacos server-addr | `127.0.0.1:8848` |
+| Nacos namespace | `""`（public） |
+| Nacos group | `DEFAULT_GROUP` |
+| 我是否有写配置权限 | `有` |
 
 ### B2. MySQL（leaf + 业务库）
 
 | 项 | 值 |
 | --- | --- |
-| MySQL host | `<TODO>` |
-| MySQL port | `<TODO>`（默认 3306） |
-| MySQL username | `<TODO>` |
-| MySQL password | `<TODO>` |
+| MySQL host | `127.0.0.1` |
+| MySQL port | `3306` |
+| MySQL username | `root` |
+| MySQL password | `root` |
 | 业务数据库名 | `xiaohashu`（建议不改；若要改，必须全局一致） |
 | Leaf 数据库名 | `leaf`（建议不改） |
 
@@ -811,46 +878,46 @@ leaf.snowflake.port=<TODO_PORT>
 
 | 项 | 值 |
 | --- | --- |
-| Redis host | `<TODO>` |
-| Redis port | `<TODO>`（默认 6379） |
-| Redis password | `<TODO>` |
-| Redis database | `<TODO>`（默认 0） |
-| 是否支持 RedisBloom（BF.EXISTS） | `<TODO>`（支持/不支持） |
+| Redis host | `127.0.0.1` |
+| Redis port | `6379` |
+| Redis password | `（空）` |
+| Redis database | `0` |
+| 是否支持 RedisBloom（BF.EXISTS） | `支持` |
 
 ### B4. Cassandra
 
 | 项 | 值 |
 | --- | --- |
-| Cassandra contact-points | `<TODO>` |
-| Cassandra port | `<TODO>`（默认 9042） |
+| Cassandra contact-points | `127.0.0.1` |
+| Cassandra port | `9042` |
 | Cassandra keyspace | `xiaohashu`（建议不改；若要改，必须全局一致） |
-| 是否允许建表 | `<TODO>`（允许/不允许） |
+| 是否允许建表 | `允许` |
 
 ### B5. RocketMQ
 
 | 项 | 值 |
 | --- | --- |
-| RocketMQ NameServer | `<TODO>`（例：`127.0.0.1:9876`） |
-| 是否允许创建 Topic | `<TODO>`（允许/不允许） |
-| 若不允许创建 Topic：已存在 Topic 列表 | `<TODO>` |
+| RocketMQ NameServer | `127.0.0.1:9876` |
+| 是否允许创建 Topic | `允许` |
+| 若不允许创建 Topic：已存在 Topic 列表 | `N/A（本地允许创建）` |
 | 需要的最小 Topic 列表（本计划） | `DeleteNoteLocalCacheTopic, DelayDeleteNoteRedisCacheTopic, LikeUnlikeTopic, CountNoteLike2DBTopic` |
 
 ### B6. Zookeeper（Leaf Snowflake 必需）
 
 | 项 | 值 |
 | --- | --- |
-| Zookeeper 地址 | `<TODO>`（例：`127.0.0.1:2181`） |
+| Zookeeper 地址 | `127.0.0.1:2181` |
 
 ### B7. OSS（MinIO + Aliyun OSS）
 
 | 项 | 值 |
 | --- | --- |
-| storage.type 初始值 | `<TODO>`（minio/aliyun） |
-| MinIO endpoint | `<TODO>`（例：`http://127.0.0.1:9000`） |
-| MinIO accessKey | `<TODO>` |
-| MinIO secretKey | `<TODO>` |
-| MinIO bucketName | `<TODO>`（建议别硬编码） |
-| Aliyun OSS endpoint | `<TODO>`（例：`oss-cn-shanghai.aliyuncs.com`） |
-| Aliyun OSS accessKey | `<TODO>` |
-| Aliyun OSS secretKey | `<TODO>` |
-| Aliyun OSS bucketName | `<TODO>` |
+| storage.type 初始值 | `minio` |
+| MinIO endpoint | `http://127.0.0.1:9000` |
+| MinIO accessKey | `minioadmin` |
+| MinIO secretKey | `minioadmin` |
+| MinIO bucketName | `xiaohashu`（建议别硬编码；放 Nacos 配置里） |
+| Aliyun OSS endpoint | `oss-cn-shanghai.aliyuncs.com`（本地不测） |
+| Aliyun OSS accessKey | `dummy-access-key`（本地不测） |
+| Aliyun OSS secretKey | `dummy-secret-key`（本地不测） |
+| Aliyun OSS bucketName | `dummy-bucket`（本地不测） |

@@ -1,6 +1,7 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
+import cn.nexus.infrastructure.adapter.id.LeafSnowflakeIdGenerator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -14,7 +15,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class SocialIdPort implements ISocialIdPort {
 
-    private final RedisSnowflakeIdGenerator idGenerator;
+    private final LeafSnowflakeIdGenerator idGenerator;
 
     /**
      * 生成全局唯一 ID。

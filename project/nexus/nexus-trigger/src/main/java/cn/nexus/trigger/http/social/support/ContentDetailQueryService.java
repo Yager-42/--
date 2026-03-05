@@ -1,6 +1,7 @@
 package cn.nexus.trigger.http.social.support;
 
 import cn.nexus.api.social.content.dto.ContentDetailResponseDTO;
+import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
@@ -39,6 +40,7 @@ public class ContentDetailQueryService {
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
     private final IReactionCachePort reactionCachePort;
+    private final IPostContentKvPort postContentKvPort;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
@@ -75,7 +77,7 @@ public class ContentDetailQueryService {
             }
         }
 
-        ContentPostEntity post = contentRepository.findPost(postId);
+        ContentPostEntity post = contentRepository.findPostMeta(postId);
         if (post == null || post.getPostId() == null) {
             cacheNull(redisKey);
             throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
@@ -84,16 +86,18 @@ public class ContentDetailQueryService {
         Long authorId = post.getUserId();
         CompletableFuture<UserBriefVO> authorFuture = CompletableFuture.supplyAsync(() -> loadAuthor(authorId));
         CompletableFuture<Long> likeFuture = CompletableFuture.supplyAsync(() -> loadLikeCount(postId));
+        CompletableFuture<String> contentFuture = CompletableFuture.supplyAsync(() -> loadContent(post.getContentUuid()));
 
         UserBriefVO author = safeJoin(authorFuture);
         Long likeCount = safeJoin(likeFuture);
+        String content = safeJoin(contentFuture);
 
         ContentDetailResponseDTO dto = ContentDetailResponseDTO.builder()
                 .postId(post.getPostId())
                 .authorId(authorId)
                 .authorNickname(author == null ? "" : safe(author.getNickname(), ""))
                 .authorAvatarUrl(author == null ? "" : safe(author.getAvatarUrl(), ""))
-                .content(post.getContentText())
+                .content(content == null ? "" : content)
                 .summary(post.getSummary())
                 .summaryStatus(post.getSummaryStatus())
                 .mediaType(post.getMediaType())
@@ -149,6 +153,18 @@ public class ContentDetailQueryService {
         } catch (Exception e) {
             log.warn("load like count failed, postId={}", postId, e);
             return 0L;
+        }
+    }
+
+    private String loadContent(String contentUuid) {
+        if (contentUuid == null || contentUuid.isBlank()) {
+            return "";
+        }
+        try {
+            return postContentKvPort.find(contentUuid);
+        } catch (Exception e) {
+            log.warn("load content from kv failed, uuid={}", contentUuid, e);
+            return "";
         }
     }
 

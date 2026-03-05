@@ -1,13 +1,12 @@
 package cn.nexus.infrastructure.adapter.social.repository;
 
+import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.model.entity.ContentDraftEntity;
 import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
-import cn.nexus.infrastructure.dao.kv.IPostContentDao;
-import cn.nexus.infrastructure.dao.kv.po.PostContentPO;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -53,7 +52,7 @@ public class ContentRepository implements IContentRepository {
     private final IContentPostTypeDao contentPostTypeDao;
     private final IContentHistoryDao contentHistoryDao;
     private final IContentScheduleDao contentScheduleDao;
-    private final IPostContentDao postContentKvDao;
+    private final IPostContentKvPort postContentKvPort;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
@@ -147,6 +146,17 @@ public class ContentRepository implements IContentRepository {
         ContentPostEntity post = toPostEntity(contentPostDao.selectByIdForUpdate(postId));
         fillPostTypes(post == null ? List.of() : List.of(post));
         fillPostContent(post == null ? List.of() : List.of(post));
+        return post;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ContentPostEntity findPostMeta(Long postId) {
+        if (postId == null) {
+            return null;
+        }
+        ContentPostEntity post = toPostEntity(contentPostDao.selectById(postId));
+        fillPostTypes(post == null ? List.of() : List.of(post));
         return post;
     }
 
@@ -689,24 +699,16 @@ public class ContentRepository implements IContentRepository {
         }
 
         List<String> uuids = new ArrayList<>(dedup);
-        List<PostContentPO> rows;
+        Map<String, String> contentByUuid;
         try {
-            rows = postContentKvDao.selectByUuids(uuids);
+            contentByUuid = postContentKvPort.findBatch(uuids);
         } catch (Exception e) {
             // KV 不可用视为正文缺失，不影响主链路
             log.warn("fill post content from kv failed, size={}", uuids.size(), e);
             return;
         }
-        if (rows == null || rows.isEmpty()) {
+        if (contentByUuid == null || contentByUuid.isEmpty()) {
             return;
-        }
-
-        Map<String, String> contentByUuid = new HashMap<>(rows.size());
-        for (PostContentPO row : rows) {
-            if (row == null || row.getUuid() == null) {
-                continue;
-            }
-            contentByUuid.put(row.getUuid(), row.getContent());
         }
 
         for (ContentPostEntity post : posts) {

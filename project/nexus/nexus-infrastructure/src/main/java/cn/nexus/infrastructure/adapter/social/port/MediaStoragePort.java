@@ -6,8 +6,7 @@ import cn.nexus.infrastructure.adapter.social.port.storage.MediaStorageStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
@@ -18,24 +17,19 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Media storage router.
- *
- * <p>storage.type can be hot-switched by updating Redis key.</p>
  */
 @Slf4j
 @Component
+@RefreshScope
 @RequiredArgsConstructor
 public class MediaStoragePort implements IMediaStoragePort {
 
     private static final String DEFAULT_TYPE = "minio";
 
-    private final StringRedisTemplate stringRedisTemplate;
     private final List<MediaStorageStrategy> strategies;
 
     @Value("${storage.type:minio}")
     private String storageType;
-
-    @Value("${storage.redis-key:storage:type}")
-    private String storageTypeRedisKey;
 
     private final AtomicReference<MediaStorageStrategy> current = new AtomicReference<>();
     private final AtomicReference<String> currentType = new AtomicReference<>(DEFAULT_TYPE);
@@ -43,29 +37,6 @@ public class MediaStoragePort implements IMediaStoragePort {
     @jakarta.annotation.PostConstruct
     public void init() {
         switchTo(normalizeType(storageType));
-        refreshFromRedisOnce();
-    }
-
-    @Scheduled(fixedDelayString = "${storage.refresh-ms:2000}")
-    public void refreshFromRedisOnce() {
-        String key = normalizeRedisKey(storageTypeRedisKey);
-        if (key == null) {
-            return;
-        }
-        try {
-            String raw = stringRedisTemplate.opsForValue().get(key);
-            String desired = normalizeType(raw);
-            if (desired == null) {
-                return;
-            }
-            if (desired.equals(currentType.get())) {
-                return;
-            }
-            switchTo(desired);
-        } catch (Exception e) {
-            // Redis unavailable -> keep current
-            log.warn("refresh storage.type from redis failed, key={}", key, e);
-        }
     }
 
     @Override
@@ -144,11 +115,4 @@ public class MediaStoragePort implements IMediaStoragePort {
         return v.isEmpty() ? null : v;
     }
 
-    private String normalizeRedisKey(String k) {
-        if (k == null) {
-            return null;
-        }
-        String v = k.trim();
-        return v.isEmpty() ? null : v;
-    }
 }

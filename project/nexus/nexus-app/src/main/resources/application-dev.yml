@@ -9,6 +9,12 @@ spring:
     username: root
     password: root
     driver-class-name: com.mysql.cj.jdbc.Driver
+  cassandra:
+    keyspace-name: nexus_kv
+    contact-points: 127.0.0.1
+    port: 9042
+    local-datacenter: datacenter1
+    schema-action: NONE
   data:
     redis:
       host: 127.0.0.1
@@ -142,11 +148,38 @@ search:
 reaction:
   sync:
     mode: redis
+  count:
+    model: snapshot
 
 storage:
   type: minio
-  redis-key: storage:type
-  refresh-ms: 2000
+
+minio:
+  media:
+    endpoint: http://127.0.0.1:9000
+    accessKey: minioadmin
+    secretKey: minioadmin
+    bucket: nexus
+    basePath: content
+    expirySeconds: 900
+
+aliyun:
+  oss:
+    media:
+      endpoint: oss-cn-shanghai.aliyuncs.com
+      accessKey: ${ALIYUN_OSS_ACCESS_KEY:}
+      secretKey: ${ALIYUN_OSS_SECRET_KEY:}
+      bucket: ${ALIYUN_OSS_BUCKET:}
+      basePath: content
+      expirySeconds: 900
+
+# Leaf（segment + snowflake）
+leaf:
+  name: nexus
+  snowflake:
+    enabled: true
+    zk-address: 127.0.0.1:2181
+    port: 2222
 
 # Sa-Token（用于 Authorization: Bearer token）
 sa-token:

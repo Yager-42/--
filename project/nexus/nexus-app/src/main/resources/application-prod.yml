@@ -12,3 +12,5 @@ feed:
 reaction:
   sync:
     mode: redis
+  count:
+    model: snapshot

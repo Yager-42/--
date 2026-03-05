@@ -15,6 +15,11 @@ public interface IInteractionReactionCountDao {
 
     int insertOrUpdate(InteractionReactionCountPO po);
 
+    int incrCount(@Param("targetType") String targetType,
+                  @Param("targetId") Long targetId,
+                  @Param("reactionType") String reactionType,
+                  @Param("delta") Long delta);
+
     Long selectCount(@Param("targetType") String targetType,
                      @Param("targetId") Long targetId,
                      @Param("reactionType") String reactionType);

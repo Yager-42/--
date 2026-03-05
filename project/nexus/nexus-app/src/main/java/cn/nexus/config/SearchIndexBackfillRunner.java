@@ -1,9 +1,8 @@
 package cn.nexus.config;
 
+import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
-import cn.nexus.infrastructure.dao.kv.IPostContentDao;
-import cn.nexus.infrastructure.dao.kv.po.PostContentPO;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
 import cn.nexus.infrastructure.dao.social.IContentPostTypeDao;
 import cn.nexus.infrastructure.dao.social.IUserBaseDao;
@@ -57,20 +56,20 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
     private final IUserBaseDao userBaseDao;
     private final ISearchEnginePort searchEnginePort;
     private final StringRedisTemplate stringRedisTemplate;
-    private final IPostContentDao postContentDao;
+    private final IPostContentKvPort postContentKvPort;
 
     public SearchIndexBackfillRunner(IContentPostDao contentPostDao,
                                      IContentPostTypeDao contentPostTypeDao,
                                      IUserBaseDao userBaseDao,
                                      ISearchEnginePort searchEnginePort,
                                      StringRedisTemplate stringRedisTemplate,
-                                     IPostContentDao postContentDao) {
+                                     IPostContentKvPort postContentKvPort) {
         this.contentPostDao = contentPostDao;
         this.contentPostTypeDao = contentPostTypeDao;
         this.userBaseDao = userBaseDao;
         this.searchEnginePort = searchEnginePort;
         this.stringRedisTemplate = stringRedisTemplate;
-        this.postContentDao = postContentDao;
+        this.postContentKvPort = postContentKvPort;
     }
 
     @Override
@@ -251,18 +250,8 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
         }
         List<String> uuids = new ArrayList<>(dedup);
         try {
-            List<PostContentPO> rows = postContentDao.selectByUuids(uuids);
-            if (rows == null || rows.isEmpty()) {
-                return Map.of();
-            }
-            Map<String, String> map = new HashMap<>(rows.size());
-            for (PostContentPO row : rows) {
-                if (row == null || row.getUuid() == null) {
-                    continue;
-                }
-                map.put(row.getUuid(), row.getContent() == null ? "" : row.getContent());
-            }
-            return map;
+            Map<String, String> map = postContentKvPort.findBatch(uuids);
+            return map == null ? Map.of() : map;
         } catch (Exception e) {
             log.warn("load post contents from kv failed, size={}", uuids.size(), e);
             return Map.of();

@@ -10,6 +10,14 @@
             update_time = VALUES(update_time)
     </insert>
 
+    <insert id="incrCount">
+        INSERT INTO interaction_reaction_count(target_type, target_id, reaction_type, count, update_time)
+        VALUES (#{targetType}, #{targetId}, #{reactionType}, GREATEST(0, #{delta}), NOW())
+        ON DUPLICATE KEY UPDATE
+            count = GREATEST(0, count + #{delta}),
+            update_time = NOW()
+    </insert>
+
     <select id="selectCount" resultType="java.lang.Long">
         SELECT count
         FROM interaction_reaction_count

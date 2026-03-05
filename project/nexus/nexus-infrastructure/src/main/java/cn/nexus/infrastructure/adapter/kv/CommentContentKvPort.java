@@ -4,31 +4,34 @@ import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentItemVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentKeyVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentResultVO;
-import cn.nexus.infrastructure.dao.kv.ICommentContentDao;
-import cn.nexus.infrastructure.dao.kv.po.CommentContentKeyPO;
-import cn.nexus.infrastructure.dao.kv.po.CommentContentPO;
+import cn.nexus.infrastructure.adapter.kv.cassandra.CommentContentDO;
+import cn.nexus.infrastructure.adapter.kv.cassandra.CommentContentPrimaryKey;
+import cn.nexus.infrastructure.adapter.kv.cassandra.CommentContentRepository;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.cassandra.core.CassandraTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
 public class CommentContentKvPort implements ICommentContentKvPort {
 
-    private static final int BATCH_SIZE = 500;
-
-    private final ICommentContentDao commentContentDao;
+    private final CassandraTemplate cassandraTemplate;
+    private final CommentContentRepository commentContentRepository;
 
     @Override
     public void batchAdd(List<CommentContentItemVO> comments) {
         if (comments == null || comments.isEmpty()) {
             return;
         }
-        List<CommentContentPO> list = new ArrayList<>(comments.size());
+        List<CommentContentDO> list = new ArrayList<>(comments.size());
         for (CommentContentItemVO c : comments) {
             if (c == null) {
                 continue;
@@ -39,21 +42,21 @@ public class CommentContentKvPort implements ICommentContentKvPort {
             if (c.getContent() == null) {
                 continue;
             }
-            CommentContentPO po = new CommentContentPO();
-            po.setPostId(c.getPostId());
-            po.setYearMonth(c.getYearMonth().trim());
-            po.setContentId(c.getContentId().trim());
-            po.setContent(c.getContent());
-            list.add(po);
+            UUID contentId = tryParseUuid(c.getContentId());
+            if (contentId == null) {
+                continue;
+            }
+            CommentContentPrimaryKey pk = CommentContentPrimaryKey.builder()
+                    .noteId(c.getPostId())
+                    .yearMonth(c.getYearMonth().trim())
+                    .contentId(contentId)
+                    .build();
+            list.add(CommentContentDO.builder().primaryKey(pk).content(c.getContent()).build());
         }
         if (list.isEmpty()) {
             return;
         }
-
-        for (int i = 0; i < list.size(); i += BATCH_SIZE) {
-            int end = Math.min(list.size(), i + BATCH_SIZE);
-            commentContentDao.batchUpsert(list.subList(i, end));
-        }
+        cassandraTemplate.batchOps().insert(list).execute();
     }
 
     @Override
@@ -64,7 +67,8 @@ public class CommentContentKvPort implements ICommentContentKvPort {
         if (keys == null || keys.isEmpty()) {
             return List.of();
         }
-        List<CommentContentKeyPO> list = new ArrayList<>(keys.size());
+        Set<String> yearMonths = new LinkedHashSet<>();
+        Set<UUID> contentIds = new LinkedHashSet<>();
         for (CommentContentKeyVO k : keys) {
             if (k == null) {
                 continue;
@@ -74,22 +78,32 @@ public class CommentContentKvPort implements ICommentContentKvPort {
             if (ym == null || cid == null) {
                 continue;
             }
-            list.add(new CommentContentKeyPO(ym, cid));
+            UUID uuid = tryParseUuid(cid);
+            if (uuid == null) {
+                continue;
+            }
+            yearMonths.add(ym);
+            contentIds.add(uuid);
         }
-        if (list.isEmpty()) {
+        if (yearMonths.isEmpty() || contentIds.isEmpty()) {
             return List.of();
         }
 
-        List<CommentContentPO> rows = commentContentDao.batchSelect(postId, list);
+        List<CommentContentDO> rows = commentContentRepository
+                .findByPrimaryKeyNoteIdAndPrimaryKeyYearMonthInAndPrimaryKeyContentIdIn(
+                        postId, new ArrayList<>(yearMonths), new ArrayList<>(contentIds));
         if (rows == null || rows.isEmpty()) {
             return List.of();
         }
         List<CommentContentResultVO> out = new ArrayList<>(rows.size());
-        for (CommentContentPO po : rows) {
-            if (po == null || po.getContentId() == null) {
+        for (CommentContentDO po : rows) {
+            if (po == null || po.getPrimaryKey() == null || po.getPrimaryKey().getContentId() == null) {
                 continue;
             }
-            out.add(CommentContentResultVO.builder().contentId(po.getContentId()).content(po.getContent()).build());
+            out.add(CommentContentResultVO.builder()
+                    .contentId(String.valueOf(po.getPrimaryKey().getContentId()))
+                    .content(po.getContent())
+                    .build());
         }
         return out;
     }
@@ -104,7 +118,11 @@ public class CommentContentKvPort implements ICommentContentKvPort {
         if (ym == null || cid == null) {
             return;
         }
-        commentContentDao.delete(postId, ym, cid);
+        UUID uuid = tryParseUuid(cid);
+        if (uuid == null) {
+            return;
+        }
+        commentContentRepository.deleteByPrimaryKeyNoteIdAndPrimaryKeyYearMonthAndPrimaryKeyContentId(postId, ym, uuid);
     }
 
     private String normalize(String s) {
@@ -113,5 +131,16 @@ public class CommentContentKvPort implements ICommentContentKvPort {
         }
         String t = s.trim();
         return t.isEmpty() ? null : t;
+    }
+
+    private UUID tryParseUuid(String s) {
+        if (s == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(s.trim());
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 }

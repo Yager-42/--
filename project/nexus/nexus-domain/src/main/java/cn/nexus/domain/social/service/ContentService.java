@@ -998,36 +998,67 @@ public class ContentService implements IContentService {
         postContentKvPort.add(newContentUuid, text == null ? "" : text);
 
         ContentPostEntity post = contentRepository.findPost(postId);
-        if (post == null) {
-            post = ContentPostEntity.builder()
-                    .postId(postId)
-                    .userId(userId)
-                    .contentUuid(newContentUuid)
-                    .contentText(text)
-                    .mediaType(deriveMediaType(mediaInfo))
-                    .mediaInfo(mediaInfo)
-                    .locationInfo(location)
-                    .status(status)
-                    .visibility(parseVisibility(visibility))
-                    .versionNum(versionNum)
-                    .edited(edited)
-                    .createTime(socialIdPort.now())
-                    .build();
-            contentRepository.savePost(post);
-        } else {
-            if (userId != null && post.getUserId() != null && !post.getUserId().equals(userId)) {
-                throw new IllegalStateException("post 所属用户不匹配");
+        String oldUuid = null;
+        try {
+            if (post == null) {
+                post = ContentPostEntity.builder()
+                        .postId(postId)
+                        .userId(userId)
+                        .contentUuid(newContentUuid)
+                        .mediaType(deriveMediaType(mediaInfo))
+                        .mediaInfo(mediaInfo)
+                        .locationInfo(location)
+                        .status(status)
+                        .visibility(parseVisibility(visibility))
+                        .versionNum(versionNum)
+                        .edited(edited)
+                        .createTime(socialIdPort.now())
+                        .build();
+                contentRepository.savePost(post);
+            } else {
+                if (userId != null && post.getUserId() != null && !post.getUserId().equals(userId)) {
+                    throw new IllegalStateException("post 所属用户不匹配");
+                }
+                oldUuid = post.getContentUuid();
+                boolean ok = contentRepository.updatePostStatusAndContent(postId, status, versionNum, edited, newContentUuid, mediaInfo, location, parseVisibility(visibility));
+                if (!ok) {
+                    throw new IllegalStateException("post 更新失败，可能存在版本冲突 postId=" + postId);
+                }
             }
-            String oldUuid = post.getContentUuid();
-            boolean ok = contentRepository.updatePostStatusAndContent(postId, status, versionNum, edited, newContentUuid, mediaInfo, location, parseVisibility(visibility));
-            if (!ok) {
-                throw new IllegalStateException("post 更新失败，可能存在版本冲突 postId=" + postId);
+        } catch (Exception e) {
+            try {
+                postContentKvPort.delete(newContentUuid);
+            } catch (Exception ignored) {
             }
+            throw e;
+        }
 
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             if (oldUuid != null && !oldUuid.isBlank() && !oldUuid.equals(newContentUuid)) {
                 postContentKvPort.delete(oldUuid);
             }
+            return;
         }
+
+        String oldUuidFinal = oldUuid;
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == TransactionSynchronization.STATUS_COMMITTED) {
+                    if (oldUuidFinal != null && !oldUuidFinal.isBlank() && !oldUuidFinal.equals(newContentUuid)) {
+                        try {
+                            postContentKvPort.delete(oldUuidFinal);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    return;
+                }
+                try {
+                    postContentKvPort.delete(newContentUuid);
+                } catch (Exception ignored) {
+                }
+            }
+        });
     }
 
     private List<String> normalizePostTypes(List<String> postTypes) {

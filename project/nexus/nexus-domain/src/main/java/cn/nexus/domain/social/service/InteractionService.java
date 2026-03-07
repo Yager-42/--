@@ -79,6 +79,12 @@ public class InteractionService implements IInteractionService {
     }
 
     @Override
+    public ReactionLikersVO reactionLikers(Long targetId, String targetType, String type, String cursor, Integer limit) {
+        ReactionTargetVO target = parseTarget(targetId, targetType, type);
+        return reactionLikeService.queryLikers(target, cursor, limit);
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public CommentResultVO comment(Long userId, Long postId, Long parentId, String content, Long commentId) {
         requireNonNull(userId, "userId");

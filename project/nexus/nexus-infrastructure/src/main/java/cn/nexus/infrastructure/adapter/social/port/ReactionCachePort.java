@@ -185,6 +185,37 @@ public class ReactionCachePort implements IReactionCachePort {
     }
 
     @Override
+    public boolean bitmapShardExists(Long userId, ReactionTargetVO target) {
+        if (userId == null || target == null || userId < 0) {
+            return false;
+        }
+        long shard = userId / BIT_SHARD_SIZE;
+        Boolean exists = stringRedisTemplate.hasKey(bmKey(target, shard));
+        return Boolean.TRUE.equals(exists);
+    }
+
+    @Override
+    public void setState(Long userId, ReactionTargetVO target, boolean state) {
+        if (userId == null || target == null || userId < 0) {
+            return;
+        }
+        long shard = userId / BIT_SHARD_SIZE;
+        long offset = userId % BIT_SHARD_SIZE;
+        stringRedisTemplate.opsForValue().setBit(bmKey(target, shard), offset, state);
+    }
+
+    @Override
+    public void setCount(ReactionTargetVO target, long count) {
+        if (target == null) {
+            return;
+        }
+        long safe = Math.max(0L, count);
+        String cntKey = cntKey(target);
+        stringRedisTemplate.opsForValue().set(cntKey, String.valueOf(safe));
+        countCache.invalidate(hotkeyKey(target));
+    }
+
+    @Override
     public long getWindowMs(ReactionTargetVO target, long defaultMs) {
         if (target == null) {
             return defaultMs;

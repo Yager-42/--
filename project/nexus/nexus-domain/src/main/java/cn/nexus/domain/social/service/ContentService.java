@@ -956,10 +956,10 @@ public class ContentService implements IContentService {
             return 0;
         }
         switch (visibility.toUpperCase()) {
-            case "FRIEND":
-                return 1;
             case "PRIVATE":
                 return 2;
+            case "FRIEND":
+                throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "不支持 FRIEND 可见性");
             default:
                 return 0;
         }

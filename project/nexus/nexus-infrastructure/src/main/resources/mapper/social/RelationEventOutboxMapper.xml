@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IRelationEventOutboxDao">
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.RelationEventOutboxPO">
+        INSERT INTO relation_event_outbox(event_id, event_type, payload, status, retry_count, next_retry_time, create_time, update_time)
+        VALUES(#{eventId}, #{eventType}, #{payload}, #{status}, #{retryCount}, #{nextRetryTime}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE event_id = event_id
+    </insert>
+
+    <select id="selectByStatus" resultType="cn.nexus.infrastructure.dao.social.po.RelationEventOutboxPO">
+        SELECT event_id AS eventId,
+               event_type AS eventType,
+               payload,
+               status,
+               retry_count AS retryCount,
+               next_retry_time AS nextRetryTime,
+               create_time AS createTime,
+               update_time AS updateTime
+        FROM relation_event_outbox
+        WHERE status = #{status}
+          AND (next_retry_time IS NULL OR next_retry_time <= #{now})
+        ORDER BY update_time ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markSent">
+        UPDATE relation_event_outbox
+        SET status = 'DONE',
+            update_time = NOW()
+        WHERE event_id = #{eventId}
+    </update>
+
+    <update id="markFail">
+        UPDATE relation_event_outbox
+        SET status = 'FAIL',
+            retry_count = retry_count + 1,
+            next_retry_time = #{nextRetryTime},
+            update_time = NOW()
+        WHERE event_id = #{eventId}
+    </update>
+
+    <delete id="deleteOlderThan">
+        DELETE FROM relation_event_outbox
+        WHERE status = #{status}
+          AND update_time < #{before}
+    </delete>
+</mapper>

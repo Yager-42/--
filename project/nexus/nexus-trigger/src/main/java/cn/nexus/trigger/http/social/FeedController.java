@@ -1,4 +1,4 @@
-package cn.nexus.trigger.http.social;
+﻿package cn.nexus.trigger.http.social;
 
 import cn.nexus.api.response.Response;
 import cn.nexus.api.social.IFeedApi;
@@ -75,10 +75,18 @@ public class FeedController implements IFeedApi {
         return FeedItemDTO.builder()
                 .postId(vo.getPostId())
                 .authorId(vo.getAuthorId())
+                .authorNickname(vo.getAuthorNickname())
+                .authorAvatar(vo.getAuthorAvatar())
                 .text(vo.getText())
                 .summary(vo.getSummary())
+                .mediaType(vo.getMediaType())
+                .mediaInfo(vo.getMediaInfo())
                 .publishTime(vo.getPublishTime())
                 .source(vo.getSource())
+                .likeCount(vo.getLikeCount())
+                .liked(vo.getLiked())
+                .followed(vo.getFollowed())
+                .seen(vo.getSeen())
                 .build();
     }
 }

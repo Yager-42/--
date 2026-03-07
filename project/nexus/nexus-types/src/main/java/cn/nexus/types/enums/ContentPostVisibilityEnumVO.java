@@ -13,7 +13,6 @@ import lombok.Getter;
 public enum ContentPostVisibilityEnumVO {
 
     PUBLIC(0, "公开"),
-    FRIEND(1, "好友可见"),
     PRIVATE(2, "仅自己可见");
 
     private final int code;
@@ -31,4 +30,3 @@ public enum ContentPostVisibilityEnumVO {
         return null;
     }
 }
-

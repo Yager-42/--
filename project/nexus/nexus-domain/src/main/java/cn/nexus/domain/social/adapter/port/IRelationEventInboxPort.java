@@ -11,17 +11,17 @@ public interface IRelationEventInboxPort {
     boolean save(String eventType, String fingerprint, String payload);
 
     /**
-     * 处理成功标记 DONE。
+     * 处理成功标记 PROCESSED。
      */
     void markDone(String fingerprint);
 
     /**
-     * 处理失败标记 FAIL。
+     * 处理失败标记 FAILED。
      */
     void markFail(String fingerprint);
 
     /**
-     * 拉取需要重放/补偿的事件（失败或长期未处理）。
+     * 拉取需要重放/补偿的事件。
      */
     java.util.List<cn.nexus.domain.social.model.valobj.RelationEventInboxVO> fetchRetry(int limit);
 

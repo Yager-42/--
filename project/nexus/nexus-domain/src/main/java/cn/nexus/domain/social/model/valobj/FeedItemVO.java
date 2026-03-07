@@ -15,8 +15,16 @@ import lombok.NoArgsConstructor;
 public class FeedItemVO {
     private Long postId;
     private Long authorId;
+    private String authorNickname;
+    private String authorAvatar;
     private String text;
     private String summary;
+    private Integer mediaType;
+    private String mediaInfo;
     private Long publishTime;
     private String source;
+    private Long likeCount;
+    private Boolean liked;
+    private Boolean followed;
+    private Boolean seen;
 }

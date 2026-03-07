@@ -6,7 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 个人主页关系统计（领域侧）：关注/粉丝/好友与是否已关注。
+ * 用户关系统计。
  */
 @Data
 @Builder
@@ -15,7 +15,5 @@ import lombok.NoArgsConstructor;
 public class UserRelationStatsVO {
     private long followCount;
     private long followerCount;
-    private long friendCount;
     private boolean isFollow;
 }
-

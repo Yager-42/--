@@ -11,13 +11,10 @@ public interface IInteractionService {
 
     ReactionStateVO reactionState(Long userId, Long targetId, String targetType, String type);
 
+    ReactionLikersVO reactionLikers(Long targetId, String targetType, String type, String cursor, Integer limit);
+
     CommentResultVO comment(Long userId, Long postId, Long parentId, String content, Long commentId);
 
-    /**
-     * 风控回写：推进“待审核”的评论，必要时补发创建事件/通知。
-     *
-     * <p>finalResult: PASS/BLOCK/REVIEW。</p>
-     */
     OperationResultVO applyCommentRiskReviewResult(Long commentId, String finalResult, String reasonCode);
 
     OperationResultVO pinComment(Long userId, Long commentId, Long postId);
@@ -26,14 +23,8 @@ public interface IInteractionService {
 
     NotificationListVO notifications(Long userId, String cursor);
 
-    /**
-     * 标记单条通知已读（幂等）。
-     */
     OperationResultVO readNotification(Long userId, Long notificationId);
 
-    /**
-     * 全部通知标记已读（幂等）。
-     */
     OperationResultVO readAllNotifications(Long userId);
 
     TipResultVO tip(Long toUserId, java.math.BigDecimal amount, String currency, Long postId);

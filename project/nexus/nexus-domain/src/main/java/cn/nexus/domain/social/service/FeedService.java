@@ -1,4 +1,4 @@
-package cn.nexus.domain.social.service;
+﻿package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRecommendationPort;
@@ -64,6 +64,7 @@ public class FeedService implements IFeedService {
     private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private final IFeedRecommendSessionRepository feedRecommendSessionRepository;
     private final IRecommendationPort recommendationPort;
+    private final FeedCardAssembleService feedCardAssembleService;
 
     /**
      * 大 V 判定阈值：粉丝数 >= 阈值则视为大 V（默认 500000）。 {@code int}
@@ -130,6 +131,15 @@ public class FeedService implements IFeedService {
      */
     @Value("${feed.recommend.maxAppendRounds:3}")
     private int recommendMaxAppendRounds;
+
+    @Value("${feed.recommend.trendingRecommenderName:trending}")
+    private String trendingRecommenderName;
+
+    @Value("${feed.recommend.latestRecommenderName:latest}")
+    private String latestRecommenderName;
+
+    @Value("${feed.recommend.similarRecommenderName:similar}")
+    private String similarRecommenderName;
 
     /**
      * 获取关注页时间线（FOLLOW）：Redis InboxTimeline + 负反馈过滤 + MySQL 回表。
@@ -231,14 +241,14 @@ public class FeedService implements IFeedService {
 
         EnsureRecommendResult ensureResult = ensureRecommendCandidates(userId, sessionId, scanIndex, scanBudget, appendBatch, maxRounds);
 
-        List<FeedItemVO> items = new ArrayList<>(normalizedLimit);
+        List<FeedInboxEntryVO> accepted = new ArrayList<>(normalizedLimit);
         Set<Long> seenAuthors = new HashSet<>();
         long idx = Math.max(0L, scanIndex);
         int scanned = 0;
 
         // 小批量回表：减少 DB 次数，同时保证 scanIndex 只推进“实际扫描过的候选”。
         final int chunkSize = 50;
-        while (items.size() < normalizedLimit && scanned < scanBudget) {
+        while (accepted.size() < normalizedLimit && scanned < scanBudget) {
             int remaining = scanBudget - scanned;
             int take = Math.min(chunkSize, remaining);
             if (take <= 0) {
@@ -276,20 +286,17 @@ public class FeedService implements IFeedService {
                 if (authorId == null || !seenAuthors.add(authorId)) {
                     continue;
                 }
-                items.add(FeedItemVO.builder()
+                accepted.add(FeedInboxEntryVO.builder()
                         .postId(post.getPostId())
-                        .authorId(authorId)
-                        .text(post.getContentText())
-                        .summary(post.getSummary() == null ? "" : post.getSummary())
-                        .publishTime(post.getCreateTime())
-                        .source("RECOMMEND")
+                        .publishTimeMs(post.getCreateTime())
                         .build());
-                if (items.size() >= normalizedLimit) {
+                if (accepted.size() >= normalizedLimit) {
                     break;
                 }
             }
         }
 
+        List<FeedItemVO> items = feedCardAssembleService.assemble(userId, "RECOMMEND", accepted, normalizedLimit);
         String nextCursor = idx == scanIndex ? null : FeedRecommendCursor.format(sessionId, idx);
         writeRecommendReadFeedbackAsync(userId, items);
         log.info("feed recommend timeline, userId={}, sessionId={}, scanIndex={}, limit={}, scanned={}, returned={}, appendRounds={}, fallbackReason={}",
@@ -312,18 +319,18 @@ public class FeedService implements IFeedService {
         int scanBudget = Math.max(1, normalizedLimit) * scanFactor;
         int appendBatch = Math.max(1, normalizedLimit) * prefetchFactor;
 
-        List<FeedItemVO> items = new ArrayList<>(normalizedLimit);
+        List<FeedInboxEntryVO> accepted = new ArrayList<>(normalizedLimit);
         Set<Long> seenAuthors = new HashSet<>();
         long idx = Math.max(0L, offset);
         int scanned = 0;
         int rounds = 0;
 
-        while (items.size() < normalizedLimit && scanned < scanBudget && rounds < maxRounds) {
+        while (accepted.size() < normalizedLimit && scanned < scanBudget && rounds < maxRounds) {
             Integer safeOffset = toInt(idx);
             if (safeOffset == null) {
                 break;
             }
-            List<Long> candidates = recommendationPort.popular(userId, appendBatch, safeOffset);
+            List<Long> candidates = recommendationPort.nonPersonalized(trendingRecommenderName, userId, appendBatch, safeOffset);
             if (candidates == null || candidates.isEmpty()) {
                 break;
             }
@@ -354,21 +361,18 @@ public class FeedService implements IFeedService {
                 if (authorId == null || !seenAuthors.add(authorId)) {
                     continue;
                 }
-                items.add(FeedItemVO.builder()
+                accepted.add(FeedInboxEntryVO.builder()
                         .postId(post.getPostId())
-                        .authorId(authorId)
-                        .text(post.getContentText())
-                        .summary(post.getSummary() == null ? "" : post.getSummary())
-                        .publishTime(post.getCreateTime())
-                        .source("POPULAR")
+                        .publishTimeMs(post.getCreateTime())
                         .build());
-                if (items.size() >= normalizedLimit) {
+                if (accepted.size() >= normalizedLimit) {
                     break;
                 }
             }
             rounds++;
         }
 
+        List<FeedItemVO> items = feedCardAssembleService.assemble(userId, "POPULAR", accepted, normalizedLimit);
         String nextCursor = idx == offset ? null : FeedPopularCursor.format(idx);
         return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
     }
@@ -389,7 +393,7 @@ public class FeedService implements IFeedService {
 
         long idx = Math.max(0L, offset);
         int needN = Math.max(1, safeNeighborsN(idx, scanBudget));
-        List<Long> all = recommendationPort.neighbors(seedPostId, needN);
+        List<Long> all = recommendationPort.itemToItem(similarRecommenderName, seedPostId, needN);
         if (all == null || all.isEmpty()) {
             return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
         }
@@ -409,7 +413,7 @@ public class FeedService implements IFeedService {
         }
         Map<Long, ContentPostEntity> postById = mapById(contentRepository.listPostsByIds(toFetch));
 
-        List<FeedItemVO> items = new ArrayList<>(normalizedLimit);
+        List<FeedInboxEntryVO> accepted = new ArrayList<>(normalizedLimit);
         Set<Long> seenAuthors = new HashSet<>();
         int scanned = 0;
         for (Long candidateId : slice) {
@@ -429,19 +433,16 @@ public class FeedService implements IFeedService {
             if (authorId == null || !seenAuthors.add(authorId)) {
                 continue;
             }
-            items.add(FeedItemVO.builder()
+            accepted.add(FeedInboxEntryVO.builder()
                     .postId(post.getPostId())
-                    .authorId(authorId)
-                    .text(post.getContentText())
-                    .summary(post.getSummary() == null ? "" : post.getSummary())
-                    .publishTime(post.getCreateTime())
-                    .source("NEIGHBORS")
+                    .publishTimeMs(post.getCreateTime())
                     .build());
-            if (items.size() >= normalizedLimit) {
+            if (accepted.size() >= normalizedLimit) {
                 break;
             }
         }
 
+        List<FeedItemVO> items = feedCardAssembleService.assemble(userId, "NEIGHBORS", accepted, normalizedLimit);
         String nextCursor = idx == offset ? null : FeedNeighborsCursor.format(seedPostId, idx);
         return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
     }
@@ -523,6 +524,40 @@ public class FeedService implements IFeedService {
                 break;
             }
 
+            try {
+                List<Long> trending = recommendationPort.nonPersonalized(trendingRecommenderName, userId, batch, 0);
+                if (trending != null && !trending.isEmpty()) {
+                    feedRecommendSessionRepository.appendCandidates(userId, sessionId, trending);
+                }
+            } catch (Exception e) {
+                log.warn("gorse trending failed, userId={}, sessionId={}, batch={}", userId, sessionId, batch, e);
+            }
+
+            if (feedRecommendSessionRepository.size(userId, sessionId) >= needSize) {
+                rounds++;
+                break;
+            }
+
+            List<Long> socialCandidates = listRecommendFollowCandidates(userId, batch);
+            if (!socialCandidates.isEmpty()) {
+                feedRecommendSessionRepository.appendCandidates(userId, sessionId, socialCandidates);
+            }
+
+            if (feedRecommendSessionRepository.size(userId, sessionId) >= needSize) {
+                rounds++;
+                break;
+            }
+
+            List<Long> poolCandidates = listRecommendBigvPoolCandidates(userId, batch);
+            if (!poolCandidates.isEmpty()) {
+                feedRecommendSessionRepository.appendCandidates(userId, sessionId, poolCandidates);
+            }
+
+            if (feedRecommendSessionRepository.size(userId, sessionId) >= needSize) {
+                rounds++;
+                break;
+            }
+
             // 2) gorse 不可用或候选不足：降级用全站 latest 补齐（internal cursor：timeMs:postId）。
             String latestCursor = feedRecommendSessionRepository.getLatestCursor(userId, sessionId);
             LatestCursor parsed = LatestCursor.parse(latestCursor);
@@ -561,6 +596,56 @@ public class FeedService implements IFeedService {
     }
 
     private record EnsureRecommendResult(int appendRounds, String fallbackReason) {
+    }
+
+    private List<Long> listRecommendFollowCandidates(Long userId, int batch) {
+        List<Long> followings = listFollowings(userId);
+        if (followings.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = new ArrayList<>(batch);
+        for (Long authorId : followings) {
+            if (authorId == null) {
+                continue;
+            }
+            List<FeedInboxEntryVO> entries = feedOutboxRepository.pageOutbox(authorId, null, null, 1);
+            if (entries == null || entries.isEmpty()) {
+                continue;
+            }
+            FeedInboxEntryVO first = entries.get(0);
+            if (first != null && first.getPostId() != null) {
+                ids.add(first.getPostId());
+            }
+            if (ids.size() >= batch) {
+                break;
+            }
+        }
+        return ids;
+    }
+
+    private List<Long> listRecommendBigvPoolCandidates(Long userId, int batch) {
+        List<Long> followings = listFollowings(userId);
+        if (!shouldUseBigVPool(followings)) {
+            return List.of();
+        }
+        int buckets = Math.max(1, bigvPoolBuckets);
+        int perBucket = Math.max(1, batch / buckets);
+        List<Long> ids = new ArrayList<>(batch);
+        for (int i = 0; i < buckets; i++) {
+            List<FeedInboxEntryVO> entries = feedBigVPoolRepository.pagePool(i, null, null, perBucket);
+            if (entries == null || entries.isEmpty()) {
+                continue;
+            }
+            for (FeedInboxEntryVO entry : entries) {
+                if (entry != null && entry.getPostId() != null) {
+                    ids.add(entry.getPostId());
+                }
+                if (ids.size() >= batch) {
+                    return ids;
+                }
+            }
+        }
+        return ids;
     }
 
     private void writeRecommendReadFeedbackAsync(Long userId, List<FeedItemVO> items) {
@@ -876,10 +961,9 @@ public class FeedService implements IFeedService {
 
         List<Long> candidateIds = new ArrayList<>(candidates.size());
         for (FeedInboxEntryVO entry : candidates) {
-            if (entry == null || entry.getPostId() == null) {
-                continue;
+            if (entry != null && entry.getPostId() != null) {
+                candidateIds.add(entry.getPostId());
             }
-            candidateIds.add(entry.getPostId());
         }
         if (candidateIds.isEmpty()) {
             return List.of();
@@ -890,10 +974,9 @@ public class FeedService implements IFeedService {
             cleanupMissingIndexes(userId, candidateIds, List.of());
             return List.of();
         }
-
         cleanupMissingIndexes(userId, candidateIds, posts);
 
-        // FOLLOW 时间线：读侧做关注/拉黑过滤，保证取消关注/拉黑立刻生效（不追求写侧强一致）。
+        Map<Long, ContentPostEntity> postById = mapById(posts);
         Set<Long> allowedAuthors = null;
         if (userId != null && source != null && "FOLLOW".equalsIgnoreCase(source.trim())) {
             allowedAuthors = new HashSet<>();
@@ -910,8 +993,13 @@ public class FeedService implements IFeedService {
                 }
             }
         }
-        List<FeedItemVO> items = new ArrayList<>(Math.min(posts.size(), normalizedLimit));
-        for (ContentPostEntity post : posts) {
+
+        List<FeedInboxEntryVO> filtered = new ArrayList<>(candidates.size());
+        for (FeedInboxEntryVO entry : candidates) {
+            if (entry == null || entry.getPostId() == null) {
+                continue;
+            }
+            ContentPostEntity post = postById.get(entry.getPostId());
             if (post == null) {
                 continue;
             }
@@ -924,19 +1012,9 @@ public class FeedService implements IFeedService {
                     continue;
                 }
             }
-            items.add(FeedItemVO.builder()
-                    .postId(post.getPostId())
-                    .authorId(post.getUserId())
-                    .text(post.getContentText())
-                    .summary(post.getSummary() == null ? "" : post.getSummary())
-                    .publishTime(post.getCreateTime())
-                    .source(source)
-                    .build());
-            if (items.size() >= normalizedLimit) {
-                break;
-            }
+            filtered.add(entry);
         }
-        return items;
+        return feedCardAssembleService.assemble(userId, source, filtered, normalizedLimit);
     }
 
     private boolean isBlockedBetween(Long sourceId, Long targetId) {
@@ -1053,20 +1131,14 @@ public class FeedService implements IFeedService {
         if (posts.isEmpty()) {
             return FeedTimelineVO.builder().items(List.of()).nextCursor(page.getNextCursor()).build();
         }
-        List<FeedItemVO> items = new ArrayList<>(posts.size());
+        List<FeedInboxEntryVO> entries = new ArrayList<>(posts.size());
         for (ContentPostEntity post : posts) {
-            if (post == null) {
+            if (post == null || post.getPostId() == null || post.getCreateTime() == null) {
                 continue;
             }
-            items.add(FeedItemVO.builder()
-                    .postId(post.getPostId())
-                    .authorId(post.getUserId())
-                    .text(post.getContentText())
-                    .summary(post.getSummary() == null ? "" : post.getSummary())
-                    .publishTime(post.getCreateTime())
-                    .source("PROFILE")
-                    .build());
+            entries.add(FeedInboxEntryVO.builder().postId(post.getPostId()).publishTimeMs(post.getCreateTime()).build());
         }
+        List<FeedItemVO> items = feedCardAssembleService.assemble(visitorId, "PROFILE", entries, normalizedLimit);
         return FeedTimelineVO.builder().items(items).nextCursor(page.getNextCursor()).build();
     }
 

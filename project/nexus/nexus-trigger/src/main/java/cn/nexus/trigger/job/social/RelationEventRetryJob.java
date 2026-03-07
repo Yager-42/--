@@ -5,15 +5,13 @@ import cn.nexus.domain.social.adapter.port.IRelationEventPort;
 import cn.nexus.domain.social.model.valobj.RelationEventInboxVO;
 import cn.nexus.infrastructure.adapter.social.port.RelationBlockEvent;
 import cn.nexus.infrastructure.adapter.social.port.RelationFollowEvent;
-import cn.nexus.infrastructure.adapter.social.port.RelationFriendEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Date;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-
-import java.util.Date;
-import java.util.List;
 
 /**
  * 关系事件收件箱重放/清理任务。
@@ -27,9 +25,6 @@ public class RelationEventRetryJob {
     private final IRelationEventPort eventPort;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /**
-     * 每分钟重放失败事件。
-     */
     @Scheduled(fixedDelay = 60000)
     public void retryFailed() {
         List<RelationEventInboxVO> list = inboxPort.fetchRetry(100);
@@ -44,9 +39,6 @@ public class RelationEventRetryJob {
         }
     }
 
-    /**
-     * 每日清理已完成 7 天前的记录。
-     */
     @Scheduled(cron = "0 0 3 * * ?")
     public void cleanDone() {
         long sevenDays = System.currentTimeMillis() - 7L * 24 * 3600 * 1000;
@@ -59,13 +51,10 @@ public class RelationEventRetryJob {
         String payload = po.getPayload();
         if ("FOLLOW".equals(type)) {
             RelationFollowEvent evt = objectMapper.readValue(payload, RelationFollowEvent.class);
-            eventPort.onFollow(evt.sourceId(), evt.targetId(), evt.status());
-        } else if ("FRIEND".equals(type)) {
-            RelationFriendEvent evt = objectMapper.readValue(payload, RelationFriendEvent.class);
-            eventPort.onFriendEstablished(evt.sourceId(), evt.targetId());
+            eventPort.onFollow(evt.eventId(), evt.sourceId(), evt.targetId(), evt.status());
         } else if ("BLOCK".equals(type)) {
             RelationBlockEvent evt = objectMapper.readValue(payload, RelationBlockEvent.class);
-            eventPort.onBlock(evt.sourceId(), evt.targetId());
+            eventPort.onBlock(evt.eventId(), evt.sourceId(), evt.targetId());
         } else {
             log.warn("未知事件类型，跳过 type={} fp={}", type, po.getFingerprint());
         }

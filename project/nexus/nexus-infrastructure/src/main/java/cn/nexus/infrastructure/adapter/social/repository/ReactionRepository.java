@@ -2,25 +2,22 @@ package cn.nexus.infrastructure.adapter.social.repository;
 
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import cn.nexus.domain.social.model.valobj.ReactionUserEdgeVO;
 import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDao;
 import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDeltaInboxDao;
 import cn.nexus.infrastructure.dao.social.IInteractionReactionDao;
 import cn.nexus.infrastructure.dao.social.po.InteractionReactionCountDeltaInboxPO;
 import cn.nexus.infrastructure.dao.social.po.InteractionReactionCountPO;
 import cn.nexus.infrastructure.dao.social.po.InteractionReactionPO;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.List;
-
-/**
- * 点赞仓储 MyBatis 实现。
- *
- * @author codex
- * @since 2026-01-20
- */
 @Repository
 @RequiredArgsConstructor
 @Transactional(rollbackFor = Exception.class, propagation = org.springframework.transaction.annotation.Propagation.REQUIRED)
@@ -40,7 +37,6 @@ public class ReactionRepository implements IReactionRepository {
         String targetType = target.getTargetType().getCode();
         Long targetId = target.getTargetId();
         String reactionType = target.getReactionType().getCode();
-
         for (int i = 0; i < userIds.size(); i += BATCH_SIZE) {
             int end = Math.min(userIds.size(), i + BATCH_SIZE);
             List<InteractionReactionPO> batch = new ArrayList<>(end - i);
@@ -70,7 +66,6 @@ public class ReactionRepository implements IReactionRepository {
         String targetType = target.getTargetType().getCode();
         Long targetId = target.getTargetId();
         String reactionType = target.getReactionType().getCode();
-
         for (int i = 0; i < userIds.size(); i += BATCH_SIZE) {
             int end = Math.min(userIds.size(), i + BATCH_SIZE);
             List<Long> batch = new ArrayList<>(end - i);
@@ -101,56 +96,24 @@ public class ReactionRepository implements IReactionRepository {
 
     @Override
     public void incrCount(ReactionTargetVO target, long delta) {
-        if (target == null) {
+        if (target == null || delta == 0) {
             return;
         }
-        if (delta == 0L) {
-            return;
-        }
-        reactionCountDao.incrCount(
-                target.getTargetType().getCode(),
-                target.getTargetId(),
-                target.getReactionType().getCode(),
-                delta
-        );
+        reactionCountDao.incrCount(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode(), delta);
     }
 
     @Override
     public boolean applyCountDeltaOnce(ReactionTargetVO target, String eventId, long delta) {
-        if (target == null || target.getTargetType() == null || target.getReactionType() == null) {
+        if (target == null || eventId == null || eventId.isBlank() || delta == 0) {
             return false;
         }
-        if (eventId == null || eventId.isBlank()) {
-            return false;
-        }
-        if (delta == 0L) {
-            return false;
-        }
-
-        String targetType = target.getTargetType().getCode();
-        Long targetId = target.getTargetId();
-        String reactionType = target.getReactionType().getCode();
-        if (targetType == null || targetType.isBlank() || targetId == null || reactionType == null || reactionType.isBlank()) {
-            return false;
-        }
-
-        InteractionReactionCountDeltaInboxPO inbox = new InteractionReactionCountDeltaInboxPO();
-        inbox.setEventId(eventId.trim());
-        inbox.setTargetType(targetType);
-        inbox.setTargetId(targetId);
-        inbox.setReactionType(reactionType);
-
-        int inserted = reactionCountDeltaInboxDao.insertIgnore(inbox);
+        InteractionReactionCountDeltaInboxPO po = new InteractionReactionCountDeltaInboxPO();
+        po.setEventId(eventId.trim());
+        int inserted = reactionCountDeltaInboxDao.insertIgnore(po);
         if (inserted <= 0) {
             return false;
         }
-
-        reactionCountDao.incrCount(
-                targetType,
-                targetId,
-                reactionType,
-                delta
-        );
+        incrCount(target, delta);
         return true;
     }
 
@@ -159,14 +122,81 @@ public class ReactionRepository implements IReactionRepository {
         if (target == null || userId == null) {
             return false;
         }
-        String targetType = target.getTargetType() == null ? null : target.getTargetType().getCode();
-        Long targetId = target.getTargetId();
-        String reactionType = target.getReactionType() == null ? null : target.getReactionType().getCode();
-        if (targetType == null || targetType.isBlank() || targetId == null || reactionType == null || reactionType.isBlank()) {
-            return false;
+        Integer flag = reactionDao.selectExists(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode(), userId);
+        return flag != null && flag == 1;
+    }
+
+    @Override
+    public int insertIgnore(ReactionTargetVO target, Long userId) {
+        if (target == null || userId == null) {
+            return 0;
         }
-        Integer exists = reactionDao.selectExists(targetType, targetId, reactionType, userId);
-        return exists != null && exists == 1;
+        return reactionDao.insertIgnore(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode(), userId);
+    }
+
+    @Override
+    public int deleteOne(ReactionTargetVO target, Long userId) {
+        if (target == null || userId == null) {
+            return 0;
+        }
+        return reactionDao.deleteOne(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode(), userId);
+    }
+
+    @Override
+    public long getCount(ReactionTargetVO target) {
+        if (target == null) {
+            return 0L;
+        }
+        Long count = reactionCountDao.selectCount(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode());
+        return count == null ? 0L : Math.max(0L, count);
+    }
+
+    @Override
+    public List<ReactionUserEdgeVO> pageUserEdgesByTarget(ReactionTargetVO target, String cursor, int limit) {
+        if (target == null || limit <= 0) {
+            return List.of();
+        }
+        Cursor parsed = Cursor.parse(cursor);
+        Date cursorTime = parsed == null ? null : new Date(parsed.timeMs());
+        Long cursorUserId = parsed == null ? null : parsed.userId();
+        List<InteractionReactionPO> rows = reactionDao.pageByTarget(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode(), cursorTime, cursorUserId, limit);
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<ReactionUserEdgeVO> result = new ArrayList<>(rows.size());
+        for (InteractionReactionPO row : rows) {
+            if (row == null || row.getUserId() == null) {
+                continue;
+            }
+            long likedAt = row.getUpdateTime() == null ? 0L : row.getUpdateTime().getTime();
+            result.add(ReactionUserEdgeVO.builder().userId(row.getUserId()).likedAt(likedAt).build());
+        }
+        return result;
+    }
+
+    @Override
+    public Set<Long> batchExists(ReactionTargetVO targetTemplate, Long userId, List<Long> targetIds) {
+        if (targetTemplate == null || userId == null || targetIds == null || targetIds.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> ids = reactionDao.batchExists(targetTemplate.getTargetType().getCode(), targetTemplate.getReactionType().getCode(), userId, targetIds);
+        return ids == null ? Set.of() : new LinkedHashSet<>(ids);
+    }
+
+    private record Cursor(long timeMs, long userId) {
+        static Cursor parse(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            String[] parts = raw.trim().split(":", 2);
+            if (parts.length != 2) {
+                return null;
+            }
+            try {
+                return new Cursor(Long.parseLong(parts[0]), Long.parseLong(parts[1]));
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
     }
 }
-

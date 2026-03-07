@@ -47,6 +47,14 @@
         </if>
     </select>
 
+    <select id="countActiveBySource" resultType="int">
+        SELECT COUNT(1)
+        FROM user_relation
+        WHERE source_id = #{sourceId}
+          AND relation_type = #{relationType}
+          AND status = #{status}
+    </select>
+
     <select id="selectByTarget" resultMap="RelationMap">
         SELECT id, source_id, target_id, relation_type, status, group_id, create_time
         FROM user_relation
@@ -65,6 +73,14 @@
         </if>
     </select>
 
+    <select id="countActiveByTarget" resultType="int">
+        SELECT COUNT(1)
+        FROM user_relation
+        WHERE target_id = #{targetId}
+          AND relation_type = #{relationType}
+          AND status = #{status}
+    </select>
+
     <select id="selectBigVFollowingIds" resultType="java.lang.Long">
         SELECT r.target_id
         FROM user_relation r
@@ -72,6 +88,38 @@
           AND r.relation_type = #{relationType}
           AND r.status = #{status}
           AND (SELECT COUNT(1) FROM user_follower uf WHERE uf.user_id = r.target_id) &gt;= #{followerThreshold}
+        LIMIT #{limit}
+    </select>
+
+    <select id="pageActiveBySource" resultMap="RelationMap">
+        SELECT id, source_id, target_id, relation_type, status, group_id, create_time
+        FROM user_relation
+        WHERE source_id = #{sourceId}
+          AND relation_type = #{relationType}
+          AND status = #{status}
+          <if test="cursorTime != null">
+              AND (
+                  create_time &lt; #{cursorTime}
+                  OR (create_time = #{cursorTime} AND target_id &lt; #{cursorTargetId})
+              )
+          </if>
+        ORDER BY create_time DESC, target_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="pageActiveByTarget" resultMap="RelationMap">
+        SELECT id, source_id, target_id, relation_type, status, group_id, create_time
+        FROM user_relation
+        WHERE target_id = #{targetId}
+          AND relation_type = #{relationType}
+          AND status = #{status}
+          <if test="cursorTime != null">
+              AND (
+                  create_time &lt; #{cursorTime}
+                  OR (create_time = #{cursorTime} AND source_id &lt; #{cursorSourceId})
+              )
+          </if>
+        ORDER BY create_time DESC, source_id DESC
         LIMIT #{limit}
     </select>
 </mapper>

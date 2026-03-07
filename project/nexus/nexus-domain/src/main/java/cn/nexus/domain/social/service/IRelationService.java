@@ -1,6 +1,7 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.model.valobj.*;
+import cn.nexus.domain.social.model.valobj.FollowResultVO;
+import cn.nexus.domain.social.model.valobj.OperationResultVO;
 
 /**
  * 关系领域服务。
@@ -17,10 +18,6 @@ public interface IRelationService {
      * @return 结果 {@link FollowResultVO}
      */
     FollowResultVO unfollow(Long sourceId, Long targetId);
-
-    FriendRequestResultVO friendRequest(Long sourceId, Long targetId, String verifyMsg, String sourceChannel);
-
-    FriendDecisionResultVO friendDecision(java.util.List<Long> requestIds, String action);
 
     OperationResultVO block(Long sourceId, Long targetId);
 }

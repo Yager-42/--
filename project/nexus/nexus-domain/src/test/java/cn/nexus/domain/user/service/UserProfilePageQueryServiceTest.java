@@ -72,10 +72,9 @@ class UserProfilePageQueryServiceTest {
                 .avatarUrl("a2")
                 .build());
         when(userStatusRepository.getStatus(2L)).thenReturn("ACTIVE");
-        when(relationCachePort.getFollowCount(2L)).thenReturn(11L);
-        when(relationRepository.countFollowerIds(2L)).thenReturn(22);
-        when(relationRepository.countRelationsBySource(2L, 2)).thenReturn(3);
-        when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().id(10L).build());
+        when(relationCachePort.getFollowingCount(2L)).thenReturn(11L);
+        when(relationCachePort.getFollowerCount(2L)).thenReturn(22L);
+        when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().id(10L).status(1).build());
         when(riskService.userStatus(2L)).thenReturn(UserRiskStatusVO.builder()
                 .status("NORMAL")
                 .capabilities(List.of("POST", "COMMENT"))
@@ -89,10 +88,8 @@ class UserProfilePageQueryServiceTest {
         assertNotNull(res.getRelation());
         assertEquals(11L, res.getRelation().getFollowCount());
         assertEquals(22L, res.getRelation().getFollowerCount());
-        assertEquals(3L, res.getRelation().getFriendCount());
         assertEquals(true, res.getRelation().isFollow());
         assertNotNull(res.getRisk());
         assertEquals("NORMAL", res.getRisk().getStatus());
     }
 }
-

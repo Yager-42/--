@@ -6,10 +6,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -22,14 +18,12 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
 
 /**
  * Gorse 推荐端口实现：通过 REST API 调用推荐系统。
- *
- * <p>注意：baseUrl 为空表示未启用 gorse；此时读接口返回空列表，写接口静默 no-op。</p>
- *
- * @author codex
- * @since 2026-01-26
  */
 @Slf4j
 @Component
@@ -62,12 +56,10 @@ public class GorseRecommendationPort implements IRecommendationPort {
         if (baseUrl.isEmpty()) {
             return List.of();
         }
-        int normalizedN = Math.max(1, n);
-        String url = baseUrl + "/api/recommend/" + urlEncode(String.valueOf(userId)) + "?n=" + normalizedN;
+        String url = baseUrl + "/api/recommend/" + urlEncode(String.valueOf(userId)) + "?n=" + Math.max(1, n);
         try {
             String body = doRequest("GET", url, null);
-            List<String> ids = objectMapper.readValue(body, new TypeReference<>() {
-            });
+            List<String> ids = objectMapper.readValue(body, new TypeReference<>() {});
             return parseIdList(ids);
         } catch (Exception e) {
             throw new RuntimeException("gorse recommend failed", e);
@@ -75,63 +67,74 @@ public class GorseRecommendationPort implements IRecommendationPort {
     }
 
     @Override
-    public List<Long> popular(Long userId, int n, int offset) {
-        if (userId == null || n <= 0 || offset < 0) {
+    public List<Long> nonPersonalized(String name, Long userId, int n, int offset) {
+        if (name == null || name.isBlank() || n <= 0 || offset < 0) {
             return List.of();
         }
         String baseUrl = baseUrl();
         if (baseUrl.isEmpty()) {
             return List.of();
         }
-        int normalizedN = Math.max(1, n);
-        int normalizedOffset = Math.max(0, offset);
-        String url = baseUrl + "/api/popular?user-id=" + userId + "&n=" + normalizedN + "&offset=" + normalizedOffset;
+        String url = baseUrl + "/api/non-personalized/" + urlEncode(name.trim())
+                + "?n=" + Math.max(1, n)
+                + "&offset=" + Math.max(0, offset)
+                + (userId == null ? "" : "&user-id=" + userId);
         try {
             String body = doRequest("GET", url, null);
-            List<GorseIdScore> items = objectMapper.readValue(body, new TypeReference<>() {
-            });
-            List<String> ids = new ArrayList<>(items == null ? 0 : items.size());
-            if (items != null) {
-                for (GorseIdScore item : items) {
-                    if (item == null || item.id == null || item.id.isBlank()) {
-                        continue;
-                    }
-                    ids.add(item.id);
-                }
-            }
-            return parseIdList(ids);
+            List<GorseIdScore> items = objectMapper.readValue(body, new TypeReference<>() {});
+            return parseScoredIdList(items);
         } catch (Exception e) {
-            throw new RuntimeException("gorse popular failed", e);
+            throw new RuntimeException("gorse non-personalized failed", e);
         }
     }
 
     @Override
-    public List<Long> neighbors(Long postId, int n) {
-        if (postId == null || n <= 0) {
+    public List<Long> sessionRecommend(String sessionId, List<Long> currentItemIds, int n) {
+        if (sessionId == null || sessionId.isBlank() || n <= 0) {
             return List.of();
         }
         String baseUrl = baseUrl();
         if (baseUrl.isEmpty()) {
             return List.of();
         }
-        int normalizedN = Math.max(1, n);
-        String url = baseUrl + "/api/item/" + urlEncode(String.valueOf(postId)) + "/neighbors?n=" + normalizedN;
+        String url = baseUrl + "/api/session/recommend?n=" + Math.max(1, n);
         try {
-            String body = doRequest("GET", url, null);
-            List<GorseIdScore> items = objectMapper.readValue(body, new TypeReference<>() {
-            });
-            List<String> ids = new ArrayList<>(items == null ? 0 : items.size());
-            if (items != null) {
-                for (GorseIdScore item : items) {
-                    if (item == null || item.id == null || item.id.isBlank()) {
+            List<GorseFeedbackBody> req = new ArrayList<>();
+            long nowMs = System.currentTimeMillis();
+            if (currentItemIds != null) {
+                for (Long itemId : currentItemIds) {
+                    if (itemId == null) {
                         continue;
                     }
-                    ids.add(item.id);
+                    req.add(new GorseFeedbackBody("read", String.valueOf(itemId), formatTsMs(nowMs), sessionId));
                 }
             }
-            return parseIdList(ids);
+            String body = objectMapper.writeValueAsString(req);
+            String resp = doRequest("POST", url, body);
+            List<GorseIdScore> items = objectMapper.readValue(resp, new TypeReference<>() {});
+            return parseScoredIdList(items);
         } catch (Exception e) {
-            throw new RuntimeException("gorse neighbors failed", e);
+            throw new RuntimeException("gorse session recommend failed", e);
+        }
+    }
+
+    @Override
+    public List<Long> itemToItem(String name, Long itemId, int n) {
+        if (name == null || name.isBlank() || itemId == null || n <= 0) {
+            return List.of();
+        }
+        String baseUrl = baseUrl();
+        if (baseUrl.isEmpty()) {
+            return List.of();
+        }
+        String url = baseUrl + "/api/item-to-item/" + urlEncode(name.trim()) + "/" + urlEncode(String.valueOf(itemId))
+                + "?n=" + Math.max(1, n);
+        try {
+            String body = doRequest("GET", url, null);
+            List<GorseIdScore> items = objectMapper.readValue(body, new TypeReference<>() {});
+            return parseScoredIdList(items);
+        } catch (Exception e) {
+            throw new RuntimeException("gorse item-to-item failed", e);
         }
     }
 
@@ -157,10 +160,7 @@ public class GorseRecommendationPort implements IRecommendationPort {
 
     @Override
     public void insertFeedback(Long userId, Long postId, String feedbackType, Long timestampMs) {
-        if (userId == null || postId == null) {
-            return;
-        }
-        if (feedbackType == null || feedbackType.isBlank()) {
+        if (userId == null || postId == null || feedbackType == null || feedbackType.isBlank()) {
             return;
         }
         String baseUrl = baseUrl();
@@ -170,12 +170,7 @@ public class GorseRecommendationPort implements IRecommendationPort {
         long safeTs = timestampMs == null ? System.currentTimeMillis() : timestampMs;
         String url = baseUrl + "/api/feedback";
         try {
-            List<GorseFeedbackBody> req = List.of(new GorseFeedbackBody(
-                    feedbackType.trim(),
-                    String.valueOf(postId),
-                    formatTsMs(safeTs),
-                    String.valueOf(userId)
-            ));
+            List<GorseFeedbackBody> req = List.of(new GorseFeedbackBody(feedbackType.trim(), String.valueOf(postId), formatTsMs(safeTs), String.valueOf(userId)));
             String body = objectMapper.writeValueAsString(req);
             doRequest("POST", url, body);
         } catch (Exception e) {
@@ -226,10 +221,26 @@ public class GorseRecommendationPort implements IRecommendationPort {
         List<Long> result = new ArrayList<>(ids.size());
         for (String id : ids) {
             Long parsed = parseLong(id);
-            if (parsed == null) {
+            if (parsed != null) {
+                result.add(parsed);
+            }
+        }
+        return result;
+    }
+
+    private List<Long> parseScoredIdList(List<GorseIdScore> items) {
+        if (items == null || items.isEmpty()) {
+            return List.of();
+        }
+        List<Long> result = new ArrayList<>(items.size());
+        for (GorseIdScore item : items) {
+            if (item == null || item.id == null || item.id.isBlank()) {
                 continue;
             }
-            result.add(parsed);
+            Long parsed = parseLong(item.id);
+            if (parsed != null) {
+                result.add(parsed);
+            }
         }
         return result;
     }
@@ -252,7 +263,6 @@ public class GorseRecommendationPort implements IRecommendationPort {
     private String doRequest(String method, String url, String body) throws Exception {
         HttpClient client = httpClient;
         if (client == null) {
-            // 理论上不会发生：作为兜底，避免 NPE。
             init();
             client = httpClient;
         }

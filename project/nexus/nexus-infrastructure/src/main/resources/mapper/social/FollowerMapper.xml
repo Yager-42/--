@@ -2,6 +2,13 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="cn.nexus.infrastructure.dao.social.IFollowerDao">
 
+    <resultMap id="FollowerMap" type="cn.nexus.infrastructure.dao.social.po.FollowerPO">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="followerId" column="follower_id"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.FollowerPO">
         INSERT INTO user_follower(id, user_id, follower_id)
         VALUES(#{id}, #{userId}, #{followerId})
@@ -16,7 +23,7 @@
         SELECT follower_id
         FROM user_follower
         WHERE user_id = #{userId}
-        ORDER BY id ASC
+        ORDER BY create_time DESC, follower_id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
@@ -30,7 +37,23 @@
         SELECT user_id
         FROM user_follower
         WHERE follower_id = #{followerId}
-        ORDER BY id ASC
+        ORDER BY create_time DESC, user_id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="selectFollowerRows" resultMap="FollowerMap">
+        SELECT id, user_id, follower_id, create_time
+        FROM user_follower
+        WHERE user_id = #{userId}
+        ORDER BY create_time DESC, follower_id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="selectFollowingRows" resultMap="FollowerMap">
+        SELECT id, user_id, follower_id, create_time
+        FROM user_follower
+        WHERE follower_id = #{followerId}
+        ORDER BY create_time DESC, user_id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
 </mapper>

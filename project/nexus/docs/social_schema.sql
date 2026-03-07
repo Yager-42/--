@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS `user_relation` (
   `id` BIGINT NOT NULL,
   `source_id` BIGINT NOT NULL COMMENT '发起方ID (Sharding Key)',
   `target_id` BIGINT NOT NULL COMMENT '目标方ID',
-  `relation_type` TINYINT NOT NULL COMMENT '1关注，2好友，3屏蔽',
-  `status` TINYINT DEFAULT 1 COMMENT '1正常/通过，2待审批，3已拒绝',
+  `relation_type` TINYINT NOT NULL COMMENT '1关注，3屏蔽',
+  `status` TINYINT DEFAULT 1 COMMENT '1正常/通过',
   `group_id` BIGINT DEFAULT 0 COMMENT '分组ID（关注分组）',
   `version` BIGINT DEFAULT 0 COMMENT '乐观锁',
   `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -54,20 +54,6 @@ CREATE TABLE IF NOT EXISTS `user_follower` (
   UNIQUE KEY `uk_user_follower` (`user_id`, `follower_id`),
   KEY `idx_user_time` (`user_id`, `create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户粉丝反向表';
-
--- 好友请求表（待审批/已处理）
-CREATE TABLE IF NOT EXISTS `friend_request` (
-  `request_id` BIGINT NOT NULL,
-  `source_id` BIGINT NOT NULL,
-  `target_id` BIGINT NOT NULL,
-  `idempotent_key` VARCHAR(64) NOT NULL,
-  `status` TINYINT DEFAULT 2 COMMENT '1通过，2待审批，3已拒绝',
-  `version` BIGINT DEFAULT 0 COMMENT '乐观锁',
-  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`request_id`),
-  UNIQUE KEY `uk_idem` (`idempotent_key`),
-  KEY `idx_target_status` (`target_id`, `status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='好友请求';
 
 -- 关注分组表（列表管理）
 CREATE TABLE IF NOT EXISTS `user_relation_group` (
@@ -99,10 +85,24 @@ CREATE TABLE IF NOT EXISTS `user_privacy_setting` (
   PRIMARY KEY (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户隐私配置';
 
+-- 关系事件 Outbox（事务内落库，轮询发布 MQ）
+CREATE TABLE IF NOT EXISTS `relation_event_outbox` (
+  `event_id` BIGINT NOT NULL,
+  `event_type` VARCHAR(32) NOT NULL,
+  `payload` TEXT NOT NULL,
+  `status` VARCHAR(16) NOT NULL DEFAULT 'NEW',
+  `retry_count` INT NOT NULL DEFAULT 0,
+  `next_retry_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`event_id`),
+  KEY `idx_relation_outbox_status_retry` (`status`, `next_retry_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='关系事件 Outbox';
+
 -- 关系事件收件箱（MQ 幂等）
 CREATE TABLE IF NOT EXISTS `relation_event_inbox` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
-  `event_type` VARCHAR(32) NOT NULL COMMENT '事件类型 FOLLOW/FRIEND/BLOCK',
+  `event_type` VARCHAR(32) NOT NULL COMMENT '事件类型 FOLLOW/BLOCK',
   `fingerprint` VARCHAR(128) NOT NULL COMMENT '事件指纹，唯一去重',
   `payload` TEXT NOT NULL COMMENT '事件内容序列化',
   `status` VARCHAR(32) NOT NULL DEFAULT 'NEW' COMMENT '状态 NEW/PROCESSED/FAILED',

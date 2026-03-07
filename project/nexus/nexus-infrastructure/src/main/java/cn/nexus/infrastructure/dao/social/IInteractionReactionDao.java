@@ -1,16 +1,13 @@
 package cn.nexus.infrastructure.dao.social;
 
 import cn.nexus.infrastructure.dao.social.po.InteractionReactionPO;
+import java.util.Date;
+import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
-import java.util.List;
-
 /**
  * 互动-点赞/态势事实表 DAO。
- *
- * @author codex
- * @since 2026-01-20
  */
 @Mapper
 public interface IInteractionReactionDao {
@@ -26,5 +23,26 @@ public interface IInteractionReactionDao {
                          @Param("targetId") Long targetId,
                          @Param("reactionType") String reactionType,
                          @Param("userId") Long userId);
-}
 
+    int insertIgnore(@Param("targetType") String targetType,
+                     @Param("targetId") Long targetId,
+                     @Param("reactionType") String reactionType,
+                     @Param("userId") Long userId);
+
+    int deleteOne(@Param("targetType") String targetType,
+                  @Param("targetId") Long targetId,
+                  @Param("reactionType") String reactionType,
+                  @Param("userId") Long userId);
+
+    List<InteractionReactionPO> pageByTarget(@Param("targetType") String targetType,
+                                             @Param("targetId") Long targetId,
+                                             @Param("reactionType") String reactionType,
+                                             @Param("cursorTime") Date cursorTime,
+                                             @Param("cursorUserId") Long cursorUserId,
+                                             @Param("limit") Integer limit);
+
+    List<Long> batchExists(@Param("targetType") String targetType,
+                           @Param("reactionType") String reactionType,
+                           @Param("userId") Long userId,
+                           @Param("targetIds") List<Long> targetIds);
+}

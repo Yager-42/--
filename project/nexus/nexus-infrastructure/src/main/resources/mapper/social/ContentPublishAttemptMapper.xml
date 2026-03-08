@@ -11,6 +11,7 @@
         <result property="attemptStatus" column="attempt_status"/>
         <result property="riskStatus" column="risk_status"/>
         <result property="transcodeStatus" column="transcode_status"/>
+        <result property="snapshotTitle" column="snapshot_title"/>
         <result property="snapshotContent" column="snapshot_content"/>
         <result property="snapshotMedia" column="snapshot_media"/>
         <result property="locationInfo" column="location_info"/>
@@ -26,14 +27,14 @@
         INSERT INTO content_publish_attempt(
             attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
             attempt_status, risk_status, transcode_status,
-            snapshot_content, snapshot_media, location_info, visibility,
+            snapshot_title, snapshot_content, snapshot_media, location_info, visibility,
             published_version_num, error_code, error_message,
             create_time, update_time
         )
         VALUES(
             #{attemptId}, #{postId}, #{userId}, #{idempotentToken}, #{transcodeJobId},
             #{attemptStatus}, #{riskStatus}, #{transcodeStatus},
-            #{snapshotContent}, #{snapshotMedia}, #{locationInfo}, #{visibility},
+            #{snapshotTitle}, #{snapshotContent}, #{snapshotMedia}, #{locationInfo}, #{visibility},
             #{publishedVersionNum}, #{errorCode}, #{errorMessage},
             #{createTime}, #{updateTime}
         )
@@ -42,7 +43,7 @@
     <select id="selectById" resultMap="ContentPublishAttemptMap">
         SELECT attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
                attempt_status, risk_status, transcode_status,
-               snapshot_content, snapshot_media, location_info, visibility,
+               snapshot_title, snapshot_content, snapshot_media, location_info, visibility,
                published_version_num, error_code, error_message,
                create_time, update_time
         FROM content_publish_attempt
@@ -52,7 +53,7 @@
     <select id="selectByToken" resultMap="ContentPublishAttemptMap">
         SELECT attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
                attempt_status, risk_status, transcode_status,
-               snapshot_content, snapshot_media, location_info, visibility,
+               snapshot_title, snapshot_content, snapshot_media, location_info, visibility,
                published_version_num, error_code, error_message,
                create_time, update_time
         FROM content_publish_attempt
@@ -62,7 +63,7 @@
     <select id="selectLatestActiveAttempt" resultMap="ContentPublishAttemptMap">
         SELECT attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
                attempt_status, risk_status, transcode_status,
-               snapshot_content, snapshot_media, location_info, visibility,
+               snapshot_title, snapshot_content, snapshot_media, location_info, visibility,
                published_version_num, error_code, error_message,
                create_time, update_time
         FROM content_publish_attempt

@@ -17,6 +17,7 @@ import java.util.List;
 public class ContentPostEntity {
     private Long postId;
     private Long userId;
+    private String title;
     /**
      * Post body UUID stored in KV.
      */
@@ -42,4 +43,5 @@ public class ContentPostEntity {
     private Integer versionNum;
     private Boolean edited;
     private Long createTime;
+    private Long publishTime;
 }

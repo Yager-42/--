@@ -22,6 +22,12 @@ public interface IContentPostDao {
                                       @Param("expectedStatus") Integer expectedStatus,
                                       @Param("expectedVersion") Integer expectedVersion);
 
+    int updateStatusAndPublishTimeIfMatchAndVersion(@Param("postId") Long postId,
+                                                    @Param("status") Integer status,
+                                                    @Param("publishTime") java.util.Date publishTime,
+                                                    @Param("expectedStatus") Integer expectedStatus,
+                                                    @Param("expectedVersion") Integer expectedVersion);
+
     int softDeleteIfMatchAndVersion(@Param("postId") Long postId,
                                     @Param("deleteTime") java.util.Date deleteTime,
                                     @Param("expectedStatus") Integer expectedStatus,
@@ -49,6 +55,8 @@ public interface IContentPostDao {
     int deleteSoftDeletedByIds(@Param("postIds") java.util.List<Long> postIds, @Param("cutoff") java.util.Date cutoff);
 
     int updateContentAndVersion(@Param("postId") Long postId,
+                                @Param("title") String title,
+                                @Param("publishTime") java.util.Date publishTime,
                                 @Param("contentUuid") String contentUuid,
                                 @Param("mediaInfo") String mediaInfo,
                                 @Param("locationInfo") String locationInfo,
@@ -91,4 +99,10 @@ public interface IContentPostDao {
     java.util.List<ContentPostPO> selectPublishedPage(@Param("cursorTime") java.util.Date cursorTime,
                                                       @Param("cursorPostId") Long cursorPostId,
                                                       @Param("limit") Integer limit);
+
+    java.util.List<ContentPostPO> selectPublishedPageForSearch(@Param("publishedStatus") Integer publishedStatus,
+                                                               @Param("publicVisibility") Integer publicVisibility,
+                                                               @Param("cursorPublishTime") java.util.Date cursorPublishTime,
+                                                               @Param("cursorPostId") Long cursorPostId,
+                                                               @Param("limit") Integer limit);
 }

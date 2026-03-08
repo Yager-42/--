@@ -118,7 +118,7 @@ risk:
 search:
   es:
     endpoints: http://127.0.0.1:9200
-    indexAlias: social_search
+    indexAlias: zhiguang_content_index
   mq:
     concurrency: 2
     prefetch: 20
@@ -127,23 +127,12 @@ search:
       initialIntervalMs: 1000
       multiplier: 3.0
       maxIntervalMs: 60000
-  result:
-    defaultLimit: 20
-    maxLimit: 50
   backfill:
-    enabled: false
+    enabled: true
     pageSize: 500
     checkpoint:
       enabled: true
       redisKey: search:backfill:cursor
-  history:
-    maxSize: 20
-    ttlDays: 90
-  trending:
-    windowDays: 7
-    dailyTtlDays: 8
-    unionTtlSeconds: 120
-    topKForSuggestScan: 200
 
 reaction:
   sync:

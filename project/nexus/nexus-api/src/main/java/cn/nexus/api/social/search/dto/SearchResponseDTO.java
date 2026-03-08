@@ -1,17 +1,17 @@
 package cn.nexus.api.social.search.dto;
 
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/**
- * 热门搜索请求。
- */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class SearchTrendingRequestDTO {
-    private String category;
+public class SearchResponseDTO {
+    private List<SearchItemDTO> items;
+    private String nextAfter;
+    private boolean hasMore;
 }

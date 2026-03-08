@@ -336,6 +336,24 @@ public class ContentRepository implements IContentRepository {
     }
 
     @Override
+    public boolean updatePostStatusAndPublishTimeIfMatchVersion(Long postId, Integer status, Integer expectedStatus, Integer expectedVersion, Long publishTime) {
+        if (postId == null || status == null || expectedStatus == null || expectedVersion == null || publishTime == null) {
+            return false;
+        }
+        int rows = contentPostDao.updateStatusAndPublishTimeIfMatchAndVersion(
+                postId,
+                status,
+                new Date(publishTime),
+                expectedStatus,
+                expectedVersion);
+        boolean updated = rows > 0;
+        if (updated) {
+            invalidatePostCache(postId);
+        }
+        return updated;
+    }
+
+    @Override
     public boolean updatePostSummary(Long postId, String summary, Integer summaryStatus) {
         if (postId == null || summaryStatus == null) {
             return false;
@@ -350,10 +368,13 @@ public class ContentRepository implements IContentRepository {
 
     @Override
     public boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
-                                              String contentUuid, String mediaInfo, String locationInfo, Integer visibility) {
+                                              String title, Long publishTime, String contentUuid, String mediaInfo,
+                                              String locationInfo, Integer visibility) {
         Integer expectedVersion = versionNum == null ? null : Math.max(0, versionNum - 1);
         int rows = contentPostDao.updateContentAndVersion(
                 postId,
+                title,
+                publishTime == null ? null : new Date(publishTime),
                 contentUuid,
                 mediaInfo,
                 locationInfo,
@@ -539,6 +560,7 @@ public class ContentRepository implements IContentRepository {
         return ContentPostEntity.builder()
                 .postId(post.getPostId())
                 .userId(post.getUserId())
+                .title(post.getTitle())
                 .contentUuid(post.getContentUuid())
                 .contentText(post.getContentText())
                 .summary(post.getSummary())
@@ -552,6 +574,7 @@ public class ContentRepository implements IContentRepository {
                 .versionNum(post.getVersionNum())
                 .edited(post.getEdited())
                 .createTime(post.getCreateTime())
+                .publishTime(post.getPublishTime())
                 .build();
     }
 
@@ -574,6 +597,7 @@ public class ContentRepository implements IContentRepository {
         ContentDraftPO po = new ContentDraftPO();
         po.setDraftId(entity.getDraftId());
         po.setUserId(entity.getUserId());
+        po.setTitle(entity.getTitle());
         po.setDraftContent(entity.getDraftContent());
         po.setMediaIds(entity.getMediaIds());
         po.setDeviceId(entity.getDeviceId());
@@ -589,6 +613,7 @@ public class ContentRepository implements IContentRepository {
         return ContentDraftEntity.builder()
                 .draftId(po.getDraftId())
                 .userId(po.getUserId())
+                .title(po.getTitle())
                 .draftContent(po.getDraftContent())
                 .mediaIds(po.getMediaIds())
                 .deviceId(po.getDeviceId())
@@ -601,6 +626,7 @@ public class ContentRepository implements IContentRepository {
         ContentPostPO po = new ContentPostPO();
         po.setPostId(entity.getPostId());
         po.setUserId(entity.getUserId());
+        po.setTitle(entity.getTitle());
         po.setContentUuid(entity.getContentUuid());
         po.setSummary(entity.getSummary());
         po.setSummaryStatus(entity.getSummaryStatus());
@@ -612,6 +638,7 @@ public class ContentRepository implements IContentRepository {
         po.setVersionNum(entity.getVersionNum());
         po.setIsEdited(Boolean.TRUE.equals(entity.getEdited()) ? 1 : 0);
         po.setCreateTime(entity.getCreateTime() == null ? null : new Date(entity.getCreateTime()));
+        po.setPublishTime(entity.getPublishTime() == null ? null : new Date(entity.getPublishTime()));
         return po;
     }
 
@@ -622,6 +649,7 @@ public class ContentRepository implements IContentRepository {
         return ContentPostEntity.builder()
                 .postId(po.getPostId())
                 .userId(po.getUserId())
+                .title(po.getTitle())
                 .contentUuid(po.getContentUuid())
                 .contentText(null)
                 .summary(po.getSummary())
@@ -635,6 +663,7 @@ public class ContentRepository implements IContentRepository {
                 .versionNum(po.getVersionNum())
                 .edited(Objects.equals(po.getIsEdited(), 1))
                 .createTime(po.getCreateTime() == null ? null : po.getCreateTime().getTime())
+                .publishTime(po.getPublishTime() == null ? null : po.getPublishTime().getTime())
                 .build();
     }
 
@@ -758,6 +787,7 @@ public class ContentRepository implements IContentRepository {
         po.setHistoryId(entity.getHistoryId());
         po.setPostId(entity.getPostId());
         po.setVersionNum(entity.getVersionNum());
+        po.setSnapshotTitle(entity.getSnapshotTitle());
         po.setSnapshotContent(entity.getSnapshotContent());
         po.setSnapshotMedia(entity.getSnapshotMedia());
         po.setCreateTime(entity.getCreateTime() == null ? null : new Date(entity.getCreateTime()));
@@ -772,6 +802,7 @@ public class ContentRepository implements IContentRepository {
                 .historyId(po.getHistoryId())
                 .postId(po.getPostId())
                 .versionNum(po.getVersionNum())
+                .snapshotTitle(po.getSnapshotTitle())
                 .snapshotContent(po.getSnapshotContent())
                 .snapshotMedia(po.getSnapshotMedia())
                 .createTime(po.getCreateTime() == null ? null : po.getCreateTime().getTime())

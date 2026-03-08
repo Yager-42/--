@@ -5,6 +5,7 @@
     <resultMap id="ContentDraftMap" type="cn.nexus.infrastructure.dao.social.po.ContentDraftPO">
         <id property="draftId" column="draft_id"/>
         <result property="userId" column="user_id"/>
+        <result property="title" column="title"/>
         <result property="draftContent" column="draft_content"/>
         <result property="mediaIds" column="media_ids"/>
         <result property="deviceId" column="device_id"/>
@@ -13,9 +14,10 @@
     </resultMap>
 
     <insert id="insertOrUpdate" parameterType="cn.nexus.infrastructure.dao.social.po.ContentDraftPO">
-        INSERT INTO content_draft(draft_id, user_id, draft_content, media_ids, device_id, client_version, update_time)
-        VALUES(#{draftId}, #{userId}, #{draftContent}, #{mediaIds}, #{deviceId}, #{clientVersion}, NOW())
+        INSERT INTO content_draft(draft_id, user_id, title, draft_content, media_ids, device_id, client_version, update_time)
+        VALUES(#{draftId}, #{userId}, #{title}, #{draftContent}, #{mediaIds}, #{deviceId}, #{clientVersion}, NOW())
         ON DUPLICATE KEY UPDATE
+            title = VALUES(title),
             draft_content = VALUES(draft_content),
             media_ids = VALUES(media_ids),
             device_id = VALUES(device_id),
@@ -24,13 +26,13 @@
     </insert>
 
     <select id="selectById" resultMap="ContentDraftMap">
-        SELECT draft_id, user_id, draft_content, media_ids, device_id, client_version, update_time
+        SELECT draft_id, user_id, title, draft_content, media_ids, device_id, client_version, update_time
         FROM content_draft
         WHERE draft_id = #{draftId}
     </select>
 
     <select id="selectByIdForUpdate" resultMap="ContentDraftMap">
-        SELECT draft_id, user_id, draft_content, media_ids, device_id, client_version, update_time
+        SELECT draft_id, user_id, title, draft_content, media_ids, device_id, client_version, update_time
         FROM content_draft
         WHERE draft_id = #{draftId}
         FOR UPDATE

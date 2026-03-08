@@ -14,6 +14,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class DraftSyncRequestDTO {
     private Long draftId;
+    private String title;
     private String diffContent;
     private Long clientVersion;
     private String deviceId;

@@ -6,18 +6,19 @@
         <id property="historyId" column="history_id"/>
         <result property="postId" column="post_id"/>
         <result property="versionNum" column="version_num"/>
+        <result property="snapshotTitle" column="snapshot_title"/>
         <result property="snapshotContent" column="snapshot_content"/>
         <result property="snapshotMedia" column="snapshot_media"/>
         <result property="createTime" column="create_time"/>
     </resultMap>
 
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentHistoryPO">
-        INSERT INTO content_history(history_id, post_id, version_num, snapshot_content, snapshot_media, create_time)
-        VALUES(#{historyId}, #{postId}, #{versionNum}, #{snapshotContent}, #{snapshotMedia}, NOW())
+        INSERT INTO content_history(history_id, post_id, version_num, snapshot_title, snapshot_content, snapshot_media, create_time)
+        VALUES(#{historyId}, #{postId}, #{versionNum}, #{snapshotTitle}, #{snapshotContent}, #{snapshotMedia}, NOW())
     </insert>
 
     <select id="selectByPostId" resultMap="ContentHistoryMap">
-        SELECT history_id, post_id, version_num, snapshot_content, snapshot_media, create_time
+        SELECT history_id, post_id, version_num, snapshot_title, snapshot_content, snapshot_media, create_time
         FROM content_history
         WHERE post_id = #{postId}
         ORDER BY version_num DESC
@@ -30,7 +31,7 @@
     </select>
 
     <select id="selectOne" resultMap="ContentHistoryMap">
-        SELECT history_id, post_id, version_num, snapshot_content, snapshot_media, create_time
+        SELECT history_id, post_id, version_num, snapshot_title, snapshot_content, snapshot_media, create_time
         FROM content_history
         WHERE post_id = #{postId} AND version_num = #{versionNum}
     </select>

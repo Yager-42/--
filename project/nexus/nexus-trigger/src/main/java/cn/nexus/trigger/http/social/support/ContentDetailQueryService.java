@@ -97,6 +97,7 @@ public class ContentDetailQueryService {
                 .authorId(authorId)
                 .authorNickname(author == null ? "" : safe(author.getNickname(), ""))
                 .authorAvatarUrl(author == null ? "" : safe(author.getAvatarUrl(), ""))
+                .title(post.getTitle())
                 .content(content == null ? "" : content)
                 .summary(post.getSummary())
                 .summaryStatus(post.getSummaryStatus())

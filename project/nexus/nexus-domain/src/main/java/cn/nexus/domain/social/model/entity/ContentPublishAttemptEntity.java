@@ -23,6 +23,7 @@ public class ContentPublishAttemptEntity {
     private Integer riskStatus;
     private Integer transcodeStatus;
 
+    private String snapshotTitle;
     private String snapshotContent;
     private String snapshotMedia;
     private String locationInfo;

@@ -23,6 +23,7 @@ public class PublishContentRequestDTO {
      */
     private Long postId;
     private Long userId;
+    private String title;
     private String text;
     private String mediaInfo;
     private String location;

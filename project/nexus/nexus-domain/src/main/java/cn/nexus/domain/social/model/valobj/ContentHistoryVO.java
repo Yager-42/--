@@ -31,6 +31,7 @@ public class ContentHistoryVO {
     @AllArgsConstructor
     public static class ContentVersionVO {
         private Long versionId;
+        private String title;
         private String content;
         private Long time;
     }

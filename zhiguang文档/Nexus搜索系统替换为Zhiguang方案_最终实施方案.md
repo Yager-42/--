@@ -12,9 +12,9 @@
 
 - `1B`：对外搜索 API 改成 `zhiguang` 风格
 - `2A`：删除 `history` 和 `trending`
-- `3B`：搜索索引增量链路改成 `Outbox -> Canal -> Kafka -> Search Consumer -> ES`
+- `3B`：搜索索引增量链路改成 `Outbox -> RabbitMQ -> Search Consumer -> ES`
 - `4A`：不做 `trending`
-- 搜索接口返回形式：**直接返回裸 JSON，不再包 `Response<T>`**
+- 搜索接口返回形式：**继续沿用 Nexus 统一 `Response<T>` 包装**
 - `title` 规则：**草稿允许不填；发布时必须必填**
 - 数据兼容规则：**当前 MySQL、Redis、ES、Outbox、MQ 等组件里没有历史数据，不需要处理任何旧数据兼容、旧索引兼容、历史记录迁移或回填修补**
 - 缺失字段处理：**当前项目没有 `title` 字段，必须补充标题字段**；其余当前项目没有真值的字段，按固定兜底规则处理
@@ -24,8 +24,8 @@
 
 1. 旧搜索接口会下线，前端必须切到新接口。  
 2. 旧的 Redis 搜索历史 / 热搜能力全部删除，不做兼容。  
-3. 搜索写链不再依赖当前 Search RabbitMQ 消费者。  
-4. 搜索接口会打破当前 Nexus 统一 `Response<T>` 风格，**直接返回裸 JSON**。  
+3. 搜索写链改成 `Outbox -> RabbitMQ -> SearchIndexConsumer -> ES`，复用现有 Outbox、重试任务和 Search RabbitMQ 消费者。  
+4. 搜索接口不再沿用旧搜索 DTO，但**继续保持 Nexus 统一 `Response<T>` 风格**。  
 5. 为了让 `suggest` 和搜索结果里的 `title` 成立，**内容域必须先补 `title` 字段**。  
 6. 为了复刻 `zhiguang` 的排序语义，**内容域还必须补 `publish_time` 字段**；不能继续拿 `create_time` 冒充发布时间。  
 7. 因为当前 MySQL、Redis、ES、Outbox、MQ 等组件里没有历史数据，**不需要做旧帖子兼容、旧索引迁移、旧标题修补**。
@@ -36,7 +36,7 @@
 
 这次不是“修一下搜索”，而是做 3 件事：
 
-1. **删掉 Nexus 旧搜索壳子**：`/api/v1/search/general`、`/trending`、`/history`、Redis 热搜/历史、Search RabbitMQ 更新链。  
+1. **删掉 Nexus 旧搜索壳子**：`/api/v1/search/general`、`/trending`、`/history`、Redis 热搜/历史。  
 2. **把搜索读链换成 Zhiguang**：`GET /api/v1/search`、`GET /api/v1/search/suggest`、ES `function_score`、`search_after`、高亮、Completion Suggester。  
 3. **把内容模型补齐到“能支撑这个搜索”**：最少补 `title` 和 `publish_time`，否则结果结构和排序都站不住。
 
@@ -111,22 +111,23 @@
 - `tagJson`：没有，固定返回 `null`
 - `isTop`：没有，固定返回 `null`
 
-### 2.3 当前 Nexus 没有 Kafka / Canal 搜索基础设施
+### 2.3 当前 Nexus 已有可复用的 Outbox -> RabbitMQ 搜索增量骨架
 
 当前项目现状：
 
 - **有**内容域 Outbox：`content_event_outbox`
 - **有**用户域 Outbox：`user_event_outbox`
+- **有**afterCommit 触发投递
 - **有**Outbox 重试任务
-- **有**RabbitMQ 发布
-- **没有**现成 Kafka 搜索消费者
-- **没有**现成 Canal 搜索链路
+- **有**RabbitMQ 发布，exchange 就是 `social.feed`
+- **有**现成 Search RabbitMQ 消费者：`SearchIndexConsumer`
+- **没有必要为了搜索再额外引入 Canal**
 
 所以 `3B` 的含义不是“打开一个现成开关”，而是：
 
-1. 复用现有 `content_event_outbox` / `user_event_outbox` 作为 binlog 来源  
-2. 新增 Canal 订阅与 Kafka topic 约定  
-3. 在 `nexus-trigger` 里新增 Kafka 搜索消费者
+1. 复用现有 `content_event_outbox` / `user_event_outbox` 作为唯一事件源  
+2. 继续走当前项目已有的 `afterCommit + retry job + RabbitMQ` 发布链  
+3. 保留并改写 `SearchIndexMqConfig` / `SearchIndexConsumer` / `SearchIndexBackfillRunner`，补齐 zhiguang 的索引字段、查询 DSL、标题与发布时间语义
 
 ---
 
@@ -151,10 +152,9 @@ HTTP GET /api/v1/search/suggest
 
 内容发布/更新/删除、昵称变更
     -> 写 MySQL + Outbox
-    -> MySQL binlog
-    -> Canal
-    -> Kafka topic canal-outbox
-    -> SearchIndexKafkaConsumer
+    -> afterCommit / retry job
+    -> RabbitMQ exchange social.feed
+    -> SearchIndexConsumer
     -> Elasticsearch upsert / soft delete / updateByQuery nickname
 
 应用启动
@@ -190,9 +190,9 @@ HTTP GET /api/v1/search/suggest
 
 ### 返回形式
 
-- `SearchController` 直接返回 `SearchResponseDTO`
-- **不再包 `Response<SearchResponseDTO>`**
-- 这次是明确破坏当前 Nexus 搜索接口返回风格，不做兼容
+- `SearchController` 返回 `Response<SearchResponseDTO>`
+- 成功时：`Response.success(code, info, dto)`
+- 失败时：沿用当前项目其它 Controller 的 `try/catch + Response.builder()` 风格
 
 ### 响应结构
 
@@ -244,7 +244,7 @@ HTTP GET /api/v1/search/suggest
 - 不允许继续返回旧的 `facets`
 - 不允许保留 `/general` 作为兼容路由
 - 不允许把 `filters` JSON 兼容进新接口
-- 不允许再包一层 `Response<T>`
+- 不允许保留旧 `SearchGeneralResponseDTO` / `SearchSuggestResponseDTO` / `SearchTrendingResponseDTO` 结构
 
 ## 4.2 `GET /api/v1/search/suggest`
 
@@ -270,8 +270,8 @@ HTTP GET /api/v1/search/suggest
 
 ### 返回形式
 
-- `SearchController` 直接返回 `SuggestResponseDTO`
-- **不再包 `Response<SuggestResponseDTO>`**
+- `SearchController` 返回 `Response<SuggestResponseDTO>`
+- 成功时：`Response.success(code, info, dto)`
 
 ### 联想来源
 
@@ -440,8 +440,8 @@ HTTP GET /api/v1/search/suggest
 ### Trigger
 
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/SearchController.java`（重写，不保留旧路由）
-- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/SearchIndexMqConfig.java`（删除）
-- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java`（删除）
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/SearchIndexMqConfig.java`（保留并改写为 Outbox -> RabbitMQ 搜索索引链）
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java`（保留并改写，继续负责索引更新）
 
 ### API
 
@@ -466,7 +466,7 @@ HTTP GET /api/v1/search/suggest
 
 - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/SearchHistoryRepository.java`（删除）
 - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/SearchTrendingRepository.java`（删除）
-- `project/nexus/nexus-app/src/main/java/cn/nexus/config/SearchIndexBackfillRunner.java`（删除旧版，换新版）
+- `project/nexus/nexus-app/src/main/java/cn/nexus/config/SearchIndexBackfillRunner.java`（保留并重写为“先 count、空索引才回灌”的新版）
 - `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/SearchEnginePort.java`（重写为新 DSL）
 
 ### 配置
@@ -475,14 +475,13 @@ HTTP GET /api/v1/search/suggest
 
 - `search.history.*`
 - `search.trending.*`
-- `search.mq.*`
 - 旧搜索 `result.defaultLimit/maxLimit`（如果新实现不再使用）
 
 保留或新增：
 
 - `search.es.*`
 - `search.backfill.*`
-- `search.kafka.*`
+- `search.mq.*`
 
 ---
 
@@ -704,7 +703,7 @@ ES 集群必须安装 `analysis-ik`。
 
 ## 9.2 回灌触发规则
 
-新增类：
+保留并重写类：
 
 - `project/nexus/nexus-app/src/main/java/cn/nexus/config/SearchIndexBackfillRunner.java`
 
@@ -718,7 +717,8 @@ ES 集群必须安装 `analysis-ik`。
 1. 应用启动后执行  
 2. 先 `count(index)`  
 3. 若 `count > 0`，直接跳过  
-4. 若 `count == 0`，启动全量回灌
+4. 若 `count == 0`，启动全量回灌  
+5. 不要保留旧版“默认关闭、只靠手工开 `search.backfill.enabled` 才跑一次”的语义；如果保留这个配置，它只能作为紧急关闭开关，默认必须开启
 
 ## 9.3 回灌分页规则
 
@@ -738,13 +738,15 @@ ES 集群必须安装 `analysis-ik`。
 
 ## 9.4 回灌数据来源
 
-必须复用：
+优先复用当前项目已经存在的批量读取能力：
 
-- `IContentRepository`：查 post 元数据与正文
-- `IUserBaseRepository`：查作者昵称/头像
-- `IReactionRepository` 或现有计数读取端口：查点赞数
+- `IContentPostDao`：分页拉已发布公开内容
+- `IContentPostTypeDao`：批量取 tags
+- `IUserBaseDao`：批量取作者昵称/头像
+- `IPostContentKvPort`：批量取正文
+- `IReactionRepository` 或现有计数读取端口：取点赞数
 
-不要新建一套 SQL 专门给搜索回灌。
+不要为了“形式统一”强行把回灌塞进在线搜索服务；回灌是启动批任务，允许继续使用当前项目已有的 DAO/端口组合。
 
 ---
 
@@ -777,34 +779,42 @@ ES 集群必须安装 `analysis-ik`。
 
 - `user.nickname_changed`
 
-## 10.3 Canal 订阅规则，写死
+## 10.3 当前实现原则：不引入 Canal
 
-Canal 只订阅两张表：
+原因很简单：
 
-- `content_event_outbox`
-- `user_event_outbox`
+- 当前 `ContentService` / `UserService` 已经在事务内写 Outbox
+- 提交后已经会 `tryPublishPending()`
+- 当前项目已经有 `ContentEventOutboxRetryJob` / `UserEventOutboxRetryJob`
+- `ContentEventOutboxPort` / `UserEventOutboxPort` 已经把 payload 反序列化成强类型事件，再发布到 RabbitMQ
+- `SearchIndexConsumer` 现在监听的就是这些强类型事件
 
-只处理 **INSERT** 事件。  
-对 `status` 更新导致的 UPDATE binlog 一律忽略。
+参考 `搜索系统全链路与复现方案.md` 可以知道，原始 zhiguang 开源链路里的 `Outbox -> Canal -> Kafka` 更像“预留方案”，而且还存在多事件类型混流风险。  
+对 Nexus 来说，继续走现成的 `Outbox -> RabbitMQ` 更短、更稳，也更符合当前项目代码。
 
-## 10.4 Kafka Topic 与 Group，写死
+## 10.4 RabbitMQ Exchange / RoutingKey / Queue，写死
 
-- Topic：`canal-outbox`
-- Group：`search-index-consumer`
+- Exchange：`social.feed`（direct）
+- RoutingKey：`post.published` / `post.updated` / `post.deleted` / `user.nickname_changed`
+- Queue：`search.post.published.queue`
+- Queue：`search.post.updated.queue`
+- Queue：`search.post.deleted.queue`
+- Queue：`search.user.nickname_changed.queue`
 
-不要再发明 `search-cdc-topic`、`outbox-search-topic-v2` 之类名字。
+不要再发明 `canal-outbox`、`search-cdc-topic`、`outbox-search-topic-v2`、`search-index-consumer-v2` 之类名字。
 
-## 10.5 Kafka 消费者新增位置
+## 10.5 RabbitMQ 配置、发布端口与消费者位置
 
-新增类，固定路径：
+- 保留并改写，固定路径：
 
-- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/kafka/consumer/SearchIndexKafkaConsumer.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/SearchIndexMqConfig.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/user/port/UserEventOutboxPort.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/job/social/ContentEventOutboxRetryJob.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/job/user/UserEventOutboxRetryJob.java`
 
-新增解析工具，固定路径：
-
-- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/kafka/support/OutboxMessageUtil.java`
-
-## 10.6 Kafka 消费规则，固定写法
+## 10.6 RabbitMQ 消费规则，固定写法
 
 ### `post.published`
 
@@ -861,14 +871,14 @@ Canal 只订阅两张表：
 
 固定改成两个方法：
 
-- `SearchResponseDTO search(String q, Integer size, String tags, String after)`
-- `SuggestResponseDTO suggest(String prefix, Integer size)`
+- `Response<SearchResponseDTO> search(String q, Integer size, String tags, String after)`
+- `Response<SuggestResponseDTO> suggest(String prefix, Integer size)`
 
 说明：
 
 - 保留 `ISearchApi` 这个文件
-- 但它不再使用 `Response<T>` 包装
-- 这是本次用户已明确接受的接口风格破坏点
+- 搜索接口仍然使用 `Response<T>` 包装
+- 变化点在于：内部 `data` 结构改成新的 `SearchResponseDTO` / `SuggestResponseDTO`
 
 ## 11.2 `nexus-trigger`
 
@@ -881,15 +891,14 @@ Canal 只订阅两张表：
 - `@GetMapping("/search")`
 - `@GetMapping("/search/suggest")`
 
-### 必删
+### 必保留并改写
 
 - `SearchIndexMqConfig.java`
 - `SearchIndexConsumer.java`
 
-### 必新增
+### 非必新增
 
-- `SearchIndexKafkaConsumer.java`
-- `OutboxMessageUtil.java`
+- 无。优先复用现有搜索 MQ 配置与消费者，不新增新的搜索消费者文件。
 
 ## 11.3 `nexus-domain`
 
@@ -930,26 +939,33 @@ Canal 只订阅两张表：
 
 - `application-dev.yml`
 
-新增：
+调整为：
 
 ```yaml
 search:
   es:
     endpoints: http://127.0.0.1:9200
     indexAlias: zhiguang_content_index
+  mq:
+    concurrency: 2
+    prefetch: 20
+    retry:
+      maxAttempts: 5
+      initialIntervalMs: 1000
+      multiplier: 3.0
+      maxIntervalMs: 60000
   backfill:
     enabled: true
     pageSize: 500
-  kafka:
-    topic: canal-outbox
-    groupId: search-index-consumer
+    checkpoint:
+      enabled: true
+      redisKey: search:backfill:cursor
 ```
 
 删除：
 
 - `search.history.*`
 - `search.trending.*`
-- `search.mq.*`
 
 ---
 
@@ -992,7 +1008,7 @@ search:
 - `GET /api/v1/search/trending` 不再存在
 - `DELETE /api/v1/search/history` 不再存在
 - `GET /api/v1/search?q=xxx` 可正常进入新 Controller
-- 搜索接口响应体不再套 `Response<T>`
+- 搜索接口响应体继续套 `Response<T>`，但 `data` 改成新结构
 
 ## 阶段 3：替换读链到 ES zhiguang 语义
 
@@ -1028,22 +1044,23 @@ search:
 - 已发布公开帖子都会进入索引
 - 没有标题的测试脏数据不会进入索引，并有告警日志
 
-## 阶段 5：切增量链路到 Outbox -> Canal -> Kafka
+## 阶段 5：改造现有增量链路到 Outbox -> RabbitMQ
 
-目标：以后不再靠 Search RabbitMQ 消费者更新索引。
+目标：以后通过当前项目已经存在的 `Outbox -> RabbitMQ -> SearchIndexConsumer` 更新索引，不额外引入 Canal，也不再保留 Kafka 草案。
 
 因为当前组件里没有历史消息和历史数据，这一阶段不需要考虑：
 
 - 旧 RabbitMQ 搜索事件重放
-- 旧 Canal 位点迁移
-- 旧 Kafka topic 数据清理兼容
+- Canal 位点迁移
+- 为 Kafka 额外保留兼容层
 
 必须完成：
 
-1. Canal 订阅 `content_event_outbox` / `user_event_outbox`
-2. Kafka topic `canal-outbox`
-3. `SearchIndexKafkaConsumer` 消费并更新 ES
-4. 删除旧 Search RabbitMQ consumer
+1. 保留内容域 / 用户域 Outbox 写入点
+2. 保留 `afterCommit + retry job` 的投递机制
+3. 改写 `SearchIndexMqConfig` 绑定搜索索引所需队列
+4. 复用 `SearchIndexConsumer` 消费并更新 ES
+5. 让 `ContentEventOutboxPort` / `UserEventOutboxPort` 继续发布强类型事件到 `social.feed`
 
 验收：
 
@@ -1059,14 +1076,14 @@ search:
 必须完成：
 
 1. 删除旧 Redis 搜索历史/热搜仓储
-2. 删除旧 Search RabbitMQ config/consumer
-3. 删除旧 DTO/VO
-4. 删除旧配置项
+2. 删除旧 DTO/VO
+3. 删除旧配置项
+4. 清理 Kafka 方案残留命名与注释
 
 验收：
 
 - 全仓库搜索 `SearchTrending` / `SearchHistory` 不再有运行时代码引用
-- 全仓库不再有 `search.post.published.queue` 这类旧搜索 MQ 配置
+- 全仓库搜索索引增量链路只保留一套 RabbitMQ 实现，不再出现 Kafka 方案残留命名
 
 ---
 
@@ -1124,15 +1141,15 @@ search:
 - 内容域已补 `title` 和 `publish_time`
 - 新搜索接口为 `/api/v1/search` 和 `/api/v1/search/suggest`
 - 旧 `/general`、`/trending`、`/history` 已删除
-- 搜索接口直接返回裸 JSON，不再包 `Response<T>`
+- 搜索接口继续返回 `Response<T>`，其中 `data` 为新的搜索结果结构
 - 结果结构为 `items + nextAfter + hasMore`
 - 搜索字段含 `title`、`body`，联想字段是 `title_suggest`
 - ES 查询为 `multi_match + function_score + highlight + search_after`
 - 空索引时能自动回灌
-- 增量链路为 `Outbox -> Canal -> Kafka -> SearchIndexKafkaConsumer -> ES`
+- 增量链路为 `Outbox -> RabbitMQ -> SearchIndexConsumer -> ES`
 - `post.deleted` 走 soft delete
 - `user.nickname_changed` 能批量回写索引作者昵称
-- 代码树里不再并行存在旧 Search Redis/旧 Search RabbitMQ 实现
+- 代码树里不再并行存在旧 Search Redis 实现，也不再出现 Kafka 版搜索增量链路残留
 
 ---
 
@@ -1144,8 +1161,8 @@ search:
 2. 再改搜索 API 合同  
 3. 再改搜索读链  
 4. 再加 ES 建索引和回灌  
-5. 再接 Kafka 消费者  
-6. 最后删旧 Search Redis / RabbitMQ 代码  
+5. 再接 RabbitMQ 索引消费者  
+6. 最后删旧 Search Redis 与 Kafka 草案残留  
 
 不要反过来。  
 先删旧搜索、后补标题字段，会把自己困死。

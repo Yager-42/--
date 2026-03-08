@@ -1,4 +1,4 @@
-package cn.nexus.domain.social.model.valobj;
+package cn.nexus.api.social.search.dto;
 
 import java.util.List;
 import lombok.AllArgsConstructor;
@@ -10,23 +10,18 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class SearchDocumentVO {
-    private Long contentId;
-    private String contentType;
+public class SearchItemDTO {
+    private String id;
     private String title;
     private String description;
-    private String body;
+    private String coverImage;
     private List<String> tags;
-    private Long authorId;
     private String authorAvatar;
     private String authorNickname;
-    private String authorTagJson;
-    private Long publishTime;
+    private String tagJson;
     private Long likeCount;
     private Long favoriteCount;
-    private Long viewCount;
-    private String status;
-    private List<String> imgUrls;
+    private Boolean liked;
+    private Boolean faved;
     private Boolean isTop;
-    private String titleSuggest;
 }

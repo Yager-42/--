@@ -11,15 +11,15 @@ public interface IContentService {
 
     UploadSessionVO createUploadSession(String fileType, Long fileSize, String crc32);
 
-    DraftVO saveDraft(Long userId, Long draftId, String contentText, java.util.List<String> mediaIds);
+    DraftVO saveDraft(Long userId, Long draftId, String title, String contentText, java.util.List<String> mediaIds);
 
-    OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, java.util.List<String> postTypes);
+    OperationResultVO publish(Long postId, Long userId, String title, String text, String mediaInfo, String location, String visibility, java.util.List<String> postTypes);
 
     OperationResultVO delete(Long userId, Long postId);
 
     OperationResultVO schedule(Long userId, Long postId, Long publishTime, String timezone);
 
-    DraftSyncVO syncDraft(Long draftId, Long userId, String diffContent, Long clientVersion, String deviceId, java.util.List<String> mediaIds);
+    DraftSyncVO syncDraft(Long draftId, Long userId, String title, String diffContent, Long clientVersion, String deviceId, java.util.List<String> mediaIds);
 
     ContentHistoryVO history(Long postId, Long userId, Integer limit, Integer offset);
 

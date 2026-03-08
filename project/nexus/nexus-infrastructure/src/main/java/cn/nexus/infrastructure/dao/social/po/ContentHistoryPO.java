@@ -12,6 +12,7 @@ public class ContentHistoryPO {
     private Long historyId;
     private Long postId;
     private Integer versionNum;
+    private String snapshotTitle;
     private String snapshotContent;
     private String snapshotMedia;
     private Date createTime;

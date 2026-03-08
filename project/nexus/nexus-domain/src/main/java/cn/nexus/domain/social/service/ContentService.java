@@ -97,7 +97,7 @@ public class ContentService implements IContentService {
      * 草稿保存/覆盖更新：draftId 为空则创建新草稿，否则覆盖更新同一条草稿（draftId=postId）。
      */
     @Override
-    public DraftVO saveDraft(Long userId, Long draftId, String contentText, List<String> mediaIds) {
+    public DraftVO saveDraft(Long userId, Long draftId, String title, String contentText, List<String> mediaIds) {
         validateContentNotEmpty(contentText, mediaIds, null);
         Long targetDraftId = draftId == null ? socialIdPort.nextId() : draftId;
         assertNotScheduled(targetDraftId);
@@ -109,6 +109,7 @@ public class ContentService implements IContentService {
         ContentDraftEntity entity = ContentDraftEntity.builder()
                 .draftId(targetDraftId)
                 .userId(userId)
+                .title(normalizeTitle(title))
                 .draftContent(contentText)
                 .mediaIds(mediaIds == null ? null : String.join(",", mediaIds))
                 .deviceId("unknown")
@@ -128,14 +129,15 @@ public class ContentService implements IContentService {
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public OperationResultVO publish(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, List<String> postTypes) {
+    public OperationResultVO publish(Long postId, Long userId, String title, String text, String mediaInfo, String location, String visibility, List<String> postTypes) {
         assertNotScheduled(postId);
-        return publishInternal(postId, userId, text, mediaInfo, location, visibility, postTypes);
+        return publishInternal(postId, userId, title, text, mediaInfo, location, visibility, postTypes);
     }
 
-    private OperationResultVO publishInternal(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, List<String> postTypes) {
+    private OperationResultVO publishInternal(Long postId, Long userId, String title, String text, String mediaInfo, String location, String visibility, List<String> postTypes) {
         assertTx("publish");
         validateContentNotEmpty(text, null, mediaInfo);
+        String normalizedTitle = requirePublishTitle(title);
         if (postId == null) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "postId 不能为空，请先创建草稿拿 postId");
         }
@@ -158,6 +160,7 @@ public class ContentService implements IContentService {
 
             List<String> normalizedPostTypes = normalizePostTypes(postTypes);
             String tokenSeed = "publish:" + (userId == null ? "0" : userId) + ":" + targetPostId + ":" +
+                    normalizedTitle + ":" +
                     (text == null ? "" : text) + ":" + (mediaInfo == null ? "" : mediaInfo) + ":" +
                     (location == null ? "" : location) + ":" + (visibility == null ? "" : visibility);
             if (postTypes != null) {
@@ -174,6 +177,7 @@ public class ContentService implements IContentService {
                     .attemptStatus(ContentPublishAttemptStatusEnumVO.CREATED.getCode())
                     .riskStatus(ContentPublishAttemptRiskStatusEnumVO.NOT_EVALUATED.getCode())
                     .transcodeStatus(ContentPublishAttemptTranscodeStatusEnumVO.NOT_STARTED.getCode())
+                    .snapshotTitle(normalizedTitle)
                     .snapshotContent(text)
                     .snapshotMedia(mediaInfo)
                     .locationInfo(location)
@@ -237,11 +241,12 @@ public class ContentService implements IContentService {
                 int currentVersion = existedPost == null || existedPost.getVersionNum() == null ? 0 : existedPost.getVersionNum();
                 int newVersion = currentVersion + 1;
 
-                upsertPost(targetPostId, userId, text, mediaInfo, location, visibility, STATUS_PENDING_REVIEW, newVersion, existedPost != null);
+                upsertPost(targetPostId, userId, normalizedTitle, text, mediaInfo, location, visibility, STATUS_PENDING_REVIEW, newVersion, existedPost != null);
                 contentRepository.saveHistory(ContentHistoryEntity.builder()
                         .historyId(socialIdPort.nextId())
                         .postId(targetPostId)
                         .versionNum(newVersion)
+                        .snapshotTitle(normalizedTitle)
                         .snapshotContent(text)
                         .snapshotMedia(mediaInfo)
                         .createTime(socialIdPort.now())
@@ -303,11 +308,12 @@ public class ContentService implements IContentService {
             int currentVersion = existedPost == null || existedPost.getVersionNum() == null ? 0 : existedPost.getVersionNum();
             int newVersion = currentVersion + 1;
 
-            upsertPost(targetPostId, userId, text, mediaInfo, location, visibility, STATUS_PUBLISHED, newVersion, false);
+            upsertPost(targetPostId, userId, normalizedTitle, text, mediaInfo, location, visibility, STATUS_PUBLISHED, newVersion, false);
             contentRepository.saveHistory(ContentHistoryEntity.builder()
                     .historyId(socialIdPort.nextId())
                     .postId(targetPostId)
                     .versionNum(newVersion)
+                    .snapshotTitle(normalizedTitle)
                     .snapshotContent(text)
                     .snapshotMedia(mediaInfo)
                     .createTime(socialIdPort.now())
@@ -483,6 +489,7 @@ public class ContentService implements IContentService {
         if (draft.getUserId() != null && !draft.getUserId().equals(userId)) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "NO_PERMISSION");
         }
+        requirePublishTitle(draft.getTitle());
         validateContentNotEmpty(draft.getDraftContent(), null, draft.getMediaIds());
         String token = hash(userId + ":" + postId + ":" + publishTime);
         ContentScheduleEntity exist = contentRepository.findScheduleByToken(token);
@@ -533,7 +540,7 @@ public class ContentService implements IContentService {
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public DraftSyncVO syncDraft(Long draftId, Long userId, String diffContent, Long clientVersion, String deviceId, List<String> mediaIds) {
+    public DraftSyncVO syncDraft(Long draftId, Long userId, String title, String diffContent, Long clientVersion, String deviceId, List<String> mediaIds) {
         assertNotScheduled(draftId);
         validateContentNotEmpty(diffContent, mediaIds, null);
         ContentDraftEntity entity = contentRepository.findDraftForUpdate(draftId);
@@ -546,6 +553,7 @@ public class ContentService implements IContentService {
         if (!isNewerClientVersion(clientVersion, entity.getClientVersion())) {
             throw new AppException(ResponseCode.CONFLICT.getCode(), "STALE_VERSION");
         }
+        entity.setTitle(normalizeTitle(title));
         entity.setDraftContent(diffContent);
         entity.setDeviceId(deviceId);
         entity.setClientVersion(clientVersion);
@@ -584,6 +592,7 @@ public class ContentService implements IContentService {
         for (ContentHistoryEntity history : page) {
             versions.add(ContentHistoryVO.ContentVersionVO.builder()
                     .versionId(history.getVersionNum() == null ? null : history.getVersionNum().longValue())
+                    .title(history.getSnapshotTitle())
                     .content(history.getSnapshotContent())
                     .time(history.getCreateTime())
                     .build());
@@ -637,6 +646,8 @@ public class ContentService implements IContentService {
                     STATUS_PUBLISHED,
                     newVersion,
                     true,
+                    target.getSnapshotTitle(),
+                    post == null ? null : post.getPublishTime(),
                     newContentUuid,
                     post == null ? null : post.getMediaInfo(),
                     post == null ? null : post.getLocationInfo(),
@@ -649,6 +660,7 @@ public class ContentService implements IContentService {
                     .historyId(socialIdPort.nextId())
                     .postId(postId)
                     .versionNum(newVersion)
+                    .snapshotTitle(target.getSnapshotTitle())
                     .snapshotContent(content)
                     .snapshotMedia(post == null ? null : post.getMediaInfo())
                     .createTime(socialIdPort.now())
@@ -690,7 +702,7 @@ public class ContentService implements IContentService {
                 log.error("schedule task skipped due to draft not found, taskId={}, postId={}", task.getTaskId(), task.getPostId());
                 continue;
             }
-            OperationResultVO res = publishInternal(task.getPostId(), task.getUserId(), draft.getDraftContent(), draft.getMediaIds(), null, "PUBLIC", null);
+            OperationResultVO res = publishInternal(task.getPostId(), task.getUserId(), draft.getTitle(), draft.getDraftContent(), draft.getMediaIds(), null, "PUBLIC", null);
             if (res.isSuccess()) {
                 success++;
                 contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null, SCHEDULE_STATUS_SCHEDULED);
@@ -742,7 +754,7 @@ public class ContentService implements IContentService {
             contentRepository.updateScheduleStatus(taskId, SCHEDULE_STATUS_CANCELED, task.getRetryCount(), "draft_not_found", 1, null, SCHEDULE_STATUS_SCHEDULED);
             return OperationResultVO.builder().success(false).id(taskId).status("DRAFT_NOT_FOUND").message("草稿不存在，已终止定时任务").build();
         }
-        OperationResultVO res = publishInternal(task.getPostId(), task.getUserId(), draft.getDraftContent(), draft.getMediaIds(), null, "PUBLIC", null);
+        OperationResultVO res = publishInternal(task.getPostId(), task.getUserId(), draft.getTitle(), draft.getDraftContent(), draft.getMediaIds(), null, "PUBLIC", null);
         if (res.isSuccess()) {
             contentRepository.updateScheduleStatus(taskId, SCHEDULE_STATUS_PUBLISHED, task.getRetryCount(), null, 0, null, SCHEDULE_STATUS_SCHEDULED);
         } else {
@@ -869,7 +881,12 @@ public class ContentService implements IContentService {
 
         if ("PASS".equalsIgnoreCase(finalResult)) {
             Integer expectedVersion = attempt.getPublishedVersionNum();
-            boolean okPost = contentRepository.updatePostStatusIfMatchVersion(postId, STATUS_PUBLISHED, STATUS_PENDING_REVIEW, expectedVersion);
+            boolean okPost = contentRepository.updatePostStatusAndPublishTimeIfMatchVersion(
+                    postId,
+                    STATUS_PUBLISHED,
+                    STATUS_PENDING_REVIEW,
+                    expectedVersion,
+                    socialIdPort.now());
             if (!okPost) {
                 log.warn("risk review apply skipped (post status/version not match), postId={}, expectedVersion={}, attemptId={}", postId, expectedVersion, attemptId);
                 ContentPublishAttemptEntity latest = contentPublishAttemptRepository.findByAttemptId(attemptId);
@@ -951,6 +968,22 @@ public class ContentService implements IContentService {
         return 0;
     }
 
+    private String normalizeTitle(String title) {
+        if (title == null) {
+            return null;
+        }
+        String trimmed = title.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String requirePublishTitle(String title) {
+        String normalized = normalizeTitle(title);
+        if (normalized == null) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "title 不能为空");
+        }
+        return normalized;
+    }
+
     private int parseVisibility(String visibility) {
         if (visibility == null) {
             return 0;
@@ -993,7 +1026,7 @@ public class ContentService implements IContentService {
         return hash(text.getBytes(StandardCharsets.UTF_8));
     }
 
-    private void upsertPost(Long postId, Long userId, String text, String mediaInfo, String location, String visibility, int status, int versionNum, boolean edited) {
+    private void upsertPost(Long postId, Long userId, String title, String text, String mediaInfo, String location, String visibility, int status, int versionNum, boolean edited) {
         String newContentUuid = UUID.randomUUID().toString();
         postContentKvPort.add(newContentUuid, text == null ? "" : text);
 
@@ -1004,6 +1037,7 @@ public class ContentService implements IContentService {
                 post = ContentPostEntity.builder()
                         .postId(postId)
                         .userId(userId)
+                        .title(title)
                         .contentUuid(newContentUuid)
                         .mediaType(deriveMediaType(mediaInfo))
                         .mediaInfo(mediaInfo)
@@ -1013,6 +1047,7 @@ public class ContentService implements IContentService {
                         .versionNum(versionNum)
                         .edited(edited)
                         .createTime(socialIdPort.now())
+                        .publishTime(status == STATUS_PUBLISHED ? socialIdPort.now() : null)
                         .build();
                 contentRepository.savePost(post);
             } else {
@@ -1020,7 +1055,11 @@ public class ContentService implements IContentService {
                     throw new IllegalStateException("post 所属用户不匹配");
                 }
                 oldUuid = post.getContentUuid();
-                boolean ok = contentRepository.updatePostStatusAndContent(postId, status, versionNum, edited, newContentUuid, mediaInfo, location, parseVisibility(visibility));
+                Long publishTime = post.getPublishTime();
+                if (publishTime == null && status == STATUS_PUBLISHED) {
+                    publishTime = socialIdPort.now();
+                }
+                boolean ok = contentRepository.updatePostStatusAndContent(postId, status, versionNum, edited, title, publishTime, newContentUuid, mediaInfo, location, parseVisibility(visibility));
                 if (!ok) {
                     throw new IllegalStateException("post 更新失败，可能存在版本冲突 postId=" + postId);
                 }

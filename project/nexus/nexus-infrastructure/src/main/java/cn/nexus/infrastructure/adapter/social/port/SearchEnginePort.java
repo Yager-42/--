@@ -4,49 +4,30 @@ import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineQueryVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineResultVO;
-import cn.nexus.types.enums.ContentMediaTypeEnumVO;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
-import co.elastic.clients.elasticsearch.ElasticsearchClient;
-import co.elastic.clients.elasticsearch._types.Conflicts;
-import co.elastic.clients.elasticsearch._types.FieldValue;
-import co.elastic.clients.elasticsearch._types.SortOrder;
-import co.elastic.clients.elasticsearch._types.aggregations.Aggregate;
-import co.elastic.clients.elasticsearch._types.aggregations.LongTermsAggregate;
-import co.elastic.clients.elasticsearch._types.aggregations.LongTermsBucket;
-import co.elastic.clients.elasticsearch._types.aggregations.StringTermsAggregate;
-import co.elastic.clients.elasticsearch._types.aggregations.StringTermsBucket;
-import co.elastic.clients.elasticsearch._types.query_dsl.FunctionBoostMode;
-import co.elastic.clients.elasticsearch._types.query_dsl.FunctionScore;
-import co.elastic.clients.elasticsearch._types.query_dsl.FunctionScoreMode;
-import co.elastic.clients.elasticsearch._types.query_dsl.Query;
-import co.elastic.clients.elasticsearch._types.query_dsl.TextQueryType;
-import co.elastic.clients.elasticsearch._types.query_dsl.Operator;
-import co.elastic.clients.elasticsearch.core.DeleteRequest;
-import co.elastic.clients.elasticsearch.core.IndexRequest;
-import co.elastic.clients.elasticsearch.core.SearchRequest;
-import co.elastic.clients.elasticsearch.core.SearchResponse;
-import co.elastic.clients.elasticsearch.core.UpdateByQueryRequest;
-import co.elastic.clients.elasticsearch.core.UpdateByQueryResponse;
-import co.elastic.clients.elasticsearch.core.search.Hit;
-import co.elastic.clients.json.JsonData;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Base64;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.apache.http.util.EntityUtils;
+import org.elasticsearch.client.Request;
+import org.elasticsearch.client.Response;
+import org.elasticsearch.client.RestClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/**
- * Elasticsearch 搜索引擎端口实现（官方 ES 8 Java Client）。
- */
 @Component
 @RequiredArgsConstructor
 public class SearchEnginePort implements ISearchEnginePort {
 
-    private final ElasticsearchClient elasticsearchClient;
+    private final RestClient searchRestClient;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${search.es.indexAlias:social_search}")
     private String indexAlias;
@@ -56,26 +37,12 @@ public class SearchEnginePort implements ISearchEnginePort {
         if (query == null || query.getKeyword() == null || query.getKeyword().isBlank()) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
         }
-
         try {
-            SearchRequest request = buildSearchRequest(query);
-            SearchResponse<SearchDocumentVO> resp = elasticsearchClient.search(request, SearchDocumentVO.class);
-
-            long tookMs = resp == null ? 0L : resp.took();
-            long totalHits = 0L;
-            if (resp != null && resp.hits() != null && resp.hits().total() != null) {
-                totalHits = resp.hits().total().value();
-            }
-
-            List<SearchEngineResultVO.SearchHitVO> hits = mapHits(resp);
-            Map<String, Map<String, Long>> aggs = query.isIncludeFacets() ? mapAggs(resp) : Map.of();
-
-            return SearchEngineResultVO.builder()
-                    .tookMs(tookMs)
-                    .totalHits(totalHits)
-                    .hits(hits)
-                    .aggs(aggs)
-                    .build();
+            Request request = new Request("POST", "/" + indexAlias + "/_search");
+            request.setJsonEntity(buildSearchRequestBody(query).toString());
+            Response response = searchRestClient.performRequest(request);
+            JsonNode root = objectMapper.readTree(EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8));
+            return parseSearchResponse(root, query.getLimit());
         } catch (AppException e) {
             throw e;
         } catch (Exception e) {
@@ -84,33 +51,49 @@ public class SearchEnginePort implements ISearchEnginePort {
     }
 
     @Override
-    public void upsert(SearchDocumentVO doc) {
-        if (doc == null || doc.getPostId() == null || doc.getEntityIdStr() == null || doc.getEntityIdStr().isBlank()) {
-            throw new IllegalArgumentException("SearchDocumentVO invalid");
-        }
-        String docId = postDocId(doc.getPostId());
-        Map<String, Object> body = toIndexBody(doc);
-
+    public List<String> suggest(String prefix, int limit) {
         try {
-            IndexRequest<Map<String, Object>> req = IndexRequest.of(i -> i
-                    .index(indexAlias)
-                    .id(docId)
-                    .document(body)
-            );
-            elasticsearchClient.index(req);
+            Request request = new Request("POST", "/" + indexAlias + "/_search");
+            request.setJsonEntity(buildSuggestRequestBody(prefix, limit).toString());
+            Response response = searchRestClient.performRequest(request);
+            JsonNode root = objectMapper.readTree(EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8));
+            return parseSuggestResponse(root);
         } catch (Exception e) {
             throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo(), e);
         }
     }
 
     @Override
-    public void delete(String docId) {
-        if (docId == null || docId.isBlank()) {
+    public void upsert(SearchDocumentVO doc) {
+        if (doc == null || doc.getContentId() == null) {
+            throw new IllegalArgumentException("SearchDocumentVO invalid");
+        }
+        try {
+            Request request = new Request("PUT", "/" + indexAlias + "/_doc/" + doc.getContentId());
+            request.addParameter("refresh", "wait_for");
+            request.setJsonEntity(toIndexBody(doc).toString());
+            searchRestClient.performRequest(request);
+        } catch (Exception e) {
+            throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo(), e);
+        }
+    }
+
+    @Override
+    public void softDelete(Long contentId) {
+        if (contentId == null) {
             return;
         }
         try {
-            DeleteRequest req = DeleteRequest.of(d -> d.index(indexAlias).id(docId));
-            elasticsearchClient.delete(req);
+            ObjectNode body = objectMapper.createObjectNode();
+            ObjectNode doc = body.putObject("doc");
+            doc.put("content_id", contentId);
+            doc.put("status", "deleted");
+            body.put("doc_as_upsert", true);
+
+            Request request = new Request("POST", "/" + indexAlias + "/_update/" + contentId);
+            request.addParameter("refresh", "wait_for");
+            request.setJsonEntity(body.toString());
+            searchRestClient.performRequest(request);
         } catch (Exception e) {
             throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo(), e);
         }
@@ -119,241 +102,331 @@ public class SearchEnginePort implements ISearchEnginePort {
     @Override
     public long updateAuthorNickname(Long authorId, String authorNickname) {
         if (authorId == null) {
-            throw new IllegalArgumentException("authorId required");
+            return 0L;
         }
-        String nick = authorNickname == null ? "" : authorNickname;
         try {
-            UpdateByQueryRequest req = UpdateByQueryRequest.of(u -> u
-                    .index(indexAlias)
-                    .conflicts(Conflicts.Proceed)
-                    .query(q -> q.term(t -> t.field("authorId").value(authorId)))
-                    .script(s -> s.inline(i -> i
-                            .lang("painless")
-                            .source("ctx._source.authorNickname=params.nick")
-                            .params("nick", JsonData.of(nick))
-                    ))
-            );
-            UpdateByQueryResponse resp = elasticsearchClient.updateByQuery(req);
-            return resp == null ? 0L : resp.updated();
+            ObjectNode body = objectMapper.createObjectNode();
+            ObjectNode script = body.putObject("script");
+            script.put("source", "ctx._source.author_nickname = params.nickname");
+            ObjectNode params = script.putObject("params");
+            params.put("nickname", authorNickname == null ? "" : authorNickname);
+
+            ObjectNode query = body.putObject("query");
+            ObjectNode term = query.putObject("term");
+            term.put("author_id", authorId);
+
+            Request request = new Request("POST", "/" + indexAlias + "/_update_by_query");
+            request.addParameter("conflicts", "proceed");
+            request.addParameter("refresh", "true");
+            request.setJsonEntity(body.toString());
+            Response response = searchRestClient.performRequest(request);
+            JsonNode root = objectMapper.readTree(EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8));
+            JsonNode updated = root.get("updated");
+            return updated == null || updated.isNull() ? 0L : updated.asLong();
         } catch (Exception e) {
             throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo(), e);
         }
     }
 
-    private SearchRequest buildSearchRequest(SearchEngineQueryVO query) {
-        String keyword = query.getKeyword();
-        int from = Math.max(0, query.getOffset());
-        int size = Math.max(1, query.getLimit());
+    private ObjectNode buildSearchRequestBody(SearchEngineQueryVO query) {
+        int limit = Math.max(1, query.getLimit());
+        ObjectNode root = objectMapper.createObjectNode();
+        root.put("track_total_hits", true);
+        root.put("size", limit + 1);
 
-        Query q = Query.of(root -> root.functionScore(fs -> fs
-                .query(boolQuery(keyword, query))
-                .functions(List.of(
-                        FunctionScore.of(f -> f.gauss(g -> g
-                                .field("createTime")
-                                .placement(p -> p
-                                        .origin(JsonData.of("now"))
-                                        .scale(JsonData.of("7d"))
-                                        .decay(0.5)
-                                )
-                        ))
-                ))
-                .scoreMode(FunctionScoreMode.Sum)
-                .boostMode(FunctionBoostMode.Sum)
-        ));
+        ObjectNode functionScore = root.putObject("query").putObject("function_score");
+        ObjectNode bool = functionScore.putObject("query").putObject("bool");
+        ArrayNode must = bool.putArray("must");
+        ObjectNode multiMatch = must.addObject().putObject("multi_match");
+        multiMatch.put("query", query.getKeyword());
+        ArrayNode fields = multiMatch.putArray("fields");
+        fields.add("title^3");
+        fields.add("body");
 
-        SearchRequest.Builder b = new SearchRequest.Builder()
-                .index(indexAlias)
-                .from(from)
-                .size(size)
-                .trackTotalHits(t -> t.enabled(true))
-                .query(q)
-                .highlight(h -> h.fields("contentText", f -> f
-                        .numberOfFragments(1)
-                        .fragmentSize(80)
-                        .preTags("<em>")
-                        .postTags("</em>")
-                ));
-
-        addSort(b, query.getSort());
-
-        if (query.isIncludeFacets()) {
-            b.aggregations("mediaType", a -> a.terms(t -> t.field("mediaType").size(3)));
-            b.aggregations("postTypes", a -> a.terms(t -> t.field("postTypes").size(50)));
-        }
-
-        return b.build();
-    }
-
-    private Query boolQuery(String keyword, SearchEngineQueryVO query) {
-        List<Query> must = new ArrayList<>();
-        must.add(Query.of(q -> q.multiMatch(mm -> mm
-                .query(keyword)
-                .type(TextQueryType.BestFields)
-                .operator(Operator.And)
-                .fields("contentText^3.0", "postTypes^2.0", "authorNickname^1.0")
-        )));
-
-        List<Query> should = new ArrayList<>();
-        should.add(Query.of(q -> q.term(t -> t
-                .field("entityIdStr")
-                .value(FieldValue.of(keyword))
-                .boost(30.0f)
-        )));
-
-        List<Query> filter = new ArrayList<>();
-        if (query.getMediaType() != null) {
-            filter.add(Query.of(q -> q.term(t -> t.field("mediaType").value(query.getMediaType()))));
-        }
-        if (query.getPostTypes() != null && !query.getPostTypes().isEmpty()) {
-            List<FieldValue> values = new ArrayList<>(query.getPostTypes().size());
-            for (String v : query.getPostTypes()) {
-                if (v == null || v.isBlank()) {
-                    continue;
+        ArrayNode filter = bool.putArray("filter");
+        filter.addObject().putObject("term").put("status", "published");
+        if (query.getTags() != null && !query.getTags().isEmpty()) {
+            ArrayNode values = objectMapper.createArrayNode();
+            for (String tag : query.getTags()) {
+                if (tag != null && !tag.isBlank()) {
+                    values.add(tag);
                 }
-                values.add(FieldValue.of(v));
             }
             if (!values.isEmpty()) {
-                filter.add(Query.of(q -> q.terms(t -> t.field("postTypes").terms(ts -> ts.value(values)))));
+                filter.addObject().putObject("terms").set("tags", values);
             }
-        }
-        if (query.getTimeFromMs() != null || query.getTimeToMs() != null) {
-            filter.add(Query.of(q -> q.range(r -> {
-                r.field("createTimeMs");
-                if (query.getTimeFromMs() != null) {
-                    r.gte(JsonData.of(query.getTimeFromMs()));
-                }
-                if (query.getTimeToMs() != null) {
-                    r.lte(JsonData.of(query.getTimeToMs()));
-                }
-                return r;
-            })));
         }
 
-        return Query.of(q -> q.bool(b -> {
-            b.must(must);
-            b.should(should);
-            if (!filter.isEmpty()) {
-                b.filter(filter);
-            }
-            return b;
-        }));
+        ArrayNode functions = functionScore.putArray("functions");
+        ObjectNode likeScore = functions.addObject();
+        likeScore.putObject("field_value_factor")
+                .put("field", "like_count")
+                .put("modifier", "log1p")
+                .put("missing", 0.0D);
+        likeScore.put("weight", 2.0D);
+
+        ObjectNode viewScore = functions.addObject();
+        viewScore.putObject("field_value_factor")
+                .put("field", "view_count")
+                .put("modifier", "log1p")
+                .put("missing", 0.0D);
+        viewScore.put("weight", 1.0D);
+        functionScore.put("score_mode", "sum");
+        functionScore.put("boost_mode", "sum");
+
+        ObjectNode highlight = root.putObject("highlight");
+        ArrayNode preTags = highlight.putArray("pre_tags");
+        preTags.add("<em>");
+        ArrayNode postTags = highlight.putArray("post_tags");
+        postTags.add("</em>");
+        ObjectNode highlightFields = highlight.putObject("fields");
+        highlightFields.putObject("title");
+        highlightFields.putObject("body");
+
+        ArrayNode sort = root.putArray("sort");
+        sort.addObject().putObject("_score").put("order", "desc");
+        sort.addObject().putObject("publish_time").put("order", "desc");
+        sort.addObject().putObject("like_count").put("order", "desc");
+        sort.addObject().putObject("view_count").put("order", "desc");
+        sort.addObject().putObject("content_id").put("order", "desc");
+
+        ArrayNode after = decodeAfter(query.getAfter());
+        if (after != null && !after.isEmpty()) {
+            root.set("search_after", after);
+        }
+        return root;
     }
 
-    private void addSort(SearchRequest.Builder b, String sort) {
-        String s = sort == null ? "RELEVANT" : sort.trim().toUpperCase(Locale.ROOT);
-        if ("LATEST".equals(s)) {
-            b.sort(so -> so.field(f -> f.field("createTimeMs").order(SortOrder.Desc)));
-            b.sort(so -> so.score(sc -> sc.order(SortOrder.Desc)));
-            b.sort(so -> so.field(f -> f.field("postId").order(SortOrder.Desc)));
-            return;
-        }
-        // RELEVANT：score desc -> createTimeMs desc -> postId desc
-        b.sort(so -> so.score(sc -> sc.order(SortOrder.Desc)));
-        b.sort(so -> so.field(f -> f.field("createTimeMs").order(SortOrder.Desc)));
-        b.sort(so -> so.field(f -> f.field("postId").order(SortOrder.Desc)));
+    private ObjectNode buildSuggestRequestBody(String prefix, int limit) {
+        ObjectNode root = objectMapper.createObjectNode();
+        root.put("size", 0);
+        ObjectNode suggest = root.putObject("suggest");
+        ObjectNode titleSuggest = suggest.putObject("title_suggest");
+        titleSuggest.put("prefix", prefix);
+        titleSuggest.putObject("completion")
+                .put("field", "title_suggest")
+                .put("size", Math.max(1, limit))
+                .put("skip_duplicates", true);
+        return root;
     }
 
-    private List<SearchEngineResultVO.SearchHitVO> mapHits(SearchResponse<SearchDocumentVO> resp) {
-        if (resp == null || resp.hits() == null || resp.hits().hits() == null || resp.hits().hits().isEmpty()) {
-            return List.of();
-        }
-        List<SearchEngineResultVO.SearchHitVO> res = new ArrayList<>(resp.hits().hits().size());
-        for (Hit<SearchDocumentVO> hit : resp.hits().hits()) {
-            if (hit == null || hit.source() == null) {
-                continue;
+    private SearchEngineResultVO parseSearchResponse(JsonNode root, int limit) {
+        JsonNode hitsNode = root == null ? null : root.path("hits").path("hits");
+        List<SearchEngineResultVO.SearchHitVO> hits = new ArrayList<>();
+        String nextAfter = null;
+        boolean hasMore = false;
+        if (hitsNode != null && hitsNode.isArray()) {
+            int size = hitsNode.size();
+            hasMore = size > limit;
+            int upper = Math.min(size, limit);
+            for (int i = 0; i < upper; i++) {
+                JsonNode hit = hitsNode.get(i);
+                SearchDocumentVO source = mapSource(hit.path("_source"));
+                hits.add(SearchEngineResultVO.SearchHitVO.builder()
+                        .highlightTitle(firstHighlight(hit, "title"))
+                        .highlightBody(firstHighlight(hit, "body"))
+                        .source(source)
+                        .build());
             }
-            String highlight = null;
-            if (hit.highlight() != null) {
-                List<String> frags = hit.highlight().get("contentText");
-                if (frags != null && !frags.isEmpty()) {
-                    highlight = frags.get(0);
-                }
+            if (hasMore && upper > 0) {
+                JsonNode lastVisible = hitsNode.get(upper - 1);
+                nextAfter = encodeAfter(lastVisible.path("sort"));
             }
-            res.add(SearchEngineResultVO.SearchHitVO.builder()
-                    .highlightContentText(highlight)
-                    .source(hit.source())
-                    .build());
         }
-        return res;
+        return SearchEngineResultVO.builder()
+                .hits(hits)
+                .nextAfter(nextAfter)
+                .hasMore(hasMore)
+                .build();
     }
 
-    private Map<String, Map<String, Long>> mapAggs(SearchResponse<SearchDocumentVO> resp) {
-        if (resp == null || resp.aggregations() == null || resp.aggregations().isEmpty()) {
-            return Map.of();
+    private List<String> parseSuggestResponse(JsonNode root) {
+        List<String> items = new ArrayList<>();
+        JsonNode suggest = root == null ? null : root.path("suggest").path("title_suggest");
+        if (suggest == null || !suggest.isArray() || suggest.isEmpty()) {
+            return items;
         }
-        Map<String, Map<String, Long>> result = new HashMap<>();
-
-        Aggregate media = resp.aggregations().get("mediaType");
-        if (media != null) {
-            Map<String, Long> buckets = parseTerms(media);
-            if (!buckets.isEmpty()) {
-                result.put("mediaType", buckets);
+        JsonNode options = suggest.get(0).path("options");
+        if (!options.isArray()) {
+            return items;
+        }
+        for (JsonNode option : options) {
+            String text = safeText(option.get("text"));
+            if (text != null && !items.contains(text)) {
+                items.add(text);
             }
         }
-
-        Aggregate postTypes = resp.aggregations().get("postTypes");
-        if (postTypes != null) {
-            Map<String, Long> buckets = parseTerms(postTypes);
-            if (!buckets.isEmpty()) {
-                result.put("postTypes", buckets);
-            }
-        }
-        return result;
+        return items;
     }
 
-    private Map<String, Long> parseTerms(Aggregate agg) {
-        if (agg.isSterms()) {
-            StringTermsAggregate a = agg.sterms();
-            if (a == null || a.buckets() == null || a.buckets().array() == null) {
-                return Map.of();
-            }
-            Map<String, Long> map = new HashMap<>();
-            for (StringTermsBucket b : a.buckets().array()) {
-                if (b == null || b.key() == null) {
-                    continue;
-                }
-                if (b.key().isString()) {
-                    map.put(b.key().stringValue(), b.docCount());
-                } else {
-                    map.put(b.key()._toJsonString(), b.docCount());
-                }
-            }
-            return map;
+    private SearchDocumentVO mapSource(JsonNode source) {
+        if (source == null || source.isMissingNode() || source.isNull()) {
+            return null;
         }
-        if (agg.isLterms()) {
-            LongTermsAggregate a = agg.lterms();
-            if (a == null || a.buckets() == null || a.buckets().array() == null) {
-                return Map.of();
-            }
-            Map<String, Long> map = new HashMap<>();
-            for (LongTermsBucket b : a.buckets().array()) {
-                map.put(String.valueOf(b.key()), b.docCount());
-            }
-            return map;
-        }
-        return Map.of();
+        return SearchDocumentVO.builder()
+                .contentId(safeLong(source.get("content_id")))
+                .contentType(safeText(source.get("content_type")))
+                .title(safeText(source.get("title")))
+                .description(safeText(source.get("description")))
+                .body(safeText(source.get("body")))
+                .tags(stringList(source.get("tags")))
+                .authorId(safeLong(source.get("author_id")))
+                .authorAvatar(safeText(source.get("author_avatar")))
+                .authorNickname(safeText(source.get("author_nickname")))
+                .authorTagJson(safeText(source.get("author_tag_json")))
+                .publishTime(safeLong(source.get("publish_time")))
+                .likeCount(safeLong(source.get("like_count")))
+                .favoriteCount(safeLong(source.get("favorite_count")))
+                .viewCount(safeLong(source.get("view_count")))
+                .status(safeText(source.get("status")))
+                .imgUrls(stringList(source.get("img_urls")))
+                .isTop(safeBoolean(source.get("is_top")))
+                .titleSuggest(safeText(source.get("title_suggest")))
+                .build();
     }
 
-    private Map<String, Object> toIndexBody(SearchDocumentVO doc) {
-        long now = System.currentTimeMillis();
-        long createTimeMs = doc.getCreateTimeMs() == null ? now : doc.getCreateTimeMs();
-
-        Map<String, Object> m = new HashMap<>();
-        m.put("entityIdStr", doc.getEntityIdStr());
-        m.put("createTimeMs", createTimeMs);
-        // createTime 是 date 类型：直接写 epoch ms
-        m.put("createTime", createTimeMs);
-
-        m.put("postId", doc.getPostId());
-        m.put("authorId", doc.getAuthorId());
-        m.put("authorNickname", doc.getAuthorNickname() == null ? "" : doc.getAuthorNickname());
-        m.put("contentText", doc.getContentText() == null ? "" : doc.getContentText());
-        m.put("postTypes", doc.getPostTypes() == null ? List.of() : doc.getPostTypes());
-        m.put("mediaType", doc.getMediaType() == null ? ContentMediaTypeEnumVO.TEXT.getCode() : doc.getMediaType());
-        return m;
+    private ObjectNode toIndexBody(SearchDocumentVO doc) {
+        ObjectNode root = objectMapper.createObjectNode();
+        root.put("content_id", doc.getContentId());
+        root.put("content_type", doc.getContentType() == null ? "POST" : doc.getContentType());
+        putNullable(root, "title", doc.getTitle());
+        putNullable(root, "description", doc.getDescription());
+        putNullable(root, "body", doc.getBody());
+        root.set("tags", stringArray(doc.getTags()));
+        putNullable(root, "author_id", doc.getAuthorId());
+        putNullable(root, "author_avatar", doc.getAuthorAvatar());
+        putNullable(root, "author_nickname", doc.getAuthorNickname());
+        putNullable(root, "author_tag_json", doc.getAuthorTagJson());
+        putNullable(root, "publish_time", doc.getPublishTime());
+        putNullable(root, "like_count", doc.getLikeCount());
+        putNullable(root, "favorite_count", doc.getFavoriteCount());
+        putNullable(root, "view_count", doc.getViewCount());
+        putNullable(root, "status", doc.getStatus());
+        root.set("img_urls", stringArray(doc.getImgUrls()));
+        if (doc.getIsTop() == null) {
+            root.putNull("is_top");
+        } else {
+            root.put("is_top", doc.getIsTop());
+        }
+        putNullable(root, "title_suggest", doc.getTitleSuggest());
+        return root;
     }
 
-    private String postDocId(Long postId) {
-        return "POST:" + postId;
+    private ArrayNode stringArray(List<String> values) {
+        ArrayNode array = objectMapper.createArrayNode();
+        if (values == null) {
+            return array;
+        }
+        for (String value : values) {
+            if (value != null) {
+                array.add(value);
+            }
+        }
+        return array;
+    }
+
+    private void putNullable(ObjectNode root, String field, String value) {
+        if (value == null) {
+            root.putNull(field);
+        } else {
+            root.put(field, value);
+        }
+    }
+
+    private void putNullable(ObjectNode root, String field, Long value) {
+        if (value == null) {
+            root.putNull(field);
+        } else {
+            root.put(field, value);
+        }
+    }
+
+    private String firstHighlight(JsonNode hit, String field) {
+        JsonNode arr = hit == null ? null : hit.path("highlight").path(field);
+        if (arr == null || !arr.isArray() || arr.isEmpty()) {
+            return null;
+        }
+        return safeText(arr.get(0));
+    }
+
+    private String encodeAfter(JsonNode sortNode) {
+        if (sortNode == null || !sortNode.isArray() || sortNode.isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>(sortNode.size());
+        for (JsonNode node : sortNode) {
+            parts.add(node == null || node.isNull() ? "" : node.asText());
+        }
+        String raw = String.join(",", parts);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private ArrayNode decodeAfter(String after) {
+        if (after == null || after.isBlank()) {
+            return null;
+        }
+        try {
+            String raw = new String(Base64.getUrlDecoder().decode(after), StandardCharsets.UTF_8);
+            String[] parts = raw.split(",", -1);
+            if (parts.length != 5) {
+                return null;
+            }
+            ArrayNode array = objectMapper.createArrayNode();
+            array.add(Double.parseDouble(parts[0]));
+            array.add(Long.parseLong(parts[1]));
+            array.add(Long.parseLong(parts[2]));
+            array.add(Long.parseLong(parts[3]));
+            array.add(Long.parseLong(parts[4]));
+            return array;
+        } catch (Exception e) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo(), e);
+        }
+    }
+
+    private List<String> stringList(JsonNode node) {
+        List<String> values = new ArrayList<>();
+        if (node == null || !node.isArray()) {
+            return values;
+        }
+        for (JsonNode item : node) {
+            String value = safeText(item);
+            if (value != null) {
+                values.add(value);
+            }
+        }
+        return values;
+    }
+
+    private String safeText(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        String text = node.asText();
+        return text == null || text.isBlank() ? null : text;
+    }
+
+    private Long safeLong(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isNumber()) {
+            return node.asLong();
+        }
+        String text = node.asText();
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Boolean safeBoolean(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.asBoolean();
     }
 }

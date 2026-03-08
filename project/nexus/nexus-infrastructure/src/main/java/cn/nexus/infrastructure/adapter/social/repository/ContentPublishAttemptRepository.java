@@ -82,6 +82,7 @@ public class ContentPublishAttemptRepository implements IContentPublishAttemptRe
         po.setAttemptStatus(entity.getAttemptStatus());
         po.setRiskStatus(entity.getRiskStatus());
         po.setTranscodeStatus(entity.getTranscodeStatus());
+        po.setSnapshotTitle(entity.getSnapshotTitle());
         po.setSnapshotContent(entity.getSnapshotContent());
         po.setSnapshotMedia(entity.getSnapshotMedia());
         po.setLocationInfo(entity.getLocationInfo());
@@ -107,6 +108,7 @@ public class ContentPublishAttemptRepository implements IContentPublishAttemptRe
                 .attemptStatus(po.getAttemptStatus())
                 .riskStatus(po.getRiskStatus())
                 .transcodeStatus(po.getTranscodeStatus())
+                .snapshotTitle(po.getSnapshotTitle())
                 .snapshotContent(po.getSnapshotContent())
                 .snapshotMedia(po.getSnapshotMedia())
                 .locationInfo(po.getLocationInfo())

@@ -27,6 +27,7 @@ public class ContentHistoryResponseDTO {
     @AllArgsConstructor
     public static class ContentVersionDTO {
         private Long versionId;
+        private String title;
         private String content;
         private Long time;
     }

@@ -76,6 +76,9 @@ public interface IContentRepository {
      */
     boolean updatePostStatusIfMatchVersion(Long postId, Integer status, Integer expectedStatus, Integer expectedVersion);
 
+    boolean updatePostStatusAndPublishTimeIfMatchVersion(Long postId, Integer status, Integer expectedStatus,
+                                                         Integer expectedVersion, Long publishTime);
+
     /**
      * 更新内容摘要（AI 异步写回）。
      *
@@ -87,7 +90,8 @@ public interface IContentRepository {
     boolean updatePostSummary(Long postId, String summary, Integer summaryStatus);
 
     boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
-                                       String contentUuid, String mediaInfo, String locationInfo, Integer visibility);
+                                       String title, Long publishTime, String contentUuid, String mediaInfo,
+                                       String locationInfo, Integer visibility);
 
     void saveHistory(ContentHistoryEntity history);
 

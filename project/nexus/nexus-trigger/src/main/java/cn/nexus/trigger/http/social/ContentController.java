@@ -60,7 +60,7 @@ public class ContentController implements IContentApi {
     public Response<SaveDraftResponseDTO> saveDraft(@RequestBody SaveDraftRequestDTO requestDTO) {
         try {
             Long userId = UserContext.requireUserId();
-            DraftVO vo = contentService.saveDraft(userId, requestDTO.getDraftId(), requestDTO.getContentText(), requestDTO.getMediaIds());
+            DraftVO vo = contentService.saveDraft(userId, requestDTO.getDraftId(), requestDTO.getTitle(), requestDTO.getContentText(), requestDTO.getMediaIds());
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
                     SaveDraftResponseDTO.builder().draftId(vo.getDraftId()).build());
         } catch (AppException e) {
@@ -80,7 +80,7 @@ public class ContentController implements IContentApi {
         try {
             Long userId = UserContext.requireUserId();
             OperationResultVO vo = contentService.publish(
-                    requestDTO.getPostId(), userId, requestDTO.getText(), requestDTO.getMediaInfo(),
+                    requestDTO.getPostId(), userId, requestDTO.getTitle(), requestDTO.getText(), requestDTO.getMediaInfo(),
                     requestDTO.getLocation(), requestDTO.getVisibility(), requestDTO.getPostTypes());
             PublishContentResponseDTO dto = PublishContentResponseDTO.builder()
                     .postId(vo.getId())
@@ -238,7 +238,7 @@ public class ContentController implements IContentApi {
     public Response<DraftSyncResponseDTO> syncDraft(@PathVariable("draftId") Long draftId, @RequestBody DraftSyncRequestDTO requestDTO) {
         try {
             Long userId = UserContext.requireUserId();
-            DraftSyncVO vo = contentService.syncDraft(draftId, userId, requestDTO.getDiffContent(), requestDTO.getClientVersion(), requestDTO.getDeviceId(), requestDTO.getMediaIds());
+            DraftSyncVO vo = contentService.syncDraft(draftId, userId, requestDTO.getTitle(), requestDTO.getDiffContent(), requestDTO.getClientVersion(), requestDTO.getDeviceId(), requestDTO.getMediaIds());
             DraftSyncResponseDTO dto = DraftSyncResponseDTO.builder()
                     .serverVersion(vo.getServerVersion() == null ? null : String.valueOf(vo.getServerVersion()))
                     .syncTime(vo.getSyncTime())
@@ -268,6 +268,7 @@ public class ContentController implements IContentApi {
                     .versions(vo.getVersions().stream()
                             .map(v -> ContentHistoryResponseDTO.ContentVersionDTO.builder()
                                     .versionId(v.getVersionId())
+                                    .title(v.getTitle())
                                     .content(v.getContent())
                                     .time(v.getTime())
                                     .build())

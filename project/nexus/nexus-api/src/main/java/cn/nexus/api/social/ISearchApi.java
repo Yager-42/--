@@ -1,19 +1,12 @@
 package cn.nexus.api.social;
 
 import cn.nexus.api.response.Response;
-import cn.nexus.api.social.common.OperationResultDTO;
-import cn.nexus.api.social.search.dto.*;
+import cn.nexus.api.social.search.dto.SearchResponseDTO;
+import cn.nexus.api.social.search.dto.SuggestResponseDTO;
 
-/**
- * 搜索发现接口定义。
- */
 public interface ISearchApi {
 
-    Response<SearchGeneralResponseDTO> search(SearchGeneralRequestDTO requestDTO);
+    Response<SearchResponseDTO> search(String q, Integer size, String tags, String after);
 
-    Response<SearchSuggestResponseDTO> suggest(SearchSuggestRequestDTO requestDTO);
-
-    Response<SearchTrendingResponseDTO> trending(SearchTrendingRequestDTO requestDTO);
-
-    Response<OperationResultDTO> clearHistory(SearchHistoryDeleteRequestDTO requestDTO);
+    Response<SuggestResponseDTO> suggest(String prefix, Integer size);
 }

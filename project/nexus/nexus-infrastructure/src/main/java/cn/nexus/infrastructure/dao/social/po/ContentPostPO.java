@@ -11,6 +11,7 @@ import java.util.Date;
 public class ContentPostPO {
     private Long postId;
     private Long userId;
+    private String title;
     private String contentUuid;
     private String summary;
     private Integer summaryStatus;
@@ -22,4 +23,5 @@ public class ContentPostPO {
     private Integer versionNum;
     private Integer isEdited;
     private Date createTime;
+    private Date publishTime;
 }

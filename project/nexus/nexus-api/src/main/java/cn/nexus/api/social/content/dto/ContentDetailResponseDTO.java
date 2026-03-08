@@ -16,6 +16,7 @@ public class ContentDetailResponseDTO {
     private String authorNickname;
     private String authorAvatarUrl;
 
+    private String title;
     private String content;
     private String summary;
     private Integer summaryStatus;

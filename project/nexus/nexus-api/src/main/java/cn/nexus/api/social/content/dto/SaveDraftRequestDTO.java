@@ -27,6 +27,7 @@ public class SaveDraftRequestDTO {
     private Long draftId;
 
     private Long userId;
+    private String title;
     private String contentText;
     private List<String> mediaIds;
 }

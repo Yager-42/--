@@ -16,6 +16,7 @@ public class ContentHistoryEntity {
     private Long historyId;
     private Long postId;
     private Integer versionNum;
+    private String snapshotTitle;
     private String snapshotContent;
     private String snapshotMedia;
     private Long createTime;

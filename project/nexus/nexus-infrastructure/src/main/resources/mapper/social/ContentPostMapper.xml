@@ -5,6 +5,7 @@
     <resultMap id="ContentPostMap" type="cn.nexus.infrastructure.dao.social.po.ContentPostPO">
         <id property="postId" column="post_id"/>
         <result property="userId" column="user_id"/>
+        <result property="title" column="title"/>
         <result property="contentUuid" column="content_uuid"/>
         <result property="summary" column="summary"/>
         <result property="summaryStatus" column="summary_status"/>
@@ -16,16 +17,17 @@
         <result property="versionNum" column="version_num"/>
         <result property="isEdited" column="is_edited"/>
         <result property="createTime" column="create_time"/>
+        <result property="publishTime" column="publish_time"/>
     </resultMap>
 
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentPostPO">
-        INSERT INTO content_post(post_id, user_id, content_uuid, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time)
-        VALUES(#{postId}, #{userId}, #{contentUuid}, #{mediaType}, #{mediaInfo}, #{locationInfo}, #{status}, #{visibility}, #{versionNum}, #{isEdited}, NOW())
+        INSERT INTO content_post(post_id, user_id, title, content_uuid, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time)
+        VALUES(#{postId}, #{userId}, #{title}, #{contentUuid}, #{mediaType}, #{mediaInfo}, #{locationInfo}, #{status}, #{visibility}, #{versionNum}, #{isEdited}, NOW(), #{publishTime})
     </insert>
 
     <select id="selectById" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_uuid, summary, summary_status,
-               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
         FROM content_post
         WHERE post_id = #{postId}
     </select>
@@ -38,8 +40,8 @@
     </select>
 
     <select id="selectByIdForUpdate" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_uuid, summary, summary_status,
-               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
         FROM content_post
         WHERE post_id = #{postId}
         FOR UPDATE
@@ -61,6 +63,15 @@
     <update id="updateStatusIfMatchAndVersion">
         UPDATE content_post
         SET status = #{status}
+        WHERE post_id = #{postId}
+          AND status = #{expectedStatus}
+          AND version_num = #{expectedVersion}
+    </update>
+
+    <update id="updateStatusAndPublishTimeIfMatchAndVersion">
+        UPDATE content_post
+        SET status = #{status},
+            publish_time = COALESCE(publish_time, #{publishTime})
         WHERE post_id = #{postId}
           AND status = #{expectedStatus}
           AND version_num = #{expectedVersion}
@@ -112,7 +123,9 @@
 
     <update id="updateContentAndVersion">
         UPDATE content_post
-        SET content_uuid = #{contentUuid},
+        SET title = #{title},
+            publish_time = #{publishTime},
+            content_uuid = #{contentUuid},
             media_info = #{mediaInfo},
             location_info = #{locationInfo},
             version_num = #{versionNum},
@@ -124,8 +137,8 @@
     </update>
 
     <select id="selectByIds" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_uuid, summary, summary_status,
-               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
         FROM content_post
         WHERE status = 2
           AND post_id IN
@@ -135,8 +148,8 @@
     </select>
 
     <select id="selectByUserPage" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_uuid, summary, summary_status,
-               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
         FROM content_post
         WHERE user_id = #{userId}
           AND status IN (1, 2)
@@ -149,8 +162,8 @@
     </select>
 
     <select id="selectPublishedPage" resultMap="ContentPostMap">
-        SELECT post_id, user_id, content_uuid, summary, summary_status,
-               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
         FROM content_post
         WHERE status = 2
         <if test="cursorTime != null and cursorPostId != null">
@@ -158,6 +171,21 @@
                  OR (create_time = #{cursorTime} AND post_id &lt; #{cursorPostId}))
         </if>
         ORDER BY create_time DESC, post_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectPublishedPageForSearch" resultMap="ContentPostMap">
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
+        FROM content_post
+        WHERE status = #{publishedStatus}
+          AND visibility = #{publicVisibility}
+          AND publish_time IS NOT NULL
+        <if test="cursorPublishTime != null and cursorPostId != null">
+            AND (publish_time &gt; #{cursorPublishTime}
+                 OR (publish_time = #{cursorPublishTime} AND post_id &gt; #{cursorPostId}))
+        </if>
+        ORDER BY publish_time ASC, post_id ASC
         LIMIT #{limit}
     </select>
 

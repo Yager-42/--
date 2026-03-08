@@ -37,4 +37,10 @@ public interface IRelationRepository {
     List<RelationEntity> pageActiveFollowsBySource(Long sourceId, Date cursorTime, Long cursorTargetId, int limit);
 
     List<RelationEntity> pageActiveFollowsByTarget(Long targetId, Date cursorTime, Long cursorSourceId, int limit);
+
+    List<Long> batchFindActiveFollowTargets(Long sourceId, List<Long> targetIds);
+
+    List<Long> batchFindBlockTargetsBySource(Long sourceId, List<Long> targetIds);
+
+    List<Long> batchFindBlockSourcesByTarget(Long targetId, List<Long> sourceIds);
 }

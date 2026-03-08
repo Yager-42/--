@@ -1,6 +1,5 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
@@ -27,43 +26,52 @@ public class RelationQueryService {
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 50;
 
-    private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IUserBaseRepository userBaseRepository;
     private final IRelationRepository relationRepository;
 
     public RelationListVO following(Long userId, String cursor, Integer limit) {
-        List<RelationUserEdgeVO> edges = relationAdjacencyCachePort.pageFollowing(userId, cursor, normalizeLimit(limit));
-        return toListVO(edges);
+        Cursor parsed = Cursor.parse(cursor);
+        List<RelationEntity> rows = relationRepository.pageActiveFollowsBySource(userId, parsed == null ? null : new java.util.Date(parsed.timeMs), parsed == null ? null : parsed.userId, normalizeLimit(limit));
+        return toListVO(toFollowingEdges(rows));
     }
 
     public RelationListVO followers(Long userId, String cursor, Integer limit) {
-        List<RelationUserEdgeVO> edges = relationAdjacencyCachePort.pageFollowers(userId, cursor, normalizeLimit(limit));
-        return toListVO(edges);
+        Cursor parsed = Cursor.parse(cursor);
+        List<RelationEntity> rows = relationRepository.pageActiveFollowsByTarget(userId, parsed == null ? null : new java.util.Date(parsed.timeMs), parsed == null ? null : parsed.userId, normalizeLimit(limit));
+        return toListVO(toFollowerEdges(rows));
     }
 
     public RelationStateBatchVO batchState(Long sourceId, List<Long> targetUserIds) {
         if (sourceId == null || targetUserIds == null || targetUserIds.isEmpty()) {
             return RelationStateBatchVO.builder().followingUserIds(List.of()).blockedUserIds(List.of()).build();
         }
-        List<Long> following = new ArrayList<>();
-        List<Long> blocked = new ArrayList<>();
+        List<Long> deduped = new ArrayList<>();
         Set<Long> seen = new HashSet<>();
         for (Long targetId : targetUserIds) {
-            if (targetId == null || !seen.add(targetId)) {
-                continue;
+            if (targetId != null && seen.add(targetId)) {
+                deduped.add(targetId);
             }
-            RelationEntity follow = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
-            if (follow != null && Integer.valueOf(1).equals(follow.getStatus())) {
-                following.add(targetId);
-            }
-            boolean blockedEitherSide = relationRepository.findRelation(sourceId, targetId, RELATION_BLOCK) != null
-                    || relationRepository.findRelation(targetId, sourceId, RELATION_BLOCK) != null;
-            if (blockedEitherSide) {
+        }
+        if (deduped.isEmpty()) {
+            return RelationStateBatchVO.builder().followingUserIds(List.of()).blockedUserIds(List.of()).build();
+        }
+        Set<Long> following = new HashSet<>(relationRepository.batchFindActiveFollowTargets(sourceId, deduped));
+        Set<Long> blockFromMe = new HashSet<>(relationRepository.batchFindBlockTargetsBySource(sourceId, deduped));
+        Set<Long> blockToMe = new HashSet<>(relationRepository.batchFindBlockSourcesByTarget(sourceId, deduped));
+        List<Long> blocked = new ArrayList<>();
+        for (Long targetId : deduped) {
+            if (blockFromMe.contains(targetId) || blockToMe.contains(targetId)) {
                 blocked.add(targetId);
             }
         }
+        List<Long> followingList = new ArrayList<>();
+        for (Long targetId : deduped) {
+            if (following.contains(targetId)) {
+                followingList.add(targetId);
+            }
+        }
         return RelationStateBatchVO.builder()
-                .followingUserIds(following)
+                .followingUserIds(followingList)
                 .blockedUserIds(blocked)
                 .build();
     }
@@ -71,6 +79,40 @@ public class RelationQueryService {
     public Set<Long> batchFollowing(Long sourceId, List<Long> targetUserIds) {
         RelationStateBatchVO state = batchState(sourceId, targetUserIds);
         return new HashSet<>(state.getFollowingUserIds() == null ? List.of() : state.getFollowingUserIds());
+    }
+
+    private List<RelationUserEdgeVO> toFollowingEdges(List<RelationEntity> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<RelationUserEdgeVO> edges = new ArrayList<>(rows.size());
+        for (RelationEntity row : rows) {
+            if (row == null || row.getTargetId() == null) {
+                continue;
+            }
+            edges.add(RelationUserEdgeVO.builder()
+                    .userId(row.getTargetId())
+                    .followTimeMs(row.getCreateTime() == null ? null : row.getCreateTime().getTime())
+                    .build());
+        }
+        return edges;
+    }
+
+    private List<RelationUserEdgeVO> toFollowerEdges(List<RelationEntity> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<RelationUserEdgeVO> edges = new ArrayList<>(rows.size());
+        for (RelationEntity row : rows) {
+            if (row == null || row.getSourceId() == null) {
+                continue;
+            }
+            edges.add(RelationUserEdgeVO.builder()
+                    .userId(row.getSourceId())
+                    .followTimeMs(row.getCreateTime() == null ? null : row.getCreateTime().getTime())
+                    .build());
+        }
+        return edges;
     }
 
     private RelationListVO toListVO(List<RelationUserEdgeVO> edges) {
@@ -114,5 +156,22 @@ public class RelationQueryService {
             return DEFAULT_LIMIT;
         }
         return Math.min(limit, MAX_LIMIT);
+    }
+
+    private record Cursor(long timeMs, long userId) {
+        static Cursor parse(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            String[] parts = raw.trim().split(":", 2);
+            if (parts.length != 2) {
+                return null;
+            }
+            try {
+                return new Cursor(Long.parseLong(parts[0]), Long.parseLong(parts[1]));
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
     }
 }

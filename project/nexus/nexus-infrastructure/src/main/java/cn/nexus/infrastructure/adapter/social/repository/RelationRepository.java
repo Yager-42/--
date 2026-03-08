@@ -124,6 +124,31 @@ public class RelationRepository implements IRelationRepository {
                 .collect(Collectors.toList());
     }
 
+
+    @Override
+    public List<Long> batchFindActiveFollowTargets(Long sourceId, List<Long> targetIds) {
+        if (sourceId == null || targetIds == null || targetIds.isEmpty()) {
+            return List.of();
+        }
+        return relationDao.selectTargetIdsBySourceAndType(sourceId, 1, 1, targetIds);
+    }
+
+    @Override
+    public List<Long> batchFindBlockTargetsBySource(Long sourceId, List<Long> targetIds) {
+        if (sourceId == null || targetIds == null || targetIds.isEmpty()) {
+            return List.of();
+        }
+        return relationDao.selectTargetIdsBySourceAndType(sourceId, 3, 1, targetIds);
+    }
+
+    @Override
+    public List<Long> batchFindBlockSourcesByTarget(Long targetId, List<Long> sourceIds) {
+        if (targetId == null || sourceIds == null || sourceIds.isEmpty()) {
+            return List.of();
+        }
+        return relationDao.selectSourceIdsByTargetAndType(targetId, 3, 1, sourceIds);
+    }
+
     private RelationEntity toEntity(RelationPO po) {
         if (po == null) {
             return null;

@@ -50,4 +50,14 @@ public interface IRelationDao {
                                         @Param("cursorTime") Date cursorTime,
                                         @Param("cursorSourceId") Long cursorSourceId,
                                         @Param("limit") Integer limit);
+
+    List<Long> selectTargetIdsBySourceAndType(@Param("sourceId") Long sourceId,
+                                              @Param("relationType") Integer relationType,
+                                              @Param("status") Integer status,
+                                              @Param("targetIds") List<Long> targetIds);
+
+    List<Long> selectSourceIdsByTargetAndType(@Param("targetId") Long targetId,
+                                              @Param("relationType") Integer relationType,
+                                              @Param("status") Integer status,
+                                              @Param("sourceIds") List<Long> sourceIds);
 }

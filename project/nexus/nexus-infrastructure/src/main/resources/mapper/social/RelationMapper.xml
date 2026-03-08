@@ -122,4 +122,29 @@
         ORDER BY create_time DESC, source_id DESC
         LIMIT #{limit}
     </select>
+
+
+    <select id="selectTargetIdsBySourceAndType" resultType="java.lang.Long">
+        SELECT target_id
+        FROM user_relation
+        WHERE source_id = #{sourceId}
+          AND relation_type = #{relationType}
+          AND status = #{status}
+          AND target_id IN
+        <foreach collection="targetIds" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
+    </select>
+
+    <select id="selectSourceIdsByTargetAndType" resultType="java.lang.Long">
+        SELECT source_id
+        FROM user_relation
+        WHERE target_id = #{targetId}
+          AND relation_type = #{relationType}
+          AND status = #{status}
+          AND source_id IN
+        <foreach collection="sourceIds" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
+    </select>
 </mapper>

@@ -184,7 +184,11 @@ public class ReactionLikeService implements IReactionLikeService {
 
         afterCommit(() -> {
             try {
-                reactionCachePort.setState(userId, target, desiredState == 1);
+                if (delta == 1) {
+                    reactionCachePort.setState(userId, target, true);
+                } else if (delta == -1 && reactionCachePort.bitmapShardExists(userId, target)) {
+                    reactionCachePort.setState(userId, target, false);
+                }
                 reactionCachePort.setCount(target, currentCount);
             } catch (Exception e) {
                 log.warn("comment reaction redis refresh failed, userId={}, target={}", userId, target, e);

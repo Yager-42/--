@@ -14,6 +14,9 @@
 - `2A`：删除 `history` 和 `trending`
 - `3B`：搜索索引增量链路改成 `Outbox -> Canal -> Kafka -> Search Consumer -> ES`
 - `4A`：不做 `trending`
+- 搜索接口返回形式：**直接返回裸 JSON，不再包 `Response<T>`**
+- `title` 规则：**草稿允许不填；发布时必须必填**
+- 数据兼容规则：**当前 MySQL、Redis、ES、Outbox、MQ 等组件里没有历史数据，不需要处理任何旧数据兼容、旧索引兼容、历史记录迁移或回填修补**
 - 缺失字段处理：**当前项目没有 `title` 字段，必须补充标题字段**；其余当前项目没有真值的字段，按固定兜底规则处理
 - 当前轮次：**只产出文档，不改代码**
 
@@ -22,8 +25,10 @@
 1. 旧搜索接口会下线，前端必须切到新接口。  
 2. 旧的 Redis 搜索历史 / 热搜能力全部删除，不做兼容。  
 3. 搜索写链不再依赖当前 Search RabbitMQ 消费者。  
-4. 为了让 `suggest` 和搜索结果里的 `title` 成立，**内容域必须先补 `title` 字段**。  
-5. 为了复刻 `zhiguang` 的排序语义，**内容域还必须补 `publish_time` 字段**；不能继续拿 `create_time` 冒充发布时间。
+4. 搜索接口会打破当前 Nexus 统一 `Response<T>` 风格，**直接返回裸 JSON**。  
+5. 为了让 `suggest` 和搜索结果里的 `title` 成立，**内容域必须先补 `title` 字段**。  
+6. 为了复刻 `zhiguang` 的排序语义，**内容域还必须补 `publish_time` 字段**；不能继续拿 `create_time` 冒充发布时间。  
+7. 因为当前 MySQL、Redis、ES、Outbox、MQ 等组件里没有历史数据，**不需要做旧帖子兼容、旧索引迁移、旧标题修补**。
 
 ---
 
@@ -66,13 +71,26 @@
 当前内容域没有标题字段，只有：
 
 - `content_post.content_uuid`
+- `content_post` 对应实体里还有 `contentText`
 - `content_post.summary`
+- `content_post.summary_status`
+- `content_post.post_types`
+- `content_post.media_type`
 - `content_post.media_info`
 - `content_post.location_info`
 - `content_post.status`
 - `content_post.visibility`
 - `content_post.version_num`
+- `content_post.is_edited`
 - `content_post.create_time`
+
+这些字段会直接影响后续搜索文档映射：
+
+- `body` 来源于 `contentText`
+- `description` 默认来源于 `summary`
+- `tags` 来源于 `postTypes`
+- `coverImage` 来源于 `mediaInfo`
+- 是否允许入索引，取决于 `status + visibility`
 
 对应实体：
 
@@ -157,11 +175,24 @@ HTTP GET /api/v1/search/suggest
 - `tags`：`String`，可选，逗号分隔，例如 `java,并发`
 - `after`：`String`，可选，Base64URL 编码的游标
 
+### Controller 入参形式
+
+- `SearchController` 直接使用 `@RequestParam` 接收 `q/size/tags/after`
+- **不再使用** `SearchGeneralRequestDTO`
+- **不再使用** `SearchSuggestRequestDTO`
+- **不再保留** 旧 `filters` JSON 入参模式
+
 ### 登录语义
 
 - 允许匿名调用
 - `userId` 从 `UserContext.getUserId()` 取，可为空
 - 匿名用户时：`liked=false`，`faved=false`
+
+### 返回形式
+
+- `SearchController` 直接返回 `SearchResponseDTO`
+- **不再包 `Response<SearchResponseDTO>`**
+- 这次是明确破坏当前 Nexus 搜索接口返回风格，不做兼容
 
 ### 响应结构
 
@@ -213,6 +244,7 @@ HTTP GET /api/v1/search/suggest
 - 不允许继续返回旧的 `facets`
 - 不允许保留 `/general` 作为兼容路由
 - 不允许把 `filters` JSON 兼容进新接口
+- 不允许再包一层 `Response<T>`
 
 ## 4.2 `GET /api/v1/search/suggest`
 
@@ -220,6 +252,11 @@ HTTP GET /api/v1/search/suggest
 
 - `prefix`：`String`，必填
 - `size`：`int`，可选，默认 `10`，最小值 `1`
+
+### Controller 入参形式
+
+- `SearchController` 直接使用 `@RequestParam` 接收 `prefix/size`
+- **不再使用** 旧 `SearchSuggestRequestDTO`
 
 ### 响应结构
 
@@ -230,6 +267,11 @@ HTTP GET /api/v1/search/suggest
 字段：
 
 - `List<String> items`
+
+### 返回形式
+
+- `SearchController` 直接返回 `SuggestResponseDTO`
+- **不再包 `Response<SuggestResponseDTO>`**
 
 ### 联想来源
 
@@ -271,6 +313,13 @@ HTTP GET /api/v1/search/suggest
 - 可空：`NULL`
 - 字符集：沿用表默认 `utf8mb4`
 
+### 标题输入规则，写死
+
+- `PUT /api/v1/content/draft`：`title` 可以为空
+- `POST /api/v1/content/publish`：`title` 必填
+- 发布时若 `title == null` 或 `title.trim().isEmpty()`：直接返回参数错误
+- 因为当前组件里没有历史数据，**不提供任何“自动从 summary/正文补 title”的兼容逻辑**
+
 ## 5.3 还必须同时补 `publish_time`
 
 因为目标排序链路是：
@@ -306,6 +355,12 @@ HTTP GET /api/v1/search/suggest
    - `snapshot_title VARCHAR(256) NULL`
 4. `content_publish_attempt` 新增：
    - `snapshot_title VARCHAR(256) NULL`
+
+因为当前组件里没有历史数据，这个 migration **不需要**：
+
+- 旧帖子标题回填 SQL
+- 旧索引兼容 SQL
+- 旧数据补偿脚本
 
 ## 5.5 必改内容 API / Domain / Repository
 
@@ -368,6 +423,7 @@ HTTP GET /api/v1/search/suggest
 4. `title` 写入 `content_publish_attempt.snapshot_title` 以支持排障  
 5. post 真正进入可搜索状态时，写 `publish_time = 当前毫秒时间`  
 6. `ContentDetailQueryService` 返回详情时带上 `title`
+7. `publish_time` 只在 post 真正进入“可搜索态”时写入，禁止继续复用草稿创建时间
 
 ---
 
@@ -465,6 +521,11 @@ HTTP GET /api/v1/search/suggest
 - `is_top`：`keyword`
 - `title_suggest`：`completion`
 
+注意：
+
+- 新索引字段名统一使用 **下划线风格**，例如 `author_id`、`author_nickname`、`publish_time`
+- 不再沿用旧搜索索引里的 camelCase 字段名，例如 `authorId`、`authorNickname`、`createTime`
+
 ### 固定写值规则
 
 - `favorite_count = 0`
@@ -513,6 +574,11 @@ ES 集群必须安装 `analysis-ik`。
 
 7. `search_after`
    - 有 `after` 才带
+
+8. `aggregations`
+   - 新搜索链路**不做任何 aggregations**
+   - 不返回 `facets`
+   - 不再保留旧搜索的 `mediaType/postTypes` 聚合输出
 
 ## 7.5 游标编码规则固定写法
 
@@ -566,6 +632,19 @@ ES 集群必须安装 `analysis-ik`。
 - `is_top = null`
 - `title_suggest = title`
 
+## 8.1.1 Nexus 数值状态到 ES 字符串状态的映射，必须写死
+
+- 当 `post.status == ContentPostStatusEnumVO.PUBLISHED.getCode()` 且 `post.visibility == ContentPostVisibilityEnumVO.PUBLIC.getCode()` 时：
+  - `status = "published"`
+- 其它所有情况：
+  - `status = "deleted"`
+
+注意：
+
+- ES 里的 `status` 是字符串，不是 Nexus 的数值状态原样写入
+- `post.deleted` 事件也统一落 `status = "deleted"`
+- 不允许实现者自己发明第三种状态
+
 ## 8.2 `img_urls` 解析固定规则
 
 当前项目里 `mediaInfo` 的现有语义是“逗号分隔 token/URL 列表”，见：
@@ -615,11 +694,24 @@ ES 集群必须安装 `analysis-ik`。
 2. 不存在则按第 7 章 Mapping 创建  
 3. 任何异常只记录日志，不阻塞应用启动
 
+配置键名固定规则：
+
+- **沿用当前项目已有配置键名**：`search.es.indexAlias`
+- 固定值改成：`zhiguang_content_index`
+- 不要另起 `search.es.index`
+- 虽然配置键名叫 `indexAlias`，但这次实现里**直接把它当实际索引名使用**
+- 本次不做单独 alias 管理，不做 `alias -> concrete index` 双层切换
+
 ## 9.2 回灌触发规则
 
 新增类：
 
 - `project/nexus/nexus-app/src/main/java/cn/nexus/config/SearchIndexBackfillRunner.java`
+
+注意：
+
+- 当前项目里已经有同名旧类
+- 这次不是平行再建一份，而是**重写现有 `SearchIndexBackfillRunner`**
 
 固定规则：
 
@@ -641,6 +733,8 @@ ES 集群必须安装 `analysis-ik`。
 - 没有 `title`：跳过并打告警日志
 - 没有 `publish_time`：跳过并打告警日志
 - 没有 `contentText`：允许写入，但 `body = ""`
+
+因为当前组件里没有历史数据，所以这里的“没有 `title`”只表示开发/测试阶段脏数据，不表示要做历史回填兼容。
 
 ## 9.4 回灌数据来源
 
@@ -739,6 +833,8 @@ Canal 只订阅两张表：
 
 不要再用旧搜索里的 `POST:{postId}`。
 
+因为当前组件里没有历史数据、也没有旧索引，所以这里**不需要**任何文档 ID 兼容逻辑，也不需要双写两套 ID。
+
 ---
 
 ## 11. 新旧搜索文件改造清单，按模块拆给后续 Codex
@@ -748,6 +844,8 @@ Canal 只订阅两张表：
 ### 必删
 
 - 旧 `SearchGeneral*`
+- 旧 `SearchSuggestRequestDTO`
+- 旧 `SearchSuggestResponseDTO`
 - 旧 `SearchTrending*`
 - 旧 `SearchHistoryDeleteRequestDTO`
 
@@ -763,8 +861,14 @@ Canal 只订阅两张表：
 
 固定改成两个方法：
 
-- `Response<SearchResponseDTO> search(String q, Integer size, String tags, String after)`
-- `Response<SuggestResponseDTO> suggest(String prefix, Integer size)`
+- `SearchResponseDTO search(String q, Integer size, String tags, String after)`
+- `SuggestResponseDTO suggest(String prefix, Integer size)`
+
+说明：
+
+- 保留 `ISearchApi` 这个文件
+- 但它不再使用 `Response<T>` 包装
+- 这是本次用户已明确接受的接口风格破坏点
 
 ## 11.2 `nexus-trigger`
 
@@ -832,7 +936,7 @@ Canal 只订阅两张表：
 search:
   es:
     endpoints: http://127.0.0.1:9200
-    index: zhiguang_content_index
+    indexAlias: zhiguang_content_index
   backfill:
     enabled: true
     pageSize: 500
@@ -863,12 +967,14 @@ search:
 4. 发布逻辑：写 `title`、写 `publish_time`
 5. 草稿逻辑：保存 `title`
 6. 详情接口：返回 `title`
+7. 发布接口：校验 `title` 必填
 
 验收：
 
 - 新发一条 post，详情接口能看到 `title`
 - DB 中 `content_post.title` 有值
 - 真正发布后 `content_post.publish_time` 有值，不等于草稿初建时间
+- `POST /api/v1/content/publish` 不传 `title` 会直接失败
 
 ## 阶段 2：替换对外搜索合同
 
@@ -886,6 +992,7 @@ search:
 - `GET /api/v1/search/trending` 不再存在
 - `DELETE /api/v1/search/history` 不再存在
 - `GET /api/v1/search?q=xxx` 可正常进入新 Controller
+- 搜索接口响应体不再套 `Response<T>`
 
 ## 阶段 3：替换读链到 ES zhiguang 语义
 
@@ -919,11 +1026,17 @@ search:
 
 - 清空 ES 后重启应用，索引会被重新创建
 - 已发布公开帖子都会进入索引
-- 没标题的旧帖子不会进入索引，并有告警日志
+- 没有标题的测试脏数据不会进入索引，并有告警日志
 
 ## 阶段 5：切增量链路到 Outbox -> Canal -> Kafka
 
 目标：以后不再靠 Search RabbitMQ 消费者更新索引。
+
+因为当前组件里没有历史消息和历史数据，这一阶段不需要考虑：
+
+- 旧 RabbitMQ 搜索事件重放
+- 旧 Canal 位点迁移
+- 旧 Kafka topic 数据清理兼容
 
 必须完成：
 
@@ -1011,6 +1124,7 @@ search:
 - 内容域已补 `title` 和 `publish_time`
 - 新搜索接口为 `/api/v1/search` 和 `/api/v1/search/suggest`
 - 旧 `/general`、`/trending`、`/history` 已删除
+- 搜索接口直接返回裸 JSON，不再包 `Response<T>`
 - 结果结构为 `items + nextAfter + hasMore`
 - 搜索字段含 `title`、`body`，联想字段是 `title_suggest`
 - ES 查询为 `multi_match + function_score + highlight + search_after`
@@ -1035,4 +1149,3 @@ search:
 
 不要反过来。  
 先删旧搜索、后补标题字段，会把自己困死。
-

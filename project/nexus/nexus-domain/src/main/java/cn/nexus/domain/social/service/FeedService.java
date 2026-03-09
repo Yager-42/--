@@ -1,4 +1,4 @@
-﻿package cn.nexus.domain.social.service;
+package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRecommendationPort;

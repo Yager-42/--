@@ -76,12 +76,13 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
         if (!enabled) {
             return;
         }
-        if (countIndex() > 0L) {
-            log.info("search index backfill skipped because index is not empty, index={}", indexAlias);
-            return;
-        }
         int limit = Math.max(1, pageSize);
         Cursor cursor = checkpointEnabled ? loadCheckpoint() : Cursor.empty();
+        log.info("search index backfill started, index={}, checkpointEnabled={}, cursor={}:{}",
+                indexAlias,
+                checkpointEnabled,
+                cursor.cursorPublishTimeMs,
+                cursor.cursorPostId);
         Date cursorPublishTime = cursor.cursorPublishTimeMs == null ? null : new Date(cursor.cursorPublishTimeMs);
         Long cursorPostId = cursor.cursorPostId;
         long total = 0L;

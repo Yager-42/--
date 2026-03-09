@@ -1,4 +1,4 @@
-﻿package cn.nexus.trigger.http.social;
+package cn.nexus.trigger.http.social;
 
 import cn.nexus.api.response.Response;
 import cn.nexus.api.social.IFeedApi;

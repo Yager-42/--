@@ -29,7 +29,7 @@ public class SearchEnginePort implements ISearchEnginePort {
     private final RestClient searchRestClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Value("${search.es.indexAlias:social_search}")
+    @Value("${search.es.indexAlias:zhiguang_content_index}")
     private String indexAlias;
 
     @Override

@@ -13,9 +13,13 @@
     </resultMap>
 
     <insert id="insertOrUpdate" parameterType="cn.nexus.infrastructure.dao.social.po.RelationPO">
-        INSERT INTO user_relation(id, source_id, target_id, relation_type, status, group_id, version)
-        VALUES(#{id}, #{sourceId}, #{targetId}, #{relationType}, #{status}, #{groupId}, #{version})
-        ON DUPLICATE KEY UPDATE status = VALUES(status), group_id = VALUES(group_id), version = user_relation.version + 1
+        INSERT INTO user_relation(id, source_id, target_id, relation_type, status, group_id, version, create_time)
+        VALUES(#{id}, #{sourceId}, #{targetId}, #{relationType}, #{status}, #{groupId}, #{version}, #{createTime})
+        ON DUPLICATE KEY UPDATE
+            status = VALUES(status),
+            group_id = VALUES(group_id),
+            version = user_relation.version + 1,
+            create_time = VALUES(create_time)
     </insert>
 
     <select id="selectOne" resultMap="RelationMap">

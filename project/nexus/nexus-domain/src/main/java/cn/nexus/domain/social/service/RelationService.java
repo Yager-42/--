@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.Date;
 import java.util.Objects;
 
 /**
@@ -58,6 +59,7 @@ public class RelationService implements IRelationService {
 
         long relationId = socialIdPort.nextId();
         long nowMs = socialIdPort.now();
+        Date followTime = new Date(nowMs);
         RelationEntity saved = RelationEntity.builder()
                 .id(relationId)
                 .sourceId(sourceId)
@@ -66,9 +68,10 @@ public class RelationService implements IRelationService {
                 .status(STATUS_ACTIVE)
                 .groupId(0L)
                 .version(0L)
+                .createTime(followTime)
                 .build();
         relationRepository.saveRelation(saved);
-        relationRepository.saveFollower(socialIdPort.nextId(), targetId, sourceId);
+        relationRepository.saveFollower(socialIdPort.nextId(), targetId, sourceId, followTime);
 
         long eventId = socialIdPort.nextId();
         relationEventOutboxRepository.save(eventId, "FOLLOW", buildFollowPayload(eventId, sourceId, targetId, "ACTIVE"));
@@ -135,6 +138,7 @@ public class RelationService implements IRelationService {
                 .status(STATUS_ACTIVE)
                 .groupId(0L)
                 .version(0L)
+                .createTime(new Date(socialIdPort.now()))
                 .build();
         relationRepository.saveRelation(block);
         relationRepository.deleteRelation(sourceId, targetId, RELATION_FOLLOW);

@@ -80,11 +80,12 @@ public class RelationRepository implements IRelationRepository {
     }
 
     @Override
-    public void saveFollower(Long id, Long userId, Long followerId) {
+    public void saveFollower(Long id, Long userId, Long followerId, Date createTime) {
         FollowerPO po = new FollowerPO();
         po.setId(id);
         po.setUserId(userId);
         po.setFollowerId(followerId);
+        po.setCreateTime(createTime);
         followerDao.insert(po);
     }
 
@@ -174,6 +175,7 @@ public class RelationRepository implements IRelationRepository {
         po.setStatus(entity.getStatus());
         po.setGroupId(entity.getGroupId());
         po.setVersion(entity.getVersion());
+        po.setCreateTime(entity.getCreateTime());
         return po;
     }
 }

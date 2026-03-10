@@ -1,39 +1,46 @@
-# Nexus Redis 缓存统一实施与审计修复方案
+# Nexus Redis 缓存统一实施与审计修复方案（已纳入 Feed B+ 正式决议）
 
 - 日期：2026-03-09
+- 最新合并更新：2026-03-10（已纳入 `缓存/nexus-feed-B+正式实施方案-2026-03-10.md`）
 - 执行者：Codex
 - 合并来源：
   - `缓存/nexus-redis-cache-implementation-plan-2026-03-09.md`
   - `缓存/nexus-redis作为mysql缓存审计-20260309.md`
+  - `缓存/nexus-feed-B+正式实施方案-2026-03-10.md`
 - 范围：`project/nexus`
 
 ## 一句话结论
 
-这两份文档本质上不是两套互相冲突的方案，而是同一件事的两面：**一份告诉我们“哪些高频读链路值得继续加缓存”，另一份告诉我们“现有 Redis 缓存哪里在高并发下不够稳，必须先补强”**。合并后的统一做法很简单：**先修现有缓存的稳定性，再扩新增量缓存覆盖；全程复用现有 Repository / Port / QueryService 模式，不新造框架，不把个性化字段塞进公共缓存。**
+这份文档现在要同时服从三条结论：**高频公共读缓存继续按原计划修稳并扩展；但 `RelationAdjacencyCachePort` 不再走 Redis 邻接缓存修复路线，而是统一回到 DB 真相源；冲突处一律以 `nexus-feed-B+正式实施方案` 为准。** 合并后的统一做法很简单：**能继续做缓存的地方继续做，但关系查询这一支改成“删复杂度”，删除 rebuild、锁、临时 key、原子切换和镜像补写。**
 
 ---
 
 ## 一、这次合并后的统一判断
 
-### 1）两份文档的关系
+### 1）三份文档的关系
 
 - `实现方案` 侧重：哪里继续加缓存最值钱，怎么按现有风格落地。
 - `审计方案` 侧重：现有缓存在哪些点位存在击穿、重建不原子、失效不完整的问题，怎么修。
+- `Feed B+ 正式方案` 侧重：`RelationAdjacencyCachePort` 这一支不再继续维护完整邻接缓存协议，而是回 DB 真相源。
 
-所以统一后的方案不是二选一，而是拆成两条线顺序执行：
+所以统一后的方案不是简单叠加，而是拆成两条线顺序执行：
 
-1. **基础修复线**：先把当前缓存的并发稳定性、一致性、失效边界修好。
-2. **增量建设线**：再把缓存扩到还没覆盖的高频读链路。
+1. **基础修复线**：把能继续保留的 Redis 缓存修稳。
+2. **关系收缩线**：把 `RelationAdjacencyCachePort` 从“完整邻接缓存协议”收缩成“DB 查询门面”。
+3. **增量建设线**：再把缓存扩到还没覆盖的高频读链路。
 
-### 2）本次没有发现必须停下来让你二选一的硬冲突
+### 2）本次唯一硬冲突已经按优先级消解
 
-我对两份文档做了比对，当前没有发现“同一个问题要求保留完全相反方案”的硬冲突。大部分内容是互补关系，不是打架关系。
+我对三份文档做了比对，真正的硬冲突只有一个：
 
-唯一需要写死的合并策略只有一句话：
+- 旧总方案把 `RelationAdjacencyCachePort` 当成“需要修稳的 Redis 邻接缓存”
+- 新的 Feed B+ 正式方案明确要求：**关系查询统一回 DB，删除完整邻接缓存协议**
 
-> **先稳住已有缓存，再继续扩大缓存覆盖面。**
+这个冲突不需要再二选一，因为优先级已经给定：
 
-原因很简单：如果底层重建、失效、原子切换没处理好，继续加更多缓存，只会把问题放大。
+> **凡是关系查询 / 关系分页 / Feed 关系集合相关设计，只要和 Feed B+ 正式方案冲突，一律以 Feed B+ 方案为准。**
+
+原因很简单：关系这一支的问题，不是“锁还不够严”，而是“本来就不该背这整套协议”。
 
 ---
 
@@ -59,7 +66,7 @@
 所以缓存只放在这三层：
 
 - `Repository`：单对象、批量对象、布尔值
-- `Port`：外部结果、计数、关系邻接
+- `Port`：外部结果、计数、关系查询门面
 - `QueryService`：聚合页、首屏页、搜索建议、通知首页
 
 ### 3）公共缓存和个性化字段必须拆开
@@ -86,8 +93,8 @@
 统一策略：
 
 - 优先缓存第一页 / 首屏
-- 深分页保留原有 DB / 索引 / 邻接表路径
-- 关系分页优先复用现有 `ZSET` 游标方案
+- 深分页保留原有 DB / 索引路径
+- 关系分页统一走 DB keyset，不再复用 `ZSET` 游标方案
 
 ### 5）统一防护策略
 
@@ -161,22 +168,25 @@
 
 问题：
 
-- 现有“发现不完整就重建”的方向是对的
-- 但如果用“先删正式 key，再慢慢重建正式 key”，高并发下会出现空窗、半成品、重复重建
+- 当前实现把“关系查询接口”和“完整邻接缓存协议”绑死在一起
+- rebuild、`tmpKey`、锁、原子切换、镜像补写把并发复杂度抬得太高
+- 这条链路已经被 Feed B+ 正式方案判定为应该直接收缩，而不是继续补丁
 
 统一做法：
 
-- **禁止**继续使用“delete 正式 key 后直接 rebuild 正式 key”
-- 必须改成：
-  1. 先拿 **Redis 分布式锁**
-  2. 在 `tmpKey` 构建完整数据
-  3. rebuild 期间把新增/删除操作同步镜像到 `tmpKey`
-  4. 构建完整后再 **原子切换** 到正式 key
-  5. 正式 key 切换后确保无 TTL 或符合预期持久化策略
+- 保留 `IRelationAdjacencyCachePort` 的主体查询契约：`listFollowing`、`listFollowers`、`pageFollowing`、`pageFollowers`、`addFollow`、`removeFollow`、`evict`
+- 删除 `rebuildFollowing/rebuildFollowers`
+- `listFollowing/listFollowers` 直接走 DB 查询
+- `pageFollowing/pageFollowers` 直接走 DB keyset 分页
+- 删除 Redis 邻接表、`tmpKey`、`routeKey`、`ready/rebuilding` 标记、分布式锁、`rename` 切换、镜像增量补写
+- `evict` 若仍保留，只能作为兼容清理入口，不能再触发 rebuild 语义
+- 允许的唯一优化，是单次请求作用域内的显式结果复用；不跨请求，不加 TTL，不做隐式全局缓存
 
 目标：
 
-- rebuild 期间不能给用户暴露空数据或半成品
+- 关系查询统一回到 DB 真相源
+- Feed 与关系页的用户可见语义保持不变
+- 彻底删掉 rebuild 竞态、锁竞争和半成品数据风险
 
 ### A5. `ReactionCachePort`
 
@@ -233,44 +243,213 @@
 
 ### B1. 用户资料读取
 
-统一策略：
+这一项已经补完成可直接开工的执行契约。
 
-- 不新造两份缓存
-- 直接对齐现有 `social:userbase` 模式
+固定目标：
 
-适用：
+- 给需要“昵称 / 头像 / 基础展示状态”的读链路提供统一公共快照
+- 不为不同页面拆多套用户缓存
+- 缓存只负责提速，不改变用户域真相
 
-- 用户基础信息
-- 头像、昵称、基础状态类只读资料
+固定真相源：
+
+- 用户域 `user_base`
+
+固定字段边界：
+
+- 只缓存稳定字段快照：
+  - `userId`
+  - `nickname`
+  - `avatarUrl`
+  - `status`
+- `status` 只允许是“展示安全”的基础状态
+- 不允许把封禁、审核、风控、viewer 相关字段塞进这层缓存
+
+固定 key 与 value：
+
+- Redis key：`social:userbase:{userId}`
+- Redis value：稳定字段快照 JSON
+- 不存在对象：写 `NULL` 哨兵
+
+固定 TTL：
+
+- 正常值 TTL：`24h + 0~1h`
+- `NULL` TTL：`60s + 0~30s`
+
+固定读路径：
+
+1. 先查 Redis `social:userbase:{userId}`
+2. 命中正常 JSON：直接返回
+3. 命中 `NULL`：直接返回不存在
+4. 解析失败：删坏 key，按 miss 回源
+5. miss 或 Redis 失败：直接回源用户域
+6. 回源成功后写回 Redis
+
+固定写路径失效：
+
+- `nickname`
+- `avatarUrl`
+- `status`
+
+以上任一字段更新成功后，必须立即删除 `social:userbase:{userId}`
+
+固定禁止项：
+
+- 不按页面拆 key
+- 不带 `viewerId`
+- 不兜旧本地值
+- 不把用户资料缓存变成第二份业务真相
 
 ### B2. 用户主页 / 聚合页
 
-统一策略：
+这一项当前也已经补完成可直接开工的执行契约，但范围只覆盖“用户主页公共聚合信息”。
 
-- 缓存公共聚合结果
-- 个性化字段单独查或短 TTL 缓存
-- 返回前再拼装
+固定目标：
 
-适用：
+- 给用户主页头部提供一份可复用的公共聚合快照
+- 不把查看者相关字段和复杂业务态混进公共缓存
+- 资料字段保持严格新鲜，计数字段允许短暂旧值
 
-- 用户主页聚合
-- 通知首页
-- 评论首屏聚合
+固定适用范围：
+
+- 只覆盖用户主页公共聚合信息
+- 本轮不覆盖通知首页
+- 本轮不覆盖评论首屏聚合
+
+固定结构：
+
+- 资料层：直接复用 `B1` 的 `social:userbase:{userId}`
+- 计数层：单独缓存 `postCount / followerCount / followingCount`
+- 返回前再拼装成用户主页公共聚合结果
+
+固定字段边界：
+
+- 资料层字段：
+  - `userId`
+  - `nickname`
+  - `avatarUrl`
+  - `status`
+- 计数层字段：
+  - `postCount`
+  - `followerCount`
+  - `followingCount`
+- `isFollow` 等查看者相关字段永远不进公共缓存，返回前实时补
+
+固定 key 与 value：
+
+- 资料层 key：直接复用 `social:userbase:{userId}`
+- 计数层 key：`profile:summary:count:{ownerUserId}`
+- 计数层 value：`postCount / followerCount / followingCount` JSON
+
+固定 TTL：
+
+- 资料层 TTL：直接复用 `B1`
+- 计数层 TTL：`30s + 0~10s`
+
+固定真相源：
+
+- 资料层真相源：用户域 `user_base`
+- 计数层真相源：现有专用计数查询或读模型
+- 热路径禁止直接 `count(*)`
+
+固定读路径：
+
+1. 先读 `social:userbase:{ownerUserId}`
+2. 如果资料层明确不存在，直接按“用户不存在”处理，不再查计数层
+3. 资料层存在后，再读 `profile:summary:count:{ownerUserId}`
+4. 计数层命中：直接返回
+5. 计数层 miss 或 Redis 失败：回源现有专用计数查询，再回填计数层
+6. 如果计数层回源失败：直接降级回原有主页聚合查询，不拼半成品
+7. 返回前实时补 `isFollow` 等查看者相关字段
+
+固定写路径失效：
+
+- 资料层：
+  - `nickname`
+  - `avatarUrl`
+  - `status`
+
+以上任一字段更新成功后，立即删除 `social:userbase:{userId}`
+
+- 计数层：
+  - `postCount / followerCount / followingCount` 不主动删 key
+  - 主要依赖 `30s + 0~10s` 短 TTL 自然刷新
+
+固定禁止项：
+
+- 不为 `B2` 再存一份重复资料缓存
+- 不把 `viewerId` 放进 key
+- 不把 `isFollow`、权限态、风控态塞进公共缓存
+- 不在计数层失败时返回 `0` 冒充真实值
+- 不在热路径直接 `count(*)`
 
 ### B3. 首屏列表缓存
 
-统一策略：
+这一项当前也已经补完成可直接开工的执行契约。
 
-- Redis 存首屏 ID 列表或精简响应
-- 详情字段继续复用已有对象缓存
-- 只缓存第一页
-- 点赞、删除、新增评论等写操作删除第一页相关 key
+固定目标：
 
-适用：
+- 只提速“个人主页 feed 默认首页第一页”
+- 只缓存第一页 `postId` 有序列表，不缓存完整首页响应
+- 详情卡片继续复用现有对象缓存与装配链路
 
-- 个人主页 feed 首页
-- 评论首屏
-- 点赞人列表首页
+固定适用范围：
+
+- 只覆盖个人主页 feed 第一页
+- 本轮不覆盖评论首屏
+- 本轮不覆盖点赞人列表首页
+
+固定 key 归属与页面形态：
+
+- key 按主页主人共享，不带 `viewerId`
+- 只支持默认首页形态
+- 不支持额外排序
+- 不支持额外筛选
+- 不支持多 `pageSize`
+
+固定 key 与 value：
+
+- Redis key：`feed:profile:first:{ownerUserId}`
+- Redis value：当前默认排序下的第一页 `postId` 有序列表
+- 允许缓存空列表，但不写 `NULL`
+
+固定 TTL：
+
+- 正常值 TTL：`120s + 0~30s`
+- 空列表 TTL：同正常值
+
+固定读路径：
+
+1. 先查 Redis `feed:profile:first:{ownerUserId}`
+2. 命中：直接拿第一页 `postId` 列表
+3. miss 或 Redis 失败：直接走原有个人主页 feed 第一页查询
+4. 回源成功后回填第一页 `postId` 列表
+5. 返回前按现有链路装配详情，不改变用户可见行为
+
+固定写路径失效：
+
+只在“会改变第一页成员或顺序”的写操作成功后删除 `feed:profile:first:{ownerUserId}`，至少包括：
+
+- 发帖成功
+- 删帖成功
+- 恢复帖子
+- 发布状态变化
+- 可见性变化
+- 置顶 / 取消置顶
+
+固定不触发失效的场景：
+
+- 点赞变化
+- 评论数变化
+- 浏览数变化
+- 作者昵称 / 头像变化
+
+固定禁止项：
+
+- 不缓存完整首页响应
+- 不缓存 viewer 相关字段
+- 不因为统计字段变化删除首页 ID key
+- 不为了迁就缓存改现有首页查询语义
 
 ### B4. 搜索建议 / 推荐上游结果 / 外部结果读缓存
 
@@ -353,7 +532,9 @@
 
 ### 模板 5：共享大 key 原子重建
 
-适用：关系邻接、共享列表、需跨实例一致的重建任务。
+适用：共享列表、仍然必须跨实例一致重建的大 key。
+
+注：`RelationAdjacencyCachePort` 已不再属于这一类，它按 Feed B+ 正式决议回到 DB 门面。
 
 流程：
 
@@ -375,14 +556,13 @@
 - 不新增模块
 - 不引入外部分布式任务框架
 - 不修改任何现有 public interface 方法签名
-- 除 `RelationAdjacencyCachePort` 外，所有并发 miss 去重都统一用 **进程内 single-flight**
+- 所有并发 miss 去重都统一用 **进程内 single-flight**，除非某个共享大 key 场景在独立子方案里被明确批准保留分布式重建
 - 进程内 single-flight 的固定实现方式：`ConcurrentHashMap<String, CompletableFuture<T>>`
 - 不新增通用 shared util 类；每个类自己维护自己的 inflight map 和 private helper
-- `RelationAdjacencyCachePort` 的重建锁固定使用 **Redis 分布式锁**，不用本地锁
 - `CommentRepository` 的 `reply preview` 失效范围固定为 `limit=1..10` 全删
 - 热点 TTL 自增长只允许作为 **现有 TTL 抖动策略的增强层**，不允许替换写后删除或延时双删
 - 本次重构里，热点 TTL 自增长只允许作用在白名单 key 家族：`interact:content:post:{postId}`、`feed:card:{postId}`
-- 本次重构里，热点 TTL **禁止**作用在：`NULL` 负缓存、`comment:view:*`、`comment:reply:preview:*`、`social:adj:*`、`interact:reaction:*`、`interact:content:detail:*`、`interact:content:author:*`、`feed:card:stat:*`
+- 本次重构里，热点 TTL **禁止**作用在：`NULL` 负缓存、`comment:view:*`、`comment:reply:preview:*`、任何关系邻接缓存 key、`interact:reaction:*`、`interact:content:detail:*`、`interact:content:author:*`、`feed:card:stat:*`
 - 测试框架固定为现有项目风格：`JUnit 5 + Mockito`
 - 不引入 `Testcontainers`
 - 不引入嵌入式 Redis
@@ -392,7 +572,7 @@
 - 不允许把 `single-flight` 改成 `synchronized(this)` 或方法级大锁
 - 不允许把 batch key 改成无序 key
 - 不允许去掉“锁内二次检查缓存”
-- 不允许把 `RelationAdjacencyCachePort` 简化回“delete 正式 key 再 rebuild 正式 key”
+- 不允许重新把 `RelationAdjacencyCachePort` 拉回 Redis 邻接缓存 rebuild 协议
 - 不允许只删某一个 reply preview limit
 - 不允许把 `FeedCard` 的装配去重错放到仓储层
 - 不允许为了迁就实现去改 public interface 签名
@@ -403,8 +583,8 @@
 
 ### Phase 1：先止血，修高并发风险
 
-1. `ContentRepository.listPostsByIds`
-2. `RelationAdjacencyCachePort`
+1. `RelationAdjacencyCachePort`（删复杂协议并切回 DB）
+2. `ContentRepository.listPostsByIds`
 3. `CommentRepository` reply preview 失效与批量 single-flight
 4. `ContentDetailQueryService.query`
 5. `ReactionCachePort`
@@ -451,10 +631,10 @@
 
 ### `RelationAdjacencyCachePortTest`
 
-1. `ensureFollowingCache` 发现不完整时，只允许一个线程拿到 rebuild lock
-2. rebuild 期间 `addFollow/removeFollow` 会同步镜像到 `tmpKey`
-3. 原子切换完成后正式 key 存在且状态正确
-4. build 不完整时禁止切换正式 key
+1. `listFollowing/listFollowers/pageFollowing/pageFollowers` 不再依赖 Redis 关系邻接缓存
+2. `rebuildFollowing/rebuildFollowers` 已被删除，或不再暴露可用语义
+3. `pageFollowing/pageFollowers` 明确走 keyset 分页，而不是 offset 深分页
+4. `addFollow/removeFollow/evict` 不再触发 `tmpKey`、锁、`rename` 或镜像补写路径
 
 ### `ReactionCachePortTest`
 
@@ -468,9 +648,13 @@
 
 ### 新增覆盖点验收标准
 
-- 用户资料读取命中 Redis 后，不再回源数据库
-- 聚合页缓存命中后，公共结果可复用，个性化字段不串用户
+- 用户资料读取命中 Redis 后，不再回源用户域
+- 用户昵称 / 头像 / 基础展示状态更新后，下一次读取必须看到新值
+- 用户主页公共聚合缓存命中后，公共结果可复用，查看者相关字段不串用户
+- 用户主页主人不存在时，必须直接按不存在处理，不再继续查计数层
+- 用户主页计数层回源失败时，必须降级回原有主页聚合查询，不拼半成品
 - 首屏列表缓存只覆盖第一页，不污染深分页
+- 个人主页 feed 第一页缓存只缓存 `postId` 列表，不缓存完整响应
 - 写操作后首屏 key 会被正确删除
 - Redis 故障时主流程仍能回源，不影响可用性
 
@@ -480,9 +664,9 @@
 
 当前合并文档已经消除了普通层面的冲突。后续真正实现时，只有下面这些情况才需要停下来问：
 
-1. `StringRedisTemplate` 在当前项目版本里无法安全完成 `rename / persist / Lua` 等原子切换能力，导致 `RelationAdjacencyCachePort` 无法按这里的方案落地
-2. `ReactionCachePort` 的现有单测或调用语义表明，future-based single-flight 会破坏已有同步行为
-3. `FeedCard` 调用方强依赖“同一次 assemble 必须立刻看到用户态实时字段变化”，而结果共享会破坏这个前提
+1. 现有调用方真的强依赖 `rebuildFollowing/rebuildFollowers` 语义，删掉会直接破坏业务
+2. `followers` 读路径在当前库表和索引条件下无法安全落地 keyset，必须在两个 DB 读模型之间做取舍
+3. `ReactionCachePort` 的现有单测或调用语义表明，future-based single-flight 会破坏已有同步行为
 
 除这几类硬阻塞外，不需要反复中断做技术选择。
 
@@ -492,13 +676,14 @@
 
 如果现在要开始真正落地，这份合并文档对应的最小可执行顺序是：
 
-1. 先修 `ContentRepository`
-2. 再修 `RelationAdjacencyCachePort`
-3. 再修 `CommentRepository`
-4. 再给 `ContentDetailQueryService`、`ReactionCachePort`、`PostAuthorPort`、`FeedCard` 补统一去重策略
-5. 基础稳定后，再进入用户资料、聚合页、首屏列表、搜索建议、推荐上游结果等新增缓存建设
+1. 先收缩 `IRelationAdjacencyCachePort` 语义，删除 rebuild
+2. 再把 `RelationAdjacencyCachePort` 改成 DB 查询门面
+3. 再修 `ContentRepository`
+4. 再修 `CommentRepository`
+5. 再给 `ContentDetailQueryService`、`ReactionCachePort`、`PostAuthorPort`、`FeedCard` 补统一去重策略
+6. 基础稳定后，再进入用户资料、聚合页、首屏列表、搜索建议、推荐上游结果等新增缓存建设
 
-一句话说完：**这次不是“继续乱加缓存”，而是“先把已有缓存修成能扛并发的样子，再把缓存补到真正高频、真正值钱的地方”。**
+一句话说完：**这次不是“继续乱加缓存”，而是先把关系这条错的复杂协议拆掉，再把该保留的缓存修成能扛并发的样子，最后只给真正高频、真正值钱的链路补缓存。**
 
 ---
 
@@ -511,13 +696,15 @@
 ### 1）先把范围说死：哪些能直接开工，哪些还不能
 
 - **A 线（修现有缓存）是可以直接编码的执行契约。**
-- **B 线（补新缓存覆盖）目前只保留优先级和准入规则，不允许直接照着这一份文档开工。**
-- 原因很简单：B 线很多点位还缺少“接口级业务规则、key 级失效矩阵、字段边界、回退语义”，如果现在直接动手，只会把模糊性带进代码。
+- **B 线里，`B1 用户资料读取`、`B2 用户主页公共聚合信息`、`B3 个人主页 feed 第一页缓存` 现在已经补成可直接编码的执行契约。**
+- **除 `B1/B2/B3` 外，其它 B 线点位目前仍只保留优先级和准入规则，不允许直接照着这一份文档开工。**
+- 原因很简单：剩余 B 线点位还缺少“接口级业务规则、key 级失效矩阵、字段边界、回退语义”，如果现在直接动手，只会把模糊性带进代码。
 
 所以这份文档从现在开始有两个层次：
 
 1. **Phase 1 / A 线：硬执行契约，可以直接实现**
-2. **Phase 2 / B 线：候选池，只有补完独立子文档后才能实现**
+2. **Phase 2 / B1、B2、B3：已补完，可直接实现**
+3. **Phase 2 / 其余 B 线：候选池，只有补完独立子文档后才能实现**
 
 这不是退缩，这是避免假完整。
 
@@ -528,7 +715,7 @@
 - **帖子元信息**（标题、摘要、媒体信息、状态、可见性、版本等）的真相源是 MySQL `content_post` 相关表。
 - **帖子正文 / 评论正文** 的真相源是 KV/Cassandra，对 Nexus 当前实现来说分别由 `PostContentKvPort`、`CommentContentKvPort` 负责读取。
 - **点赞总数** 的真相源是 MySQL 聚合表 `interaction_reaction_count`，Redis `cntKey` 只是高性能前置层。
-- **关注/粉丝关系** 的真相源是 MySQL 关系表；Redis ZSET 只是读优化邻接表。
+- **关注/粉丝关系** 的真相源是 MySQL 关系表；本次正式决议不再把 Redis 邻接表当跨请求关系缓存层，`IRelationAdjacencyCachePort` 只保留查询门面，不再拥有邻接缓存数据。
 - **用户昵称/头像** 的真相源是用户域 `user_base`；内容域和 Feed 域都不应该自己长期持有第二份“作者展示真相”。
 - **Redis 永远不是业务真相源。** Redis 写失败、删失败、解析失败，都不能回滚主事务，更不能把“缓存异常”翻译成“业务失败”。
 
@@ -699,23 +886,16 @@
   - `cursor == null || cursor.isBlank()`
   - 且 `normalizedLimit <= 10`
 
-#### 5.4 关系邻接缓存 `RelationAdjacencyCachePort`
+#### 5.4 关系查询门面 `RelationAdjacencyCachePort`
 
-- 正式 following key：`social:adj:following:z:{userId}`
-- 正式 followers key：`social:adj:followers:z:{userId}`
-- rebuild lock key：
-  - `social:adj:following:lock:{userId}`
-  - `social:adj:followers:lock:{userId}`
-- rebuild route key（记录当前 tmpKey）：
-  - `social:adj:following:route:{userId}`
-  - `social:adj:followers:route:{userId}`
-- tmpKey：
-  - `social:adj:following:tmp:{userId}:{token}`
-  - `social:adj:followers:tmp:{userId}:{token}`
-- lock TTL：`30s`
-- lock renew interval：`10s`
-- tmpKey TTL：`10min`（防止异常中断后遗留垃圾 key）
-- 正式 key：**不设置 TTL**
+- `following` / `followers`：DB 是唯一真相源
+- 保留接口：`listFollowing`、`listFollowers`、`pageFollowing`、`pageFollowers`、`addFollow`、`removeFollow`、`evict`
+- 删除接口或语义：`rebuildFollowing`、`rebuildFollowers`、任意形式的在线 rebuild
+- 分页规则：`pageFollowing/pageFollowers` 一律 keyset pagination
+- 深分页禁止：offset
+- 计数规则：热路径禁止高频 `count(*)`
+- 允许的唯一优化：单次请求作用域内的显式结果复用
+- 显式结果复用的边界：不跨请求、不设 TTL、不做失效广播、不引入 ThreadLocal
 
 #### 5.5 点赞计数缓存 `ReactionCachePort`
 
@@ -754,7 +934,7 @@
 | `interact:content:detail:{postId}` | 否 | 基线 TTL 已经是 `24~25h`，再增长收益小且容易放大脏数据 |
 | `interact:content:author:{postId}` | 否 | 基线 TTL 已经是 `1d+`，收益太小 |
 | `comment:view:*` / `comment:reply:preview:*` | 否 | 这些 key 故意短 TTL，目的是控制新鲜度窗口 |
-| `social:adj:*` | 否 | 重点是原子重建正确性，不是 TTL |
+| 任何关系邻接缓存 key | 否 | 本次正式决议已禁止继续维护这类跨请求缓存协议 |
 | `interact:reaction:*` | 否 | 已有热点 L1 与原子写逻辑，再加会重叠 |
 
 固定结论：**这次重构把热点 TTL 当成“旧缓存方案的定向增强”，不是“全缓存框架统一升级”。**
@@ -837,7 +1017,7 @@
 
 ### 6）single-flight 统一规则：避免同一 miss 重复回源
 
-除了 `RelationAdjacencyCachePort` 用 Redis 分布式锁，其它并发去重全部按下面做，不允许各写一套。
+除独立子方案里被明确批准保留的共享大 key 场景外，并发去重全部按下面做，不允许各写一套。`RelationAdjacencyCachePort` 不再是这里的例外，因为它已经回到 DB 查询门面。
 
 #### 6.1 固定实现
 
@@ -1016,65 +1196,42 @@
 
 #### 7.4 `RelationAdjacencyCachePort`
 
-这一块必须完全改成“tmpKey 构建 + route 镜像 + 原子切换”，不允许再删正式 key 后裸 rebuild。
+这一块按 Feed B+ 正式决议执行：**保留门面接口，删除完整邻接缓存协议，关系查询统一回 DB 真相源。**
 
 固定流程如下。
 
-##### A. 读路径
+##### A. 接口语义
 
-1. `pageFollowing/pageFollowers` 先检查正式 key 是否存在
-2. 再比 `zCard` 和 DB count
-3. 只有当“key 不存在”或“zCard < dbCount”时，才触发 rebuild
-4. rebuild 期间，读请求仍然读正式 key，不读 tmpKey
+1. 保留：`listFollowing`、`listFollowers`、`pageFollowing`、`pageFollowers`、`addFollow`、`removeFollow`、`evict`
+2. 删除：`rebuildFollowing`、`rebuildFollowers`
+3. Port 的职责固定为“关系查询门面”，不再承担完整缓存容器职责
 
-##### B. 获取锁
+##### B. 读路径
 
-1. `SET lockKey token NX PX 30000`
-2. 抢不到锁：直接返回旧正式 key 结果，不阻塞主流程
-3. 抢到锁后再做一次完整性检查；如果此时已经完整，直接释放锁返回
-4. 启动每 `10s` 一次的续锁任务，续锁时必须校验 token 一致
+1. `listFollowing/listFollowers` 直接走 DB 查询
+2. `pageFollowing/pageFollowers` 直接走 DB keyset 分页
+3. Feed 依赖的关系集合默认也走同一份 DB 真相源
+4. 不再读取任何 `social:adj:*`、`tmpKey`、`routeKey`、`ready/rebuilding` 状态
 
-##### C. 构建 tmpKey
+##### C. 写路径
 
-1. 创建唯一 `tmpKey`
-2. `DEL tmpKey`
-3. 给 `tmpKey` 设置 `10min` TTL
-4. 写 `routeKey -> tmpKey`，TTL 与 lock 同步
-5. 分页扫 DB，把数据写入 `tmpKey`
+1. `addFollow/removeFollow` 不再维护完整邻接缓存
+2. `evict` 若仍保留，只能作为兼容清理入口；默认不再承担 rebuild 触发职责
+3. 不再有镜像增量补写、临时 key 切换或重建锁协议
 
-##### D. rebuild 期间写路径镜像
+##### D. SQL 与分页约束
 
-`addFollow/removeFollow` 必须固定这样做：
-
-1. 永远先更新正式 key
-2. 再读 `routeKey`
-3. 如果 `routeKey` 指向某个 `tmpKey`，则把同样变更镜像到 `tmpKey`
-4. 如果读不到 `routeKey`，说明当前没有 rebuild，直接结束
-
-##### E. 切换前校验
-
-1. 构建完成后重新读 DB count
-2. 重新读 `tmpKey zCard`
-3. **只有 `tmpZCard == latestDbCount` 时才允许切换**
-4. 不相等则放弃本次切换：
-   - 保留旧正式 key
-   - 删除 `tmpKey`
-   - 删除 `routeKey`
-   - 释放锁
-
-##### F. 原子切换
-
-1. 用 Lua 做 compare-token + `RENAME tmpKey -> formalKey`
-2. `PERSIST formalKey`
-3. 删除 `routeKey`
-4. 释放锁（compare-token delete）
-5. 停止续锁任务
+1. `following/followers` 一律 keyset pagination
+2. 明确禁止 offset 深分页
+3. `followers` 查询优先走 `user_follower` 或等价专用读模型，但必须补齐 keyset 和索引约束
+4. 热路径禁止高频 `count(*)`
+5. 允许的唯一小优化，是单次请求作用域内显式结果复用
 
 固定边界：
 
-- rebuild 失败时，允许旧正式 key 继续服务
-- 不允许让用户读到空 key 或半成品 key
-- 不允许把 tmpKey 暴露给读路径
+- 不允许重新引入 `tmpKey`、`routeKey`、`ready/rebuilding`、分布式锁、`rename` 原子切换、镜像增量补写
+- 不允许为了追求“可能的 QPS”重新把关系查询挂回跨请求 Redis 邻接缓存
+- 没有监控证据，不允许重开关系轻缓存或 rebuild 协议
 
 #### 7.5 `ReactionCachePort.getCount`
 

@@ -3,16 +3,19 @@ package cn.nexus.infrastructure.adapter.social.repository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.infrastructure.config.SocialCacheHotTtlProperties;
+import cn.nexus.infrastructure.support.SingleFlight;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -36,6 +39,7 @@ public class FeedCardRepository implements IFeedCardRepository {
             .maximumSize(10000)
             .expireAfterWrite(Duration.ofSeconds(2))
             .build();
+    private final SingleFlight singleFlight = new SingleFlight();
 
     @Override
     public Map<Long, FeedCardBaseVO> getBatch(List<Long> postIds) {
@@ -74,6 +78,24 @@ public class FeedCardRepository implements IFeedCardRepository {
     }
 
     @Override
+    public Map<Long, FeedCardBaseVO> getOrLoadBatch(List<Long> postIds,
+                                                    Function<List<Long>, Map<Long, FeedCardBaseVO>> loader) {
+        Map<Long, FeedCardBaseVO> result = new HashMap<>(getBatch(postIds));
+        List<Long> missIds = collectMissIds(postIds, result.keySet());
+        if (missIds.isEmpty()) {
+            return result;
+        }
+        Map<Long, FeedCardBaseVO> rebuilt = singleFlight.execute(
+                normalizeInflightKey(missIds),
+                () -> loadAndCacheMisses(missIds, loader)
+        );
+        if (rebuilt != null && !rebuilt.isEmpty()) {
+            result.putAll(rebuilt);
+        }
+        return result;
+    }
+
+    @Override
     public void saveBatch(List<FeedCardBaseVO> cards) {
         if (cards == null || cards.isEmpty()) {
             return;
@@ -92,6 +114,22 @@ public class FeedCardRepository implements IFeedCardRepository {
                 log.warn("feed card save failed, postId={}", card.getPostId(), e);
             }
         }
+    }
+
+    private Map<Long, FeedCardBaseVO> loadAndCacheMisses(List<Long> missIds,
+                                                         Function<List<Long>, Map<Long, FeedCardBaseVO>> loader) {
+        Map<Long, FeedCardBaseVO> result = new HashMap<>(getBatch(missIds));
+        List<Long> unresolved = collectMissIds(missIds, result.keySet());
+        if (unresolved.isEmpty() || loader == null) {
+            return result;
+        }
+        Map<Long, FeedCardBaseVO> loaded = loader.apply(unresolved);
+        if (loaded == null || loaded.isEmpty()) {
+            return result;
+        }
+        saveBatch(List.copyOf(loaded.values()));
+        result.putAll(loaded);
+        return result;
     }
 
     public void evictLocal(Long postId) {
@@ -172,5 +210,33 @@ public class FeedCardRepository implements IFeedCardRepository {
 
     private long ttlSeconds() {
         return BASE_TTL_SECONDS + ThreadLocalRandom.current().nextLong(JITTER_SECONDS + 1);
+    }
+
+    private List<Long> collectMissIds(List<Long> ids, java.util.Set<Long> resolvedIds) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        List<Long> missIds = new java.util.ArrayList<>();
+        LinkedHashSet<Long> seen = new LinkedHashSet<>();
+        for (Long id : ids) {
+            if (id == null || !seen.add(id) || (resolvedIds != null && resolvedIds.contains(id))) {
+                continue;
+            }
+            missIds.add(id);
+        }
+        return missIds;
+    }
+
+    private String normalizeInflightKey(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return "";
+        }
+        LinkedHashSet<Long> normalized = new LinkedHashSet<>();
+        for (Long id : ids) {
+            if (id != null) {
+                normalized.add(id);
+            }
+        }
+        return normalized.stream().sorted().map(String::valueOf).reduce((left, right) -> left + "," + right).orElse("");
     }
 }

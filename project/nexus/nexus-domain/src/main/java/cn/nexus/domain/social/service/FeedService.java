@@ -189,14 +189,13 @@ public class FeedService implements IFeedService {
                 userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), scanLimit
         );
 
-        // 首页触发 inbox 重建时：优先用 inbox 返回，避免额外读取 bigV outbox/pool 造成首屏延迟。
         if (homePage && rebuilt) {
             List<FeedInboxEntryVO> candidates = inboxCandidates == null ? List.of() : inboxCandidates;
             candidates = filterFollowSeenCandidates(userId, candidates);
             String nextCursor = candidates.isEmpty() || candidates.get(candidates.size() - 1).getPostId() == null
                     ? null
                     : candidates.get(candidates.size() - 1).getPostId().toString();
-            List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit);
+            List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit, null, false);
             markFollowSeen(userId, items);
             return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
         }
@@ -212,7 +211,7 @@ public class FeedService implements IFeedService {
                 ? null
                 : candidates.get(candidates.size() - 1).getPostId().toString();
 
-        List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit);
+        List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit, followings, true);
         markFollowSeen(userId, items);
         return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
     }
@@ -496,6 +495,7 @@ public class FeedService implements IFeedService {
 
         int maxRounds = Math.max(1, maxAppendRounds);
         int batch = Math.max(1, appendBatch);
+        List<Long> followings = null;
         while (feedRecommendSessionRepository.size(userId, sessionId) < needSize && rounds < maxRounds) {
             // 1) 优先从 gorse 拉候选，写入 session（LIST+SET 去重）。
             if (!gorseFailed) {
@@ -538,7 +538,10 @@ public class FeedService implements IFeedService {
                 break;
             }
 
-            List<Long> socialCandidates = listRecommendFollowCandidates(userId, batch);
+            if (followings == null) {
+                followings = listFollowings(userId);
+            }
+            List<Long> socialCandidates = listRecommendFollowCandidates(followings, batch);
             if (!socialCandidates.isEmpty()) {
                 feedRecommendSessionRepository.appendCandidates(userId, sessionId, socialCandidates);
             }
@@ -548,7 +551,7 @@ public class FeedService implements IFeedService {
                 break;
             }
 
-            List<Long> poolCandidates = listRecommendBigvPoolCandidates(userId, batch);
+            List<Long> poolCandidates = listRecommendBigvPoolCandidates(followings, batch);
             if (!poolCandidates.isEmpty()) {
                 feedRecommendSessionRepository.appendCandidates(userId, sessionId, poolCandidates);
             }
@@ -598,9 +601,8 @@ public class FeedService implements IFeedService {
     private record EnsureRecommendResult(int appendRounds, String fallbackReason) {
     }
 
-    private List<Long> listRecommendFollowCandidates(Long userId, int batch) {
-        List<Long> followings = listFollowings(userId);
-        if (followings.isEmpty()) {
+    private List<Long> listRecommendFollowCandidates(List<Long> followings, int batch) {
+        if (followings == null || followings.isEmpty()) {
             return List.of();
         }
         List<Long> ids = new ArrayList<>(batch);
@@ -623,8 +625,10 @@ public class FeedService implements IFeedService {
         return ids;
     }
 
-    private List<Long> listRecommendBigvPoolCandidates(Long userId, int batch) {
-        List<Long> followings = listFollowings(userId);
+    private List<Long> listRecommendBigvPoolCandidates(List<Long> followings, int batch) {
+        if (followings == null || followings.isEmpty()) {
+            return List.of();
+        }
         if (!shouldUseBigVPool(followings)) {
             return List.of();
         }
@@ -954,7 +958,12 @@ public class FeedService implements IFeedService {
         return Long.compare(b, a);
     }
 
-    private List<FeedItemVO> buildTimelineItems(Long userId, String source, List<FeedInboxEntryVO> candidates, int normalizedLimit) {
+    private List<FeedItemVO> buildTimelineItems(Long userId,
+                                                String source,
+                                                List<FeedInboxEntryVO> candidates,
+                                                int normalizedLimit,
+                                                List<Long> followings,
+                                                boolean enforceFollowingAuthors) {
         if (candidates == null || candidates.isEmpty()) {
             return List.of();
         }
@@ -977,18 +986,15 @@ public class FeedService implements IFeedService {
         cleanupMissingIndexes(userId, candidateIds, posts);
 
         Map<Long, ContentPostEntity> postById = mapById(posts);
+        boolean followSource = userId != null && source != null && "FOLLOW".equalsIgnoreCase(source.trim());
         Set<Long> allowedAuthors = null;
-        if (userId != null && source != null && "FOLLOW".equalsIgnoreCase(source.trim())) {
+        if (followSource && enforceFollowingAuthors) {
             allowedAuthors = new HashSet<>();
             allowedAuthors.add(userId);
-            int limit = Math.max(0, maxFollowings);
-            if (limit > 0) {
-                List<Long> followings = relationAdjacencyCachePort.listFollowing(userId, limit);
-                if (followings != null) {
-                    for (Long id : followings) {
-                        if (id != null) {
-                            allowedAuthors.add(id);
-                        }
+            if (followings != null) {
+                for (Long id : followings) {
+                    if (id != null) {
+                        allowedAuthors.add(id);
                     }
                 }
             }
@@ -1003,9 +1009,12 @@ public class FeedService implements IFeedService {
             if (post == null) {
                 continue;
             }
-            if (allowedAuthors != null) {
-                Long authorId = post.getUserId();
-                if (authorId == null || !allowedAuthors.contains(authorId)) {
+            Long authorId = post.getUserId();
+            if (followSource) {
+                if (authorId == null) {
+                    continue;
+                }
+                if (allowedAuthors != null && !allowedAuthors.contains(authorId)) {
                     continue;
                 }
                 if (isBlockedBetween(authorId, userId)) {

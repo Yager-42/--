@@ -1,8 +1,8 @@
 package cn.nexus.domain.social.service;
 
+import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
-import cn.nexus.domain.social.model.entity.RelationEntity;
 import cn.nexus.domain.social.model.valobj.RelationListVO;
 import cn.nexus.domain.social.model.valobj.RelationStateBatchVO;
 import cn.nexus.domain.social.model.valobj.RelationUserEdgeVO;
@@ -27,18 +27,17 @@ public class RelationQueryService {
     private static final int MAX_LIMIT = 50;
 
     private final IUserBaseRepository userBaseRepository;
+    private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IRelationRepository relationRepository;
 
     public RelationListVO following(Long userId, String cursor, Integer limit) {
-        Cursor parsed = Cursor.parse(cursor);
-        List<RelationEntity> rows = relationRepository.pageActiveFollowsBySource(userId, parsed == null ? null : new java.util.Date(parsed.timeMs), parsed == null ? null : parsed.userId, normalizeLimit(limit));
-        return toListVO(toFollowingEdges(rows));
+        List<RelationUserEdgeVO> rows = relationAdjacencyCachePort.pageFollowing(userId, cursor, normalizeLimit(limit));
+        return toListVO(rows);
     }
 
     public RelationListVO followers(Long userId, String cursor, Integer limit) {
-        Cursor parsed = Cursor.parse(cursor);
-        List<RelationEntity> rows = relationRepository.pageActiveFollowsByTarget(userId, parsed == null ? null : new java.util.Date(parsed.timeMs), parsed == null ? null : parsed.userId, normalizeLimit(limit));
-        return toListVO(toFollowerEdges(rows));
+        List<RelationUserEdgeVO> rows = relationAdjacencyCachePort.pageFollowers(userId, cursor, normalizeLimit(limit));
+        return toListVO(rows);
     }
 
     public RelationStateBatchVO batchState(Long sourceId, List<Long> targetUserIds) {
@@ -79,40 +78,6 @@ public class RelationQueryService {
     public Set<Long> batchFollowing(Long sourceId, List<Long> targetUserIds) {
         RelationStateBatchVO state = batchState(sourceId, targetUserIds);
         return new HashSet<>(state.getFollowingUserIds() == null ? List.of() : state.getFollowingUserIds());
-    }
-
-    private List<RelationUserEdgeVO> toFollowingEdges(List<RelationEntity> rows) {
-        if (rows == null || rows.isEmpty()) {
-            return List.of();
-        }
-        List<RelationUserEdgeVO> edges = new ArrayList<>(rows.size());
-        for (RelationEntity row : rows) {
-            if (row == null || row.getTargetId() == null) {
-                continue;
-            }
-            edges.add(RelationUserEdgeVO.builder()
-                    .userId(row.getTargetId())
-                    .followTimeMs(row.getCreateTime() == null ? null : row.getCreateTime().getTime())
-                    .build());
-        }
-        return edges;
-    }
-
-    private List<RelationUserEdgeVO> toFollowerEdges(List<RelationEntity> rows) {
-        if (rows == null || rows.isEmpty()) {
-            return List.of();
-        }
-        List<RelationUserEdgeVO> edges = new ArrayList<>(rows.size());
-        for (RelationEntity row : rows) {
-            if (row == null || row.getSourceId() == null) {
-                continue;
-            }
-            edges.add(RelationUserEdgeVO.builder()
-                    .userId(row.getSourceId())
-                    .followTimeMs(row.getCreateTime() == null ? null : row.getCreateTime().getTime())
-                    .build());
-        }
-        return edges;
     }
 
     private RelationListVO toListVO(List<RelationUserEdgeVO> edges) {

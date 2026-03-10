@@ -22,10 +22,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -40,9 +36,6 @@ public class FeedCardAssembleService {
     private final IReactionRepository reactionRepository;
     private final RelationQueryService relationQueryService;
     private final IFeedFollowSeenRepository feedFollowSeenRepository;
-
-    private final ConcurrentHashMap<String, CompletableFuture<Map<Long, FeedCardBaseVO>>> baseInflight = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, CompletableFuture<Map<Long, FeedCardStatVO>>> statInflight = new ConcurrentHashMap<>();
 
     public List<FeedItemVO> assemble(Long userId, String source, List<FeedInboxEntryVO> candidates, int normalizedLimit) {
         if (candidates == null || candidates.isEmpty()) {
@@ -113,42 +106,26 @@ public class FeedCardAssembleService {
     }
 
     private Map<Long, FeedCardBaseVO> loadBaseCards(List<Long> candidateIds) {
-        Map<Long, FeedCardBaseVO> baseMap = new HashMap<>(feedCardRepository.getBatch(candidateIds));
-        List<Long> missIds = collectMissIds(candidateIds, baseMap.keySet());
-        if (missIds.isEmpty()) {
-            return baseMap;
-        }
-        Map<Long, FeedCardBaseVO> rebuilt = executeSingleFlight(baseInflight, normalizeInflightKey(missIds), () -> rebuildBaseCards(missIds));
-        baseMap.putAll(rebuilt);
-        return baseMap;
+        return new HashMap<>(feedCardRepository.getOrLoadBatch(candidateIds, this::rebuildBaseCards));
     }
 
     private Map<Long, FeedCardStatVO> loadStatCards(List<Long> candidateIds) {
-        Map<Long, FeedCardStatVO> statMap = new HashMap<>(feedCardStatRepository.getBatch(candidateIds));
-        List<Long> missIds = collectMissIds(candidateIds, statMap.keySet());
-        if (missIds.isEmpty()) {
-            return statMap;
-        }
-        Map<Long, FeedCardStatVO> rebuilt = executeSingleFlight(statInflight, normalizeInflightKey(missIds), () -> rebuildStatCards(missIds));
-        statMap.putAll(rebuilt);
-        return statMap;
+        return new HashMap<>(feedCardStatRepository.getOrLoadBatch(candidateIds, this::rebuildStatCards));
     }
 
     private Map<Long, FeedCardBaseVO> rebuildBaseCards(List<Long> missIds) {
-        Map<Long, FeedCardBaseVO> rebuilt = new HashMap<>(feedCardRepository.getBatch(missIds));
-        List<Long> unresolved = collectMissIds(missIds, rebuilt.keySet());
-        if (unresolved.isEmpty()) {
-            return rebuilt;
+        if (missIds == null || missIds.isEmpty()) {
+            return Map.of();
         }
-        List<ContentPostEntity> posts = contentRepository.listPostsByIds(unresolved);
+        Map<Long, FeedCardBaseVO> rebuilt = new HashMap<>();
+        List<ContentPostEntity> posts = contentRepository.listPostsByIds(missIds);
         Map<Long, ContentPostEntity> postMap = new HashMap<>();
         for (ContentPostEntity post : posts) {
             if (post != null && post.getPostId() != null) {
                 postMap.put(post.getPostId(), post);
             }
         }
-        List<FeedCardBaseVO> toSave = new ArrayList<>();
-        for (Long id : unresolved) {
+        for (Long id : missIds) {
             ContentPostEntity post = postMap.get(id);
             if (post == null) {
                 continue;
@@ -163,20 +140,16 @@ public class FeedCardAssembleService {
                     .publishTime(post.getCreateTime())
                     .build();
             rebuilt.put(id, card);
-            toSave.add(card);
         }
-        feedCardRepository.saveBatch(toSave);
         return rebuilt;
     }
 
     private Map<Long, FeedCardStatVO> rebuildStatCards(List<Long> missIds) {
-        Map<Long, FeedCardStatVO> rebuilt = new HashMap<>(feedCardStatRepository.getBatch(missIds));
-        List<Long> unresolved = collectMissIds(missIds, rebuilt.keySet());
-        if (unresolved.isEmpty()) {
-            return rebuilt;
+        if (missIds == null || missIds.isEmpty()) {
+            return Map.of();
         }
-        List<FeedCardStatVO> toSave = new ArrayList<>();
-        for (Long postId : unresolved) {
+        Map<Long, FeedCardStatVO> rebuilt = new HashMap<>();
+        for (Long postId : missIds) {
             ReactionTargetVO target = ReactionTargetVO.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(postId)
@@ -187,9 +160,7 @@ public class FeedCardAssembleService {
                     .likeCount(reactionRepository.getCount(target))
                     .build();
             rebuilt.put(postId, stat);
-            toSave.add(stat);
         }
-        feedCardStatRepository.saveBatch(toSave);
         return rebuilt;
     }
 
@@ -214,64 +185,4 @@ public class FeedCardAssembleService {
         return authorMap;
     }
 
-    private List<Long> collectMissIds(List<Long> ids, Set<Long> resolvedIds) {
-        List<Long> missIds = new ArrayList<>();
-        if (ids == null || ids.isEmpty()) {
-            return missIds;
-        }
-        Set<Long> seen = new LinkedHashSet<>();
-        for (Long id : ids) {
-            if (id == null || !seen.add(id) || (resolvedIds != null && resolvedIds.contains(id))) {
-                continue;
-            }
-            missIds.add(id);
-        }
-        return missIds;
-    }
-
-    private String normalizeInflightKey(List<Long> ids) {
-        if (ids == null || ids.isEmpty()) {
-            return "";
-        }
-        Set<Long> normalized = new LinkedHashSet<>();
-        for (Long id : ids) {
-            if (id != null) {
-                normalized.add(id);
-            }
-        }
-        return normalized.stream().sorted().map(String::valueOf).reduce((left, right) -> left + "," + right).orElse("");
-    }
-
-    private <T> T executeSingleFlight(ConcurrentHashMap<String, CompletableFuture<T>> inflight, String key, Supplier<T> supplier) {
-        CompletableFuture<T> future = new CompletableFuture<>();
-        CompletableFuture<T> existing = inflight.putIfAbsent(key, future);
-        if (existing != null) {
-            return join(existing);
-        }
-        try {
-            T value = supplier.get();
-            future.complete(value);
-            return value;
-        } catch (RuntimeException exception) {
-            future.completeExceptionally(exception);
-            throw exception;
-        } catch (Error error) {
-            future.completeExceptionally(error);
-            throw error;
-        } finally {
-            inflight.remove(key, future);
-        }
-    }
-
-    private <T> T join(CompletableFuture<T> future) {
-        try {
-            return future.join();
-        } catch (CompletionException exception) {
-            Throwable cause = exception.getCause();
-            if (cause instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            throw exception;
-        }
-    }
 }

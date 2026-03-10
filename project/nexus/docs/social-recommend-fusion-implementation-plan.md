@@ -131,6 +131,12 @@
 
 ### 4.2 用户关系现状
 
+> 2026-03-10 更新：
+> 这部分口径已被 Phase B+ 收口结果部分覆盖。
+> 当前现行实现是“数据库为唯一真相源，`IRelationAdjacencyCachePort` 只做 DB 读取门面”。
+> 关系侧剩余工作只有 3 个：统一分页入口、同请求内复用 following、删除旧 offset 残留。
+> 没有监控证据前，不允许恢复 `social:adj:*` 关系邻接缓存。
+
 当前关键文件：
 
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/RelationController.java`
@@ -146,7 +152,7 @@
 - 事实表：`user_relation`
 - 反向边：`user_follower`
 - HTTP：`follow/unfollow/block`
-- Redis 邻接缓存：`social:adj:following:*`、`social:adj:followers:*`
+- 关系查询门面：`IRelationAdjacencyCachePort`（当前实现已改为 DB 直读）
 
 当前真实缺口：
 
@@ -483,7 +489,14 @@ A 版的固定边界：
 - Redis 更新失败不回滚主事务；后续读链路的 rebuild 负责自愈。
 - 这比“所有缓存都等异步消费者来改”更适合当前阶段，因为你现在更需要稳定和直接，不需要把本来很简单的 UX 变成最终一致延迟问题。
 
-### 7.3 关系缓存结构（固定）
+### 7.3 关系读取与分页规则（现行）
+
+> 2026-03-10 更新：
+> 当前现行实现不再维护 Redis 邻接缓存。
+> `followers/following` 统一通过 `IRelationAdjacencyCachePort` 走 DB keyset 分页。
+> 唯一允许的优化是“同一次请求内显式复用 following 结果”。
+> 不再新增 `social:adj:*` key，不再引入 `rebuildFollowing` / `rebuildFollowers`。
+> 没有监控证据前，不允许恢复任何关系邻接缓存协议。
 
 不要复用旧 `Set` key，直接上新 key，避免 Redis 类型冲突。
 

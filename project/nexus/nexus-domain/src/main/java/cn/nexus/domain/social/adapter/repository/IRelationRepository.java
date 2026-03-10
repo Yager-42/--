@@ -24,7 +24,7 @@ public interface IRelationRepository {
 
     int countActiveRelationsByTarget(Long targetId, Integer relationType);
 
-    void saveFollower(Long id, Long userId, Long followerId);
+    void saveFollower(Long id, Long userId, Long followerId, Date createTime);
 
     void deleteFollower(Long userId, Long followerId);
 

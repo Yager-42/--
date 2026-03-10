@@ -17,9 +17,5 @@ public interface IRelationAdjacencyCachePort {
 
     List<RelationUserEdgeVO> pageFollowers(Long targetId, String cursor, int limit);
 
-    void rebuildFollowing(Long sourceId);
-
-    void rebuildFollowers(Long targetId);
-
     void evict(Long userId);
 }

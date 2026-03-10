@@ -12,6 +12,7 @@ import cn.nexus.domain.social.model.valobj.kv.CommentContentKeyVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentResultVO;
 import cn.nexus.infrastructure.dao.social.ICommentDao;
 import cn.nexus.infrastructure.dao.social.po.CommentPO;
+import cn.nexus.infrastructure.support.SingleFlight;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -59,6 +60,8 @@ public class CommentRepository implements ICommentRepository {
             .expireAfterWrite(Duration.ofSeconds(2))
             .build();
 
+    private final SingleFlight singleFlight = new SingleFlight();
+
     @Override
     public CommentBriefVO getBrief(Long commentId) {
         if (commentId == null) {
@@ -84,8 +87,8 @@ public class CommentRepository implements ICommentRepository {
         if (commentIds == null || commentIds.isEmpty()) {
             return List.of();
         }
-        // L1：Caffeine 命中；必须返回 copy，避免读侧 enrichUserProfile 修改 nickname/avatar 污染缓存对象。
-        List<CommentViewVO> res = new ArrayList<>();
+
+        Map<Long, CommentViewVO> resultById = new HashMap<>();
         Set<Long> missSet = new LinkedHashSet<>();
         for (Long id : commentIds) {
             if (id == null) {
@@ -93,82 +96,26 @@ public class CommentRepository implements ICommentRepository {
             }
             CommentViewVO cached = commentViewCache.getIfPresent(id);
             if (cached != null) {
-                res.add(copy(cached));
+                resultById.put(id, copy(cached));
                 continue;
             }
             missSet.add(id);
         }
-        if (missSet.isEmpty()) {
-            return res;
-        }
+        if (!missSet.isEmpty()) {
+            List<Long> missIds = new ArrayList<>(missSet);
+            resultById.putAll(readCommentViewsFromRedis(missIds, true));
 
-        // L2：Redis multiGet。
-        List<Long> missIds = new ArrayList<>(missSet);
-        List<String> keys = new ArrayList<>(missIds.size());
-        for (Long id : missIds) {
-            keys.add(commentViewRedisKey(id));
-        }
-        List<String> jsons = stringRedisTemplate.opsForValue().multiGet(keys);
-        List<Long> stillMiss = new ArrayList<>();
-        if (jsons == null || jsons.size() != missIds.size()) {
-            stillMiss.addAll(missIds);
-        } else {
-            for (int i = 0; i < missIds.size(); i++) {
-                Long id = missIds.get(i);
-                String json = jsons.get(i);
-                if (json == null) {
+            List<Long> stillMiss = new ArrayList<>();
+            for (Long id : missIds) {
+                if (id != null && !resultById.containsKey(id)) {
                     stillMiss.add(id);
-                    continue;
-                }
-                if (NULL_VALUE.equals(json)) {
-                    continue;
-                }
-                CommentViewVO parsed = parseCommentViewCache(json);
-                if (parsed == null || parsed.getCommentId() == null) {
-                    stillMiss.add(id);
-                    continue;
-                }
-                CommentViewVO snap = sanitizeSnapshot(parsed);
-                commentViewCache.put(id, snap);
-                res.add(copy(snap));
-            }
-        }
-        if (stillMiss.isEmpty()) {
-            return res;
-        }
-
-        // DB：回源查 missIds；命中写回 L2(5s+jitter)+回填 L1；miss 写 "NULL"(2s+jitter)。
-        List<CommentPO> list = commentDao.selectByIds(stillMiss);
-        Map<Long, CommentViewVO> found = new HashMap<>();
-        List<ContentKey> contentKeys = new ArrayList<>();
-        if (list != null) {
-            for (CommentPO po : list) {
-                CommentViewVO vo = toView(po);
-                if (vo != null && vo.getCommentId() != null) {
-                    found.put(vo.getCommentId(), vo);
-                    contentKeys.add(ContentKey.from(po));
                 }
             }
-        }
-
-        fillContentsFromKv(found, contentKeys);
-
-        for (Long id : stillMiss) {
-            if (id == null) {
-                continue;
+            if (!stillMiss.isEmpty()) {
+                resultById.putAll(singleFlight.execute(normalizeInflightKey(stillMiss), () -> rebuildCommentViews(stillMiss)));
             }
-            CommentViewVO vo = found.get(id);
-            if (vo == null) {
-                writeNullCache(commentViewRedisKey(id));
-                continue;
-            }
-            CommentViewVO snap = sanitizeSnapshot(vo);
-            commentViewCache.put(id, snap);
-            res.add(copy(snap));
-            writeCommentViewCache(id, snap);
         }
-
-        return res;
+        return orderCommentViews(commentIds, resultById);
     }
 
     @Override
@@ -199,6 +146,10 @@ public class CommentRepository implements ICommentRepository {
         po.setCreateTime(now);
         po.setUpdateTime(now);
         commentDao.insert(po);
+        evictCommentView(commentId);
+        if (rootId != null) {
+            evictReplyPreviews(rootId);
+        }
     }
 
     @Override
@@ -206,8 +157,16 @@ public class CommentRepository implements ICommentRepository {
         if (commentId == null) {
             return false;
         }
+        CommentBriefVO brief = getBrief(commentId);
         Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
-        return commentDao.approvePending(commentId, now) > 0;
+        boolean updated = commentDao.approvePending(commentId, now) > 0;
+        if (updated) {
+            evictCommentView(commentId);
+            if (brief != null && brief.getRootId() != null) {
+                evictReplyPreviews(brief.getRootId());
+            }
+        }
+        return updated;
     }
 
     @Override
@@ -215,8 +174,16 @@ public class CommentRepository implements ICommentRepository {
         if (commentId == null) {
             return false;
         }
+        CommentBriefVO brief = getBrief(commentId);
         Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
-        return commentDao.rejectPending(commentId, now) > 0;
+        boolean updated = commentDao.rejectPending(commentId, now) > 0;
+        if (updated) {
+            evictCommentView(commentId);
+            if (brief != null && brief.getRootId() != null) {
+                evictReplyPreviews(brief.getRootId());
+            }
+        }
+        return updated;
     }
 
     @Override
@@ -224,8 +191,15 @@ public class CommentRepository implements ICommentRepository {
         if (commentId == null) {
             return false;
         }
+        CommentBriefVO brief = getBrief(commentId);
         Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
         int affected = commentDao.softDelete(commentId, now);
+        if (affected > 0) {
+            evictCommentView(commentId);
+            if (brief != null && brief.getRootId() != null) {
+                evictReplyPreviews(brief.getRootId());
+            }
+        }
         return affected > 0;
     }
 
@@ -236,6 +210,10 @@ public class CommentRepository implements ICommentRepository {
         }
         Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
         int affected = commentDao.softDeleteByRootId(rootId, now);
+        if (affected > 0) {
+            evictCommentView(rootId);
+            evictReplyPreviews(rootId);
+        }
         return affected > 0;
     }
 
@@ -254,6 +232,7 @@ public class CommentRepository implements ICommentRepository {
             return;
         }
         commentDao.addReplyCount(rootCommentId, delta);
+        evictCommentView(rootCommentId);
     }
 
     @Override
@@ -262,6 +241,7 @@ public class CommentRepository implements ICommentRepository {
             return;
         }
         commentDao.addLikeCount(rootCommentId, delta);
+        evictCommentView(rootCommentId);
     }
 
     @Override
@@ -303,6 +283,7 @@ public class CommentRepository implements ICommentRepository {
                     replyPreviewIdsCache.put(l1Key, ids);
                     return new ArrayList<>(ids);
                 }
+                deleteRedisQuietly(redisKey);
             }
 
             List<Long> ids = pageReplyIdsFromDb(rootId, c, normalizedLimit, viewerId);
@@ -329,6 +310,156 @@ public class CommentRepository implements ICommentRepository {
                 normalizedLimit);
     }
 
+    private List<CommentViewVO> orderCommentViews(List<Long> commentIds, Map<Long, CommentViewVO> resultById) {
+        List<CommentViewVO> ordered = new ArrayList<>(commentIds == null ? 0 : commentIds.size());
+        if (commentIds == null || commentIds.isEmpty()) {
+            return ordered;
+        }
+        for (Long id : commentIds) {
+            CommentViewVO view = resultById.get(id);
+            if (view != null) {
+                ordered.add(copy(view));
+            }
+        }
+        return ordered;
+    }
+
+    private Map<Long, CommentViewVO> rebuildCommentViews(List<Long> commentIds) {
+        Map<Long, CommentViewVO> result = readCommentViewsFromRedis(commentIds, true);
+        List<Long> unresolved = new ArrayList<>();
+        for (Long id : commentIds) {
+            if (id != null && !result.containsKey(id)) {
+                unresolved.add(id);
+            }
+        }
+        if (unresolved.isEmpty()) {
+            return result;
+        }
+
+        List<CommentPO> list = commentDao.selectByIds(unresolved);
+        Map<Long, CommentViewVO> found = new HashMap<>();
+        List<ContentKey> contentKeys = new ArrayList<>();
+        if (list != null) {
+            for (CommentPO po : list) {
+                CommentViewVO view = toView(po);
+                if (view == null || view.getCommentId() == null) {
+                    continue;
+                }
+                found.put(view.getCommentId(), view);
+                contentKeys.add(ContentKey.from(po));
+            }
+        }
+        fillContentsFromKv(found, contentKeys);
+
+        for (Long id : unresolved) {
+            if (id == null) {
+                continue;
+            }
+            CommentViewVO view = found.get(id);
+            if (view == null) {
+                writeNullCache(commentViewRedisKey(id));
+                continue;
+            }
+            CommentViewVO snapshot = sanitizeSnapshot(view);
+            commentViewCache.put(id, snapshot);
+            result.put(id, copy(snapshot));
+            writeCommentViewCache(id, snapshot);
+        }
+        return result;
+    }
+
+    private Map<Long, CommentViewVO> readCommentViewsFromRedis(List<Long> commentIds, boolean deleteBrokenKey) {
+        Map<Long, CommentViewVO> result = new HashMap<>();
+        if (commentIds == null || commentIds.isEmpty()) {
+            return result;
+        }
+        List<String> keys = new ArrayList<>(commentIds.size());
+        for (Long id : commentIds) {
+            if (id != null) {
+                keys.add(commentViewRedisKey(id));
+            }
+        }
+        if (keys.isEmpty()) {
+            return result;
+        }
+        List<String> jsons;
+        try {
+            jsons = stringRedisTemplate.opsForValue().multiGet(keys);
+        } catch (Exception ignored) {
+            return result;
+        }
+        if (jsons == null || jsons.size() != keys.size()) {
+            return result;
+        }
+        int idx = 0;
+        for (Long id : commentIds) {
+            if (id == null) {
+                continue;
+            }
+            String json = jsons.get(idx++);
+            if (json == null || NULL_VALUE.equals(json)) {
+                continue;
+            }
+            CommentViewVO parsed = parseCommentViewCache(json);
+            if (parsed == null || parsed.getCommentId() == null) {
+                if (deleteBrokenKey) {
+                    deleteRedisQuietly(commentViewRedisKey(id));
+                }
+                continue;
+            }
+            CommentViewVO snapshot = sanitizeSnapshot(parsed);
+            commentViewCache.put(id, snapshot);
+            result.put(id, copy(snapshot));
+        }
+        return result;
+    }
+
+    private String normalizeInflightKey(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return "";
+        }
+        List<Long> normalized = new ArrayList<>();
+        for (Long id : ids) {
+            if (id != null && !normalized.contains(id)) {
+                normalized.add(id);
+            }
+        }
+        normalized.sort(Long::compareTo);
+        List<String> parts = new ArrayList<>(normalized.size());
+        for (Long id : normalized) {
+            parts.add(String.valueOf(id));
+        }
+        return String.join(",", parts);
+    }
+
+    private void evictCommentView(Long commentId) {
+        if (commentId == null) {
+            return;
+        }
+        commentViewCache.invalidate(commentId);
+        deleteRedisQuietly(commentViewRedisKey(commentId));
+    }
+
+    private void evictReplyPreviews(Long rootId) {
+        if (rootId == null) {
+            return;
+        }
+        for (int limit = 1; limit <= 10; limit++) {
+            replyPreviewIdsCache.invalidate(rootId + ":" + limit);
+            deleteRedisQuietly(replyPreviewRedisKey(rootId, limit));
+        }
+    }
+
+    private void deleteRedisQuietly(String key) {
+        if (key == null || key.isBlank()) {
+            return;
+        }
+        try {
+            stringRedisTemplate.delete(key);
+        } catch (Exception ignored) {
+            // ignore
+        }
+    }
     private String commentViewRedisKey(Long commentId) {
         if (commentId == null) {
             return KEY_COMMENT_VIEW_PREFIX;

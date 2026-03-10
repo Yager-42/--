@@ -1,5 +1,6 @@
 package cn.nexus.infrastructure.adapter.social.repository;
 
+import cn.nexus.domain.social.adapter.port.IContentCacheEvictPort;
 import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.model.entity.ContentDraftEntity;
@@ -7,6 +8,8 @@ import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
+import cn.nexus.infrastructure.config.SocialCacheHotTtlProperties;
+import cn.nexus.infrastructure.support.SingleFlight;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -23,6 +26,7 @@ import cn.nexus.infrastructure.dao.social.po.ContentPostTypePO;
 import cn.nexus.infrastructure.dao.social.po.ContentSchedulePO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.stereotype.Repository;
@@ -32,14 +36,16 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * 内容/媒体仓储 MyBatis 实现。
+ * 鍐呭/濯掍綋浠撳偍 MyBatis 瀹炵幇銆?
  */
 @Slf4j
 @Repository
@@ -55,6 +61,8 @@ public class ContentRepository implements IContentRepository {
     private final IPostContentKvPort postContentKvPort;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
+    private final ObjectProvider<IContentCacheEvictPort> contentCacheEvictPortProvider;
+    private final SocialCacheHotTtlProperties socialCacheHotTtlProperties;
 
     private static final String HOTKEY_PREFIX = "post__";
     private static final int L1_MAX_SIZE = 100_000;
@@ -65,10 +73,12 @@ public class ContentRepository implements IContentRepository {
     private static final long POST_REDIS_TTL_SECONDS = 60;
     private static final long POST_REDIS_NULL_TTL_SECONDS = 30;
 
+    private final SingleFlight singleFlight = new SingleFlight();
+
     /**
-     * Feed 回表热点优化：只缓存热点 postId，短 TTL。
+     * Feed 鍥炶〃鐑偣浼樺寲锛氬彧缂撳瓨鐑偣 postId锛岀煭 TTL銆?
      *
-     * <p>注意：缓存对象必须做快照，且对外返回时必须 copy，避免调用方修改污染缓存。</p>
+     * <p>娉ㄦ剰锛氱紦瀛樺璞″繀椤诲仛蹇収锛屼笖瀵瑰杩斿洖鏃跺繀椤?copy锛岄伩鍏嶈皟鐢ㄦ柟淇敼姹℃煋缂撳瓨銆?/p>
      */
     private final Cache<Long, ContentPostEntity> postCache = Caffeine.newBuilder()
             .maximumSize(L1_MAX_SIZE)
@@ -168,8 +178,6 @@ public class ContentRepository implements IContentRepository {
         }
 
         ValueOperations<String, String> valueOps = stringRedisTemplate.opsForValue();
-
-        // L1 只服务“热点 postId”：先查缓存，miss 的再批量走 L2/DB。
         Map<Long, ContentPostEntity> resultById = new HashMap<>();
         List<Long> missIds = new ArrayList<>(postIds.size());
         for (Long id : postIds) {
@@ -188,11 +196,8 @@ public class ContentRepository implements IContentRepository {
         }
 
         if (!missIds.isEmpty()) {
-            // 去重：避免 multiGet / IN(...) 出现大量重复值。
-            java.util.LinkedHashSet<Long> dedup = new java.util.LinkedHashSet<>(missIds);
+            LinkedHashSet<Long> dedup = new LinkedHashSet<>(missIds);
             List<Long> uniqMissIds = new ArrayList<>(dedup);
-
-            // L2（Redis）：批量 multiGet，命中则补进结果；命中 NULL 则直接视为不存在（不回表）。
             List<Long> dbMissIds = new ArrayList<>(uniqMissIds.size());
             try {
                 List<String> keys = new ArrayList<>(uniqMissIds.size());
@@ -213,10 +218,11 @@ public class ContentRepository implements IContentRepository {
                         }
                         ContentPostEntity entity = parsePostCache(json);
                         if (entity == null || entity.getPostId() == null) {
+                            deleteRedisQuietly(postRedisKey(id));
                             dbMissIds.add(id);
                             continue;
                         }
-                        resultById.put(id, entity);
+                        resultById.put(id, copyPost(entity));
                         if (isHotKeySafe(hotkeyKey(id))) {
                             postCache.put(id, copyPost(entity));
                         }
@@ -225,63 +231,29 @@ public class ContentRepository implements IContentRepository {
                     dbMissIds.addAll(uniqMissIds);
                 }
             } catch (Exception ignored) {
-                // Redis 异常视为 miss：仍回源 DB
                 dbMissIds.addAll(uniqMissIds);
             }
 
             if (!dbMissIds.isEmpty()) {
-                List<ContentPostPO> list = contentPostDao.selectByIds(dbMissIds);
-                List<ContentPostEntity> dbEntities = new ArrayList<>(list == null ? 0 : list.size());
-                if (list != null && !list.isEmpty()) {
-                    for (ContentPostPO po : list) {
-                        ContentPostEntity entity = toPostEntity(po);
-                        if (entity == null || entity.getPostId() == null) {
+                Map<Long, ContentPostEntity> rebuilt = singleFlight.execute(normalizeInflightKey(dbMissIds),
+                        () -> rebuildPosts(dbMissIds, valueOps));
+                if (rebuilt != null && !rebuilt.isEmpty()) {
+                    for (Map.Entry<Long, ContentPostEntity> entry : rebuilt.entrySet()) {
+                        if (entry.getKey() == null || entry.getValue() == null) {
                             continue;
                         }
-                        dbEntities.add(entity);
-                    }
-                }
-                fillPostTypes(dbEntities);
-                fillPostContent(dbEntities);
-
-                java.util.Set<Long> dbHitIds = new java.util.HashSet<>();
-                for (ContentPostEntity entity : dbEntities) {
-                    Long id = entity.getPostId();
-                    if (id == null) {
-                        continue;
-                    }
-                    dbHitIds.add(id);
-                    resultById.put(id, entity);
-                    if (isHotKeySafe(hotkeyKey(id))) {
-                        postCache.put(id, copyPost(entity));
-                    }
-                    try {
-                        String json = objectMapper.writeValueAsString(entity);
-                        valueOps.set(postRedisKey(id), json, POST_REDIS_TTL_SECONDS, TimeUnit.SECONDS);
-                    } catch (Exception ignored) {
-                        // 缓存写失败视为 miss，不影响主链路
-                    }
-                }
-
-                // DB 仍 miss：写负缓存，避免重复打 DB。
-                for (Long id : dbMissIds) {
-                    if (id == null || dbHitIds.contains(id)) {
-                        continue;
-                    }
-                    try {
-                        valueOps.set(postRedisKey(id), POST_REDIS_NULL_VALUE, POST_REDIS_NULL_TTL_SECONDS, TimeUnit.SECONDS);
-                    } catch (Exception ignored) {
-                        // ignore
+                        resultById.put(entry.getKey(), copyPost(entry.getValue()));
                     }
                 }
             }
         }
 
-        List<ContentPostEntity> ordered = new java.util.ArrayList<>(postIds.size());
+        List<ContentPostEntity> ordered = new ArrayList<>(postIds.size());
         for (Long id : postIds) {
             ContentPostEntity entity = resultById.get(id);
             if (entity != null) {
-                ordered.add(entity);
+                ordered.add(copyPost(entity));
+                tryExtendHotCacheTtl(id, entity);
             }
         }
         return ordered;
@@ -447,7 +419,7 @@ public class ContentRepository implements IContentRepository {
             if (postId == null) {
                 continue;
             }
-            // 先清理关联映射，避免产生脏数据。
+            // 鍏堟竻鐞嗗叧鑱旀槧灏勶紝閬垮厤浜х敓鑴忔暟鎹€?
             contentPostTypeDao.deleteByPostId(postId);
             invalidatePostCache(postId);
         }
@@ -514,12 +486,13 @@ public class ContentRepository implements IContentRepository {
         if (postId == null) {
             return;
         }
-        postCache.invalidate(postId);
-        try {
-            stringRedisTemplate.delete(postRedisKey(postId));
-        } catch (Exception ignored) {
-            // Redis 异常视为 cache miss，不影响主链路
+        IContentCacheEvictPort cacheEvictPort = contentCacheEvictPortProvider.getIfAvailable();
+        if (cacheEvictPort != null) {
+            cacheEvictPort.evictPost(postId);
+            return;
         }
+        evictLocalPostCache(postId);
+        deleteRedisQuietly(postRedisKey(postId));
     }
 
     /**
@@ -534,6 +507,163 @@ public class ContentRepository implements IContentRepository {
 
     private String postRedisKey(Long postId) {
         return POST_REDIS_KEY_PREFIX + postId;
+    }
+
+    private Map<Long, ContentPostEntity> rebuildPosts(List<Long> dbMissIds, ValueOperations<String, String> valueOps) {
+        Map<Long, ContentPostEntity> resolved = readPostsFromRedis(dbMissIds, true);
+        List<Long> unresolvedIds = new ArrayList<>();
+        for (Long id : dbMissIds) {
+            if (id == null || resolved.containsKey(id)) {
+                continue;
+            }
+            unresolvedIds.add(id);
+        }
+        if (unresolvedIds.isEmpty()) {
+            return resolved;
+        }
+
+        List<ContentPostPO> list = contentPostDao.selectByIds(unresolvedIds);
+        List<ContentPostEntity> dbEntities = new ArrayList<>(list == null ? 0 : list.size());
+        if (list != null && !list.isEmpty()) {
+            for (ContentPostPO po : list) {
+                ContentPostEntity entity = toPostEntity(po);
+                if (entity == null || entity.getPostId() == null) {
+                    continue;
+                }
+                dbEntities.add(entity);
+            }
+        }
+        fillPostTypes(dbEntities);
+        fillPostContent(dbEntities);
+
+        Map<Long, ContentPostEntity> dbHits = new HashMap<>();
+        for (ContentPostEntity entity : dbEntities) {
+            Long id = entity.getPostId();
+            if (id == null) {
+                continue;
+            }
+            dbHits.put(id, copyPost(entity));
+            resolved.put(id, copyPost(entity));
+            if (isHotKeySafe(hotkeyKey(id))) {
+                postCache.put(id, copyPost(entity));
+            }
+            try {
+                String json = objectMapper.writeValueAsString(entity);
+                valueOps.set(postRedisKey(id), json, positiveTtlSeconds(), TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // 缓存写失败视为 miss，不影响主链路。
+            }
+        }
+
+        for (Long id : unresolvedIds) {
+            if (id == null || dbHits.containsKey(id)) {
+                continue;
+            }
+            try {
+                valueOps.set(postRedisKey(id), POST_REDIS_NULL_VALUE, POST_REDIS_NULL_TTL_SECONDS, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // ignore
+            }
+        }
+        return resolved;
+    }
+
+    private Map<Long, ContentPostEntity> readPostsFromRedis(List<Long> postIds, boolean deleteBrokenKey) {
+        Map<Long, ContentPostEntity> resolved = new HashMap<>();
+        if (postIds == null || postIds.isEmpty()) {
+            return resolved;
+        }
+        List<String> keys = new ArrayList<>(postIds.size());
+        for (Long id : postIds) {
+            if (id != null) {
+                keys.add(postRedisKey(id));
+            }
+        }
+        if (keys.isEmpty()) {
+            return resolved;
+        }
+        List<String> cached;
+        try {
+            cached = stringRedisTemplate.opsForValue().multiGet(keys);
+        } catch (Exception ignored) {
+            return resolved;
+        }
+        if (cached == null || cached.size() != keys.size()) {
+            return resolved;
+        }
+        int idx = 0;
+        for (Long id : postIds) {
+            if (id == null) {
+                continue;
+            }
+            String json = cached.get(idx++);
+            if (json == null || POST_REDIS_NULL_VALUE.equals(json)) {
+                continue;
+            }
+            ContentPostEntity entity = parsePostCache(json);
+            if (entity == null || entity.getPostId() == null) {
+                if (deleteBrokenKey) {
+                    deleteRedisQuietly(postRedisKey(id));
+                }
+                continue;
+            }
+            resolved.put(id, copyPost(entity));
+            if (isHotKeySafe(hotkeyKey(id))) {
+                postCache.put(id, copyPost(entity));
+            }
+        }
+        return resolved;
+    }
+
+    private void tryExtendHotCacheTtl(Long postId, ContentPostEntity entity) {
+        if (postId == null || entity == null || entity.getPostId() == null) {
+            return;
+        }
+        long targetTtlSeconds = socialCacheHotTtlProperties.getContentPostSeconds();
+        if (targetTtlSeconds <= 0 || !isHotKeySafe(hotkeyKey(postId))) {
+            return;
+        }
+        String key = postRedisKey(postId);
+        try {
+            Long ttl = stringRedisTemplate.getExpire(key, TimeUnit.SECONDS);
+            if (ttl == null || ttl <= 0 || ttl >= targetTtlSeconds) {
+                return;
+            }
+            String raw = stringRedisTemplate.opsForValue().get(key);
+            if (raw == null || POST_REDIS_NULL_VALUE.equals(raw)) {
+                return;
+            }
+            stringRedisTemplate.expire(key, targetTtlSeconds, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            // 热点延寿失败不影响主链路。
+        }
+    }
+
+    private long positiveTtlSeconds() {
+        return POST_REDIS_TTL_SECONDS + ThreadLocalRandom.current().nextLong(0, POST_REDIS_TTL_SECONDS + 1);
+    }
+
+    private String normalizeInflightKey(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return "";
+        }
+        return ids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .sorted()
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
+    }
+
+    private void deleteRedisQuietly(String key) {
+        if (key == null || key.isBlank()) {
+            return;
+        }
+        try {
+            stringRedisTemplate.delete(key);
+        } catch (Exception ignored) {
+            // ignore
+        }
     }
 
     private ContentPostEntity parsePostCache(String json) {
@@ -586,7 +716,7 @@ public class ContentRepository implements IContentRepository {
         try {
             return JdHotKeyStore.isHotKey(hotkey);
         } catch (Exception e) {
-            // 外部依赖不可用时，热点治理直接关闭（不影响主链路）。
+            // 澶栭儴渚濊禆涓嶅彲鐢ㄦ椂锛岀儹鐐规不鐞嗙洿鎺ュ叧闂紙涓嶅奖鍝嶄富閾捐矾锛夈€?
             log.warn("jd-hotkey isHotKey failed, hotkey={}", hotkey, e);
             return false;
         }
@@ -732,7 +862,7 @@ public class ContentRepository implements IContentRepository {
         try {
             contentByUuid = postContentKvPort.findBatch(uuids);
         } catch (Exception e) {
-            // KV 不可用视为正文缺失，不影响主链路
+            // KV 涓嶅彲鐢ㄨ涓烘鏂囩己澶憋紝涓嶅奖鍝嶄富閾捐矾
             log.warn("fill post content from kv failed, size={}", uuids.size(), e);
             return;
         }

@@ -75,6 +75,20 @@ public class FeedCardStatRepository implements IFeedCardStatRepository {
         }
     }
 
+    public void evictLocal(Long postId) {
+        if (postId == null) {
+            return;
+        }
+        l1.invalidate(postId);
+    }
+
+    public void evictRedis(Long postId) {
+        if (postId == null) {
+            return;
+        }
+        stringRedisTemplate.delete(key(postId));
+    }
+
     private String key(Long postId) {
         return KEY_PREFIX + postId;
     }

@@ -1,6 +1,8 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.infrastructure.adapter.social.repository.ContentRepository;
+import cn.nexus.infrastructure.adapter.social.repository.FeedCardRepository;
+import cn.nexus.infrastructure.adapter.social.repository.FeedCardStatRepository;
 import cn.nexus.trigger.cache.ContentCacheEvictEvent;
 import cn.nexus.trigger.http.social.support.ContentDetailQueryService;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +17,8 @@ public class ContentCacheEvictConsumer {
 
     private final ContentRepository contentRepository;
     private final ContentDetailQueryService contentDetailQueryService;
+    private final FeedCardRepository feedCardRepository;
+    private final FeedCardStatRepository feedCardStatRepository;
 
     @RabbitListener(queues = "#{contentCacheEvictQueue.name}")
     public void onMessage(ContentCacheEvictEvent event) {
@@ -31,6 +35,16 @@ public class ContentCacheEvictConsumer {
             contentDetailQueryService.evictLocal(postId);
         } catch (Exception e) {
             log.warn("evict local detail cache failed, postId={}", postId, e);
+        }
+        try {
+            feedCardRepository.evictLocal(postId);
+        } catch (Exception e) {
+            log.warn("evict local feed card cache failed, postId={}", postId, e);
+        }
+        try {
+            feedCardStatRepository.evictLocal(postId);
+        } catch (Exception e) {
+            log.warn("evict local feed card stat cache failed, postId={}", postId, e);
         }
     }
 }

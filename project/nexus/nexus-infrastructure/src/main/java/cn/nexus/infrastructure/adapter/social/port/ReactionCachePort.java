@@ -4,6 +4,7 @@ import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.model.valobj.ReactionApplyResultVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDao;
+import cn.nexus.infrastructure.support.SingleFlight;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
@@ -61,6 +62,8 @@ public class ReactionCachePort implements IReactionCachePort {
             .maximumSize(L1_MAX_SIZE)
             .expireAfterWrite(L1_TTL)
             .build();
+
+    private final SingleFlight singleFlight = new SingleFlight();
 
     @Override
     public ReactionApplyResultVO applyAtomic(Long userId, ReactionTargetVO target, int desiredState, int syncTtlSec) {
@@ -155,7 +158,7 @@ public class ReactionCachePort implements IReactionCachePort {
             }
         }
 
-        long cnt = redisGetCntOrRebuild(target);
+        long cnt = singleFlight.execute(target.hashTag(), () -> redisGetCntOrRebuild(target));
         if (hot) {
             countCache.put(hotkey, cnt);
         }

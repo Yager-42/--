@@ -31,7 +31,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
 /**
- * 评论仓储 MyBatis 实现。
+ * 鐠囧嫯顔戞禒鎾冲亶 MyBatis 鐎圭偟骞囬妴?
  *
  * @author codex
  * @since 2026-01-14
@@ -233,6 +233,8 @@ public class CommentRepository implements ICommentRepository {
         }
         commentDao.addReplyCount(rootCommentId, delta);
         evictCommentView(rootCommentId);
+        // replyCount 会直接影响回复预览入口，必须同步清掉 preview cache。
+        evictReplyPreviews(rootCommentId);
     }
 
     @Override
@@ -267,7 +269,8 @@ public class CommentRepository implements ICommentRepository {
     public List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit, Long viewerId) {
         Cursor c = Cursor.parse(cursor);
         int normalizedLimit = Math.max(1, limit);
-        boolean preview = (cursor == null || cursor.isBlank()) && normalizedLimit <= 10;
+        // preview cache 閸欘亜鍘戠拋鍝ユ暏娴滃骸鍙曢崗閬嶎浕鐏炲繐鐨い纰夌幢鐢?viewerId 閻ㄥ嫮绮ㄩ弸婊€绗夐懗鑺ヨ穿鏉╂稑鍙℃禍?key閵?
+        boolean preview = viewerId == null && (cursor == null || cursor.isBlank()) && normalizedLimit <= 10;
         if (preview && rootId != null) {
             String l1Key = rootId + ":" + normalizedLimit;
             List<Long> cached = replyPreviewIdsCache.getIfPresent(l1Key);
@@ -397,7 +400,12 @@ public class CommentRepository implements ICommentRepository {
                 continue;
             }
             String json = jsons.get(idx++);
-            if (json == null || NULL_VALUE.equals(json)) {
+            if (json == null) {
+                continue;
+            }
+            if (NULL_VALUE.equals(json)) {
+                // 负缓存命中也算“已解析完成”，必须阻止后续再次回表。
+                result.put(id, null);
                 continue;
             }
             CommentViewVO parsed = parseCommentViewCache(json);
@@ -619,7 +627,7 @@ public class CommentRepository implements ICommentRepository {
         if (v == null) {
             return null;
         }
-        // 缓存里不存 nickname/avatar，避免跨请求污染；读侧由 IUserBaseRepository 补全。
+        // 缂傛挸鐡ㄩ柌灞肩瑝鐎?nickname/avatar閿涘矂浼╅崗宥堟硶鐠囬攱鐪板Ч鈩冪厠閿涙稖顕版笟褏鏁?IUserBaseRepository 鐞涖儱鍙忛妴?
         CommentViewVO snap = copy(v);
         if (snap != null) {
             snap.setNickname(null);

@@ -21,6 +21,10 @@
         DELETE FROM user_follower WHERE user_id = #{userId} AND follower_id = #{followerId}
     </delete>
 
+    <!--
+        这里只给 Feed fanout 内部切片扫描使用。
+        LIMIT/OFFSET 在这里是内部批处理语义，不能拿去实现用户可见的 followers 分页。
+    -->
     <select id="selectFollowerIds" resultType="java.lang.Long">
         SELECT follower_id
         FROM user_follower

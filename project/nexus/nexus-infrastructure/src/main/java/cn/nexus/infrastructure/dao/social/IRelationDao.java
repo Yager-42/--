@@ -44,6 +44,14 @@ public interface IRelationDao {
                                         @Param("cursorTargetId") Long cursorTargetId,
                                         @Param("limit") Integer limit);
 
+    /**
+     * 用户可见的 followers keyset 分页主路径。
+     *
+     * <p>这个查询的语义固定为：按 {@code create_time DESC, source_id DESC} 做 keyset 分页。
+     * 它不是 offset 深分页替代品；如果目标侧缺少覆盖
+     * {@code target_id + relation_type + status + create_time + source_id} 的复合索引，
+     * 就不能把这条路径视为可安全上线的最终方案。</p>
+     */
     List<RelationPO> pageActiveByTarget(@Param("targetId") Long targetId,
                                         @Param("relationType") Integer relationType,
                                         @Param("status") Integer status,

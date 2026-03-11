@@ -4,6 +4,7 @@ import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
 import cn.nexus.domain.social.adapter.port.IRiskLlmPort;
 import cn.nexus.domain.social.model.valobj.RiskLlmResultVO;
 import cn.nexus.domain.social.service.risk.RiskAsyncService;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
 import cn.nexus.trigger.mq.config.RiskMqConfig;
 import cn.nexus.types.event.risk.ScanCompletedEvent;
 import cn.nexus.types.event.risk.LlmScanRequestedEvent;
@@ -14,6 +15,7 @@ import org.redisson.api.RAtomicLong;
 import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,6 +42,7 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class RiskLlmScanConsumer {
 
+    private static final String CONSUMER_NAME = "RiskLlmScanConsumer";
     private static final String CACHE_KEY_PREFIX = "risk:llm:cache:";
     private static final String INFLIGHT_KEY_PREFIX = "risk:llm:inflight:";
     private static final String BUDGET_KEY_PREFIX = "risk:llm:budget:";
@@ -50,6 +53,7 @@ public class RiskLlmScanConsumer {
     private final IMediaStoragePort mediaStoragePort;
     private final IRiskLlmPort llmPort;
     private final RiskAsyncService riskAsyncService;
+    private final ReliableMqConsumerRecordService consumerRecordService;
     private final ObjectMapper objectMapper;
     private final RabbitTemplate rabbitTemplate;
 
@@ -62,75 +66,85 @@ public class RiskLlmScanConsumer {
     @Value("${risk.llm.inflightLockSeconds:30}")
     private long inflightLockSeconds;
 
-    @RabbitListener(queues = RiskMqConfig.Q_LLM_SCAN)
+    @RabbitListener(queues = RiskMqConfig.Q_LLM_SCAN, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(LlmScanRequestedEvent event) {
-        if (event == null || event.getDecisionId() == null) {
+        if (event == null || event.getDecisionId() == null || event.getEventId() == null || event.getEventId().isBlank()) {
+            throw new AmqpRejectAndDontRequeueException("risk llm scan payload invalid");
+        }
+        if (!consumerRecordService.start(event.getEventId(), CONSUMER_NAME, toJson(event))) {
             return;
         }
         String contentType = normalizeContentType(event.getContentType());
         String hash = normalizeHash(event.getContentHash(), contentType, event.getContentText(), event.getMediaUrls());
 
-        RiskLlmResultVO cached = getCached(hash);
-        if (cached != null) {
-            riskAsyncService.applyLlmResult(event.getDecisionId(), cached);
-            publishCompleted(event, cached);
-            return;
-        }
-
-        if (!acquireBudget(contentType)) {
-            RiskLlmResultVO fb = fallback(contentType, "LLM_BUDGET_EXCEEDED");
-            riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
-            publishCompleted(event, fb);
-            return;
-        }
-
-        if (hash == null || hash.isBlank()) {
-            RiskLlmResultVO fb = fallback(contentType, "LLM_HASH_EMPTY");
-            riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
-            publishCompleted(event, fb);
-            return;
-        }
-
-        String lockKey = INFLIGHT_KEY_PREFIX + hash;
-        RLock lock = redissonClient.getLock(lockKey);
-        boolean locked = false;
         try {
-            locked = lock.tryLock(200, TimeUnit.SECONDS.toMillis(inflightLockSeconds), TimeUnit.MILLISECONDS);
-            if (!locked) {
-                // 另一条消息正在扫同一份内容：不重复调用 LLM，直接跳过（等待缓存命中/人工处理）。
-                log.debug("risk llm scan inflight, decisionId={}, hash={}", event.getDecisionId(), hash);
+            RiskLlmResultVO cached = getCached(hash);
+            if (cached != null) {
+                riskAsyncService.applyLlmResult(event.getDecisionId(), cached);
+                publishCompleted(event, cached);
+                consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
                 return;
             }
 
-            RiskLlmResultVO again = getCached(hash);
-            if (again != null) {
-                riskAsyncService.applyLlmResult(event.getDecisionId(), again);
-                publishCompleted(event, again);
-                return;
-            }
-
-            RiskLlmResultVO result = callLlm(event, contentType);
-            if (result != null) {
-                cache(hash, result);
-                riskAsyncService.applyLlmResult(event.getDecisionId(), result);
-                publishCompleted(event, result);
-            } else {
-                RiskLlmResultVO fb = fallback(contentType, "LLM_EMPTY_RESULT");
+            if (!acquireBudget(contentType)) {
+                RiskLlmResultVO fb = fallback(contentType, "LLM_BUDGET_EXCEEDED");
                 riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
                 publishCompleted(event, fb);
+                consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
+                return;
             }
-        } catch (Exception e) {
-            log.warn("risk llm scan failed, decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId(), e);
-            RiskLlmResultVO fb = fallback(contentType, "LLM_CALL_FAILED");
-            riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
-            publishCompleted(event, fb);
-        } finally {
-            if (locked) {
-                try {
-                    lock.unlock();
-                } catch (Exception ignored) {
+
+            if (hash == null || hash.isBlank()) {
+                RiskLlmResultVO fb = fallback(contentType, "LLM_HASH_EMPTY");
+                riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
+                publishCompleted(event, fb);
+                consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
+                return;
+            }
+
+            String lockKey = INFLIGHT_KEY_PREFIX + hash;
+            RLock lock = redissonClient.getLock(lockKey);
+            boolean locked = false;
+            try {
+                locked = lock.tryLock(200, TimeUnit.SECONDS.toMillis(inflightLockSeconds), TimeUnit.MILLISECONDS);
+                if (!locked) {
+                    consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, "INFLIGHT_LOCK_BUSY");
+                    throw new AmqpRejectAndDontRequeueException("risk llm scan inflight lock busy");
+                }
+
+                RiskLlmResultVO again = getCached(hash);
+                if (again != null) {
+                    riskAsyncService.applyLlmResult(event.getDecisionId(), again);
+                    publishCompleted(event, again);
+                    consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
+                    return;
+                }
+
+                RiskLlmResultVO result = callLlm(event, contentType);
+                if (result != null) {
+                    cache(hash, result);
+                    riskAsyncService.applyLlmResult(event.getDecisionId(), result);
+                    publishCompleted(event, result);
+                } else {
+                    RiskLlmResultVO fb = fallback(contentType, "LLM_EMPTY_RESULT");
+                    riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
+                    publishCompleted(event, fb);
+                }
+                consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
+            } finally {
+                if (locked) {
+                    try {
+                        lock.unlock();
+                    } catch (Exception ignored) {
+                    }
                 }
             }
+        } catch (AmqpRejectAndDontRequeueException e) {
+            throw e;
+        } catch (Exception e) {
+            consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, e.getMessage());
+            log.warn("risk llm scan failed, decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId(), e);
+            throw new AmqpRejectAndDontRequeueException("risk llm scan failed", e);
         }
     }
 
@@ -277,6 +291,14 @@ public class RiskLlmScanConsumer {
             }
         }
         return null;
+    }
+
+    private String toJson(LlmScanRequestedEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            return "{}";
+        }
     }
 
     private String sha256Base64Url(String input) {

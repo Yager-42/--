@@ -161,8 +161,6 @@ public class FeedCardRepository implements IFeedCardRepository {
         return FeedCardBaseVO.builder()
                 .postId(card.getPostId())
                 .authorId(card.getAuthorId())
-                .authorNickname(null)
-                .authorAvatar(null)
                 .text(card.getText())
                 .summary(card.getSummary())
                 .mediaType(card.getMediaType())

@@ -21,9 +21,29 @@ public class FeedRecommendFeedbackAMqConfig {
     /** Queue：推荐反馈 A 通道队列（独立）。 */
     public static final String Q_FEED_RECOMMEND_FEEDBACK_A = "feed.recommend.feedback.a.queue";
 
+    public static final String DLQ_FEED_RECOMMEND_FEEDBACK_A = "feed.recommend.feedback.a.dlq.queue";
+
+    public static final String RK_FEED_RECOMMEND_FEEDBACK_A_DLX = "feed.recommend.feedback.a.dlx";
+
     @Bean
     public Queue feedRecommendFeedbackAQueue() {
-        return new Queue(Q_FEED_RECOMMEND_FEEDBACK_A, true);
+        java.util.Map<String, Object> args = new java.util.HashMap<>();
+        args.put("x-dead-letter-exchange", FeedRecommendFeedbackMqConfig.DLX_EXCHANGE);
+        args.put("x-dead-letter-routing-key", RK_FEED_RECOMMEND_FEEDBACK_A_DLX);
+        return new Queue(Q_FEED_RECOMMEND_FEEDBACK_A, true, false, false, args);
+    }
+
+    @Bean
+    public Queue feedRecommendFeedbackADlqQueue() {
+        return new Queue(DLQ_FEED_RECOMMEND_FEEDBACK_A, true);
+    }
+
+    @Bean
+    public Binding feedRecommendFeedbackADlqBinding(@Qualifier("feedRecommendFeedbackADlqQueue") Queue feedRecommendFeedbackADlqQueue,
+                                                    @Qualifier("recommendDlxExchange") DirectExchange recommendDlxExchange) {
+        return BindingBuilder.bind(feedRecommendFeedbackADlqQueue)
+                .to(recommendDlxExchange)
+                .with(RK_FEED_RECOMMEND_FEEDBACK_A_DLX);
     }
 
     @Bean

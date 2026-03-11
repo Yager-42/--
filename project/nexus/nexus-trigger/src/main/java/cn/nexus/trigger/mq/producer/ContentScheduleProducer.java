@@ -1,8 +1,9 @@
 package cn.nexus.trigger.mq.producer;
 
+import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.trigger.mq.config.ContentScheduleDelayConfig;
+import cn.nexus.trigger.mq.event.ContentScheduleTriggerEvent;
 import lombok.RequiredArgsConstructor;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -12,20 +13,21 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class ContentScheduleProducer {
 
-    private final RabbitTemplate rabbitTemplate;
+    private final ReliableMqOutboxService reliableMqOutboxService;
 
     public void sendDelay(Long taskId, long delayMs) {
-        if (delayMs < 0) {
-            delayMs = 0;
+        if (taskId == null) {
+            return;
         }
-        final long finalDelay = delayMs;
-        rabbitTemplate.convertAndSend(
+        long safeDelayMs = Math.max(0L, delayMs);
+        ContentScheduleTriggerEvent event = new ContentScheduleTriggerEvent();
+        event.setTaskId(taskId);
+        reliableMqOutboxService.save(
+                event.getEventId(),
                 ContentScheduleDelayConfig.EXCHANGE,
                 ContentScheduleDelayConfig.ROUTING_KEY,
-                taskId,
-                msg -> {
-                    msg.getMessageProperties().setHeader("x-delay", finalDelay);
-                    return msg;
-                });
+                event,
+                java.util.Map.of("x-delay", safeDelayMs)
+        );
     }
 }

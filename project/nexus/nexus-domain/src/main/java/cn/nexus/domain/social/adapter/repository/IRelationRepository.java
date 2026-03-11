@@ -28,7 +28,12 @@ public interface IRelationRepository {
 
     void deleteFollower(Long userId, Long followerId);
 
-    List<Long> listFollowerIds(Long userId, Integer offset, Integer limit);
+    /**
+     * 仅供 Feed fanout 批处理使用的粉丝 ID 扫描接口。
+     *
+     * <p>这里保留 offset 语义是为了内部切片写扩散，不能拿去实现用户可见的 followers 分页。</p>
+     */
+    List<Long> pageFollowerIdsForFanout(Long userId, Integer offset, Integer limit);
 
     int countFollowerIds(Long userId);
 

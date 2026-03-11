@@ -95,7 +95,7 @@ public class RelationRepository implements IRelationRepository {
     }
 
     @Override
-    public List<Long> listFollowerIds(Long userId, Integer offset, Integer limit) {
+    public List<Long> pageFollowerIdsForFanout(Long userId, Integer offset, Integer limit) {
         return followerDao.selectFollowerIds(userId, offset, limit);
     }
 

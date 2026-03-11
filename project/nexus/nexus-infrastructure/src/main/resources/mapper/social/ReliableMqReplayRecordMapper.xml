@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IReliableMqReplayRecordDao">
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.ReliableMqReplayRecordPO">
+        INSERT IGNORE INTO reliable_mq_replay_record(
+            event_id, consumer_name, original_queue, original_exchange, original_routing_key,
+            payload_type, payload_json, status, attempt, next_retry_at, last_error, create_time, update_time
+        ) VALUES(
+            #{eventId}, #{consumerName}, #{originalQueue}, #{originalExchange}, #{originalRoutingKey},
+            #{payloadType}, #{payloadJson}, #{status}, #{attempt}, #{nextRetryAt}, #{lastError}, NOW(), NOW()
+        )
+    </insert>
+
+    <select id="selectReady" resultType="cn.nexus.infrastructure.dao.social.po.ReliableMqReplayRecordPO">
+        SELECT id,
+               event_id AS eventId,
+               consumer_name AS consumerName,
+               original_queue AS originalQueue,
+               original_exchange AS originalExchange,
+               original_routing_key AS originalRoutingKey,
+               payload_type AS payloadType,
+               payload_json AS payloadJson,
+               status,
+               attempt,
+               next_retry_at AS nextRetryAt,
+               last_error AS lastError,
+               create_time AS createTime,
+               update_time AS updateTime
+        FROM reliable_mq_replay_record
+        WHERE status IN ('PENDING', 'RETRY_PENDING')
+          AND next_retry_at <= #{now}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markDone">
+        UPDATE reliable_mq_replay_record
+        SET status = 'DONE', update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <update id="markRetry">
+        UPDATE reliable_mq_replay_record
+        SET attempt = #{attempt},
+            next_retry_at = #{nextRetryAt},
+            last_error = #{lastError},
+            status = #{status},
+            update_time = NOW()
+        WHERE id = #{id}
+    </update>
+</mapper>

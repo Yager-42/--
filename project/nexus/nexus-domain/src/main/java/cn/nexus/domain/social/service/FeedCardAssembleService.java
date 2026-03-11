@@ -57,6 +57,7 @@ public class FeedCardAssembleService {
 
         Set<Long> likedSet = Set.of();
         Set<Long> followedSet = Set.of();
+        Set<Long> seenSet = Set.of();
         if (userId != null) {
             ReactionTargetVO template = ReactionTargetVO.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
@@ -65,6 +66,7 @@ public class FeedCardAssembleService {
                     .build();
             likedSet = reactionRepository.batchExists(template, userId, candidateIds);
             followedSet = relationQueryService.batchFollowing(userId, new ArrayList<>(authorMap.keySet()));
+            seenSet = feedFollowSeenRepository.batchSeen(userId, candidateIds);
         }
 
         List<FeedItemVO> items = new ArrayList<>(Math.min(candidateIds.size(), normalizedLimit));
@@ -75,13 +77,7 @@ public class FeedCardAssembleService {
             }
             FeedCardStatVO stat = statMap.get(postId);
             UserBriefVO author = authorMap.get(base.getAuthorId());
-            boolean seen = false;
-            if (userId != null) {
-                try {
-                    seen = feedFollowSeenRepository.isSeen(userId, postId);
-                } catch (Exception ignored) {
-                }
-            }
+            boolean seen = userId != null && seenSet.contains(postId);
             items.add(FeedItemVO.builder()
                     .postId(base.getPostId())
                     .authorId(base.getAuthorId())

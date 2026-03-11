@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IReliableMqOutboxDao">
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.ReliableMqOutboxPO">
+        INSERT IGNORE INTO reliable_mq_outbox(
+            event_id, exchange_name, routing_key, payload_type, payload_json, headers_json, status, retry_count, next_retry_at, last_error, create_time, update_time
+        ) VALUES(
+            #{eventId}, #{exchangeName}, #{routingKey}, #{payloadType}, #{payloadJson}, #{headersJson}, #{status}, #{retryCount}, #{nextRetryAt}, #{lastError}, NOW(), NOW()
+        )
+    </insert>
+
+    <select id="selectReady" resultType="cn.nexus.infrastructure.dao.social.po.ReliableMqOutboxPO">
+        SELECT id,
+               event_id AS eventId,
+               exchange_name AS exchangeName,
+               routing_key AS routingKey,
+               payload_type AS payloadType,
+               payload_json AS payloadJson,
+               headers_json AS headersJson,
+               status,
+               retry_count AS retryCount,
+               next_retry_at AS nextRetryAt,
+               last_error AS lastError,
+               create_time AS createTime,
+               update_time AS updateTime
+        FROM reliable_mq_outbox
+        WHERE status IN ('PENDING', 'RETRY_PENDING')
+          AND next_retry_at <= #{now}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markSent">
+        UPDATE reliable_mq_outbox
+        SET status = 'SENT', update_time = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <update id="markRetry">
+        UPDATE reliable_mq_outbox
+        SET retry_count = #{retryCount},
+            next_retry_at = #{nextRetryAt},
+            last_error = #{lastError},
+            status = #{status},
+            update_time = NOW()
+        WHERE id = #{id}
+    </update>
+</mapper>

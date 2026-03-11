@@ -502,3 +502,92 @@
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/user/UserProfileController.java`
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/user/UserSettingController.java`
 - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/user/InternalUserController.java`
+
+## 2026-03-11 缓存统一实施方案编码后审查
+
+- 执行者：Codex（Linus-mode）
+- 审查范围：`FeedCardBaseVO`、`FeedCardRepository`、`FeedCardAssembleService`、`ContentDetailQueryService`、`IFeedFollowSeenRepository`、`FeedFollowSeenRepository`
+- 审查目标：确认本轮编码是否已完成，并识别仍会让后续实现者在未讨论 corner case 上自行发挥的残留问题
+- 结论：本轮编码步骤已完成；运行时主路径已按方案收口，但仍存在 1 个结构性误导点和 1 个次级工程卫生问题
+
+### 评分
+
+- 技术评分：88/100
+- 战略评分：93/100
+- 综合评分：90/100
+- 通过结论：通过当前编码交付；建议进入一轮小修而不是重做
+
+### Linus Code Review
+
+- 【品味评分】🟡 凑合
+- 【致命问题】`FeedCardBaseVO` 仍声明 `authorNickname` 与 `authorAvatar`，但 `FeedCardRepository.copyStable(...)` 在写入稳定快照前又强制清空这两个字段。运行结果没错，但数据结构在撒谎：它让人误以为“基础卡片可以安全携带作者展示信息”，实际又靠下游补丁抹掉。这个设计会诱导未来实现者把展示字段偷偷塞回共享缓存。
+- 【致命问题】`ContentDetailQueryService` 顶部中文注释已经出现编码污染，注释不再表达约束，反而制造噪音。代码还能跑，但文档层已经坏了。
+- 【改进方向】把 `FeedCardBaseVO` 收口为真正的稳定快照结构，只保留 `postId/authorId/text/summary/mediaType/mediaInfo/publishTime`；不要让对象先携带脏字段，再在仓储里删掉。
+- 【改进方向】如果短期不改结构，至少把 `FeedCardRepository.copyStable(...)` 的“强制清空作者展示字段”提升成明确契约，并在接口层说明“作者资料只能在 assemble 末尾补齐，禁止进入共享缓存”。
+- 【改进方向】修复 `ContentDetailQueryService` 的乱码注释，直接把 TTL、NULL 语义、坏 key 删除规则用正常中文写清楚，不要让注释变成随机字节。
+- 【改进方向】`IFeedFollowSeenRepository.batchSeen(...)` 现在的行为是合理的：失败时返回空集合，相当于 best-effort 降级，不影响主流程正确性。这个语义最好在接口注释里写死，免得后续有人把它改成异常传播。
+
+### 剩余风险
+
+- 风险 1：未来有人看到 `FeedCardBaseVO.authorNickname/authorAvatar`，会以为共享缓存允许携带展示字段，从而重新引入缓存污染。
+- 风险 2：乱码注释会降低后续审计质量，尤其是 TTL/NULL 规则这类必须精确执行的地方。
+- 风险 3：`batchSeen` 当前是静默降级语义，若无接口注释约束，后续实现者可能改成强失败，影响 feed 页面可用性。
+
+### 审查后立即修正
+
+- 已移除 `FeedCardBaseVO` 中误导性的 `authorNickname/authorAvatar` 字段，数据结构与共享缓存边界重新一致。
+- 已同步简化 `FeedCardRepository.copyStable(...)`，不再依赖“先带脏字段、再强制清空”的补丁式写法。
+- 已修复 `ContentDetailQueryService` 的乱码注释，重新写清 L2 TTL、负缓存 TTL 与坏 key 处理规则。
+- 已给 `IFeedFollowSeenRepository.batchSeen(...)` 写死失败语义，并在 `FeedFollowSeenRepository` 中实现异常降级：Redis 批量查询失败时记录告警并返回空集合，不阻断 feed 主流程。
+
+## 2026-03-11 缓存方案并发极限 Code Review
+
+- 执行者：Codex（Linus-mode）
+- 目标：只盯高并发下的 corner case，不讨论常规功能路径
+
+### 【品味评分】
+- 🟡 凑合
+
+### 【致命问题】
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/support/SingleFlight.java:21`
+  当前 `SingleFlight` 用 `future.join()` 无超时、无中断传播、无降级出口。只要 leader 线程卡死在 DB/Redis/网络调用上，同 key 的所有 waiter 会无限挂死。这不是“慢一点”，这是并发放大器：一个 leader 卡住，一串业务线程陪葬。
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ContentRepository.java:242`
+  `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ContentRepository.java:656`
+  `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/CommentRepository.java:115`
+  `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/CommentRepository.java:425`
+  批量 single-flight 的 key 是“整批 miss 集合”，不是“单个热点对象”。这会让重叠批次完全无法合并：`[1]`、`[1,2]`、`[1,2,3]` 在高并发下会各自回源，热点越集中，浪费越大。再加上它只是进程内单飞，多实例部署时每个节点都会各打一遍。
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/CommentRepository.java:273`
+  `pageReplyCommentIds` 的 preview cache 在 L1/L2 miss 后直接回 DB，再写回缓存，中间没有 single-flight。也就是说，最热的“公共首屏回复预览”在失效瞬间会发生标准惊群：100 个并发请求就 100 次同库查询。
+
+### 【高风险问题】
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationAdjacencyCachePort.java:54`
+  `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationAdjacencyCachePort.java:58`
+  关系 followers/following 现在彻底直读 DB 真相源。这本身不脏，但它把系统承压点完全押给索引与执行计划。只要目标侧复合索引没建好、统计信息漂了、执行计划抖了，就没有任何缓存缓冲层能替你扛流量。
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedFollowSeenRepository.java:47`
+  `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedFollowSeenRepository.java:75`
+  `batchSeen` 现在是 best-effort，这个方向对；但 pipeline 结果只按 `min(normalized.size(), raw.size())` 消化。Redis 抖动或客户端返回半截结果时，会静默把部分“已读”当“未读”。它不会打挂主流程，但会在流量高峰制造肉眼可见的已读抖动。
+
+### 【改进方向】
+- 把 `SingleFlight` 从“无限等待”改成“有限等待 + 快速失败/降级”。没有超时的单飞，品味很差，因为它把单点慢调用升级成系统级阻塞。
+- 批量热点不要按“整批 miss 集合”做单飞；至少按单 ID 或小分片做，消掉重叠批次重复回源这个特殊情况。
+- 给 `CommentRepository.pageReplyCommentIds` 的 preview 重建加单飞；这个路径就是热点页，最不该裸奔回库。
+- 关系 followers 路径继续保留 DB 真相源可以，但要把“目标侧复合索引是硬前提”当成上线闸门，不是口头提醒。
+- `batchSeen` 要么显式要求“结果不完整直接整批按未读”，要么至少把 partial result 打出告警，不要默默吞掉。
+
+## 2026-03-11 缓存方案并发极限 Code Review（第二轮，仅保留非改不可项）
+
+- 结论：上一轮有些点更像吞吐优化，不是必须改。这一轮只保留 2 个真正会导致错误结果或长时间脏读的问题。
+
+### 真正高风险
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/cache/ContentCacheEvictPort.java:73`
+  `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/support/ContentDetailQueryService.java:66`
+  `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/support/ContentDetailQueryService.java:40`
+  内容详情先查本地 `localCache`，TTL 是 1 小时；跨节点本地失效完全依赖 MQ 广播。现在 MQ 发布失败只写日志、不补偿、不重试。结果是：当前节点已经删 Redis，但其他节点如果本地还有旧快照，会继续直接命中本地缓存，最长返回 1 小时旧数据。这不是性能问题，是错误结果。
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/cache/ContentCacheEvictPort.java:69`
+  `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/cache/ContentCacheEvictPort.java:102`
+  这套“双删 + 1 秒延迟删”依赖进程内单线程调度器。高并发写入下，如果进程重启、线程卡住、调度堆积，第二次删除会直接丢失。那条经典竞态——读线程先读旧库，再在写事务提交后把旧值回填缓存——就可能把旧内容留满整个 Redis TTL。尤其 `detail` 是 `24h + 0~1h`，一旦发生就是长时间脏读。
+
+### 次高风险但可接受
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/PostAuthorPort.java:97`
+  `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/cache/ContentCacheEvictPort.java:44`
+  `PostAuthorPort` 的负缓存没有进入内容失效矩阵。理论上若某个 postId 在内容正式可见前被查过，会留下 30~40 秒 `NULL`，后续点赞链路可能把真实存在的内容误判成 NOT_FOUND。这个问题成立，但触发面比前两个小得多。

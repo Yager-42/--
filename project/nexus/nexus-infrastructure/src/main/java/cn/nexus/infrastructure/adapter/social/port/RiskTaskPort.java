@@ -1,12 +1,12 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IRiskTaskPort;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.types.event.risk.ImageScanRequestedEvent;
 import cn.nexus.types.event.risk.LlmScanRequestedEvent;
 import cn.nexus.types.event.risk.ReviewCaseCreatedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -24,14 +24,14 @@ public class RiskTaskPort implements IRiskTaskPort {
     private static final String RK_IMAGE_SCAN = "risk.image.scan";
     private static final String RK_REVIEW_CASE = "risk.review.case";
 
-    private final RabbitTemplate rabbitTemplate;
+    private final ReliableMqOutboxService reliableMqOutboxService;
 
     @Override
     public void dispatchLlmScan(LlmScanRequestedEvent event) {
         if (event == null) {
             return;
         }
-        rabbitTemplate.convertAndSend(EXCHANGE, RK_LLM_SCAN, event);
+        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_LLM_SCAN, event);
         log.debug("risk llm scan dispatched. decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId());
     }
 
@@ -40,7 +40,7 @@ public class RiskTaskPort implements IRiskTaskPort {
         if (event == null) {
             return;
         }
-        rabbitTemplate.convertAndSend(EXCHANGE, RK_IMAGE_SCAN, event);
+        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_IMAGE_SCAN, event);
         log.debug("risk image scan dispatched. decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId());
     }
 
@@ -49,8 +49,7 @@ public class RiskTaskPort implements IRiskTaskPort {
         if (event == null) {
             return;
         }
-        rabbitTemplate.convertAndSend(EXCHANGE, RK_REVIEW_CASE, event);
+        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_REVIEW_CASE, event);
         log.debug("risk review case dispatched. caseId={}, decisionId={}", event.getCaseId(), event.getDecisionId());
     }
 }
-

@@ -78,7 +78,7 @@ public class FeedDistributionService implements IFeedDistributionService {
         int offset = 0;
         int limit = Math.max(1, batchSize);
         while (true) {
-            List<Long> followerIds = relationRepository.listFollowerIds(authorId, offset, limit);
+            List<Long> followerIds = relationRepository.pageFollowerIdsForFanout(authorId, offset, limit);
             if (followerIds == null || followerIds.isEmpty()) {
                 break;
             }
@@ -103,7 +103,7 @@ public class FeedDistributionService implements IFeedDistributionService {
         int safeOffset = offset == null ? 0 : Math.max(0, offset);
         int safeLimit = limit == null ? Math.max(1, batchSize) : Math.max(1, limit);
         long startNs = System.nanoTime();
-        List<Long> followerIds = relationRepository.listFollowerIds(authorId, safeOffset, safeLimit);
+        List<Long> followerIds = relationRepository.pageFollowerIdsForFanout(authorId, safeOffset, safeLimit);
         FanoutWriteStat stat = fanoutFollowerIds(authorId, postId, publishTimeMs, followerIds);
         long costMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
         if (stat.candidates() > 0) {

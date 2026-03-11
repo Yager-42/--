@@ -1,9 +1,9 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IInteractionNotifyEventPort;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
 import lombok.RequiredArgsConstructor;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -19,11 +19,10 @@ public class InteractionNotifyEventPort implements IInteractionNotifyEventPort {
     private static final String EXCHANGE = "social.interaction";
     private static final String RK_INTERACTION_NOTIFY = "interaction.notify";
 
-    private final RabbitTemplate rabbitTemplate;
+    private final ReliableMqOutboxService reliableMqOutboxService;
 
     @Override
     public void publish(InteractionNotifyEvent event) {
-        rabbitTemplate.convertAndSend(EXCHANGE, RK_INTERACTION_NOTIFY, event);
+        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_INTERACTION_NOTIFY, event);
     }
 }
-

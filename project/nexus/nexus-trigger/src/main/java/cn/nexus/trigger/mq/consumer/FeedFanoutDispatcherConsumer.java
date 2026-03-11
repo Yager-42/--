@@ -1,4 +1,4 @@
-package cn.nexus.trigger.mq.consumer;
+﻿package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
@@ -8,9 +8,11 @@ import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
 import cn.nexus.domain.social.service.FeedAuthorCategoryStateMachine;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
 import cn.nexus.trigger.mq.config.FeedFanoutConfig;
 import cn.nexus.types.event.FeedFanoutTask;
 import cn.nexus.types.event.PostPublishedEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
@@ -36,6 +38,8 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class FeedFanoutDispatcherConsumer {
 
+    private static final String CONSUMER_NAME = "FeedFanoutDispatcherConsumer";
+
     private final RabbitTemplate rabbitTemplate;
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedOutboxRepository feedOutboxRepository;
@@ -44,6 +48,8 @@ public class FeedFanoutDispatcherConsumer {
     private final IRelationRepository relationRepository;
     private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
     private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine;
+    private final ReliableMqConsumerRecordService consumerRecordService;
+    private final ObjectMapper objectMapper;
 
     /**
      * fanout 切片大小，默认 200（复用现有配置键）。
@@ -64,13 +70,22 @@ public class FeedFanoutDispatcherConsumer {
      *
      * @param event 发布事件
      */
-    @RabbitListener(queues = FeedFanoutConfig.QUEUE)
+    @RabbitListener(queues = FeedFanoutConfig.QUEUE, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(PostPublishedEvent event) {
+        if (event == null || event.getPostId() == null || event.getAuthorId() == null
+                || event.getPublishTimeMs() == null || event.getEventId() == null || event.getEventId().isBlank()) {
+            throw new AmqpRejectAndDontRequeueException("feed fanout dispatch payload invalid");
+        }
+        if (!consumerRecordService.start(event.getEventId(), CONSUMER_NAME, toJson(event))) {
+            return;
+        }
         try {
             dispatch(event);
+            consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
         } catch (Exception e) {
-            Long postId = event == null ? null : event.getPostId();
-            Long authorId = event == null ? null : event.getAuthorId();
+            consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, e.getMessage());
+            Long postId = event.getPostId();
+            Long authorId = event.getAuthorId();
             log.error("MQ feed fanout dispatch failed, postId={}, authorId={}", postId, authorId, e);
             throw new AmqpRejectAndDontRequeueException("feed fanout dispatch failed", e);
         }
@@ -117,7 +132,8 @@ public class FeedFanoutDispatcherConsumer {
         int slices = (followerCount + pageSize - 1) / pageSize;
         for (int i = 0; i < slices; i++) {
             int offset = i * pageSize;
-            FeedFanoutTask task = new FeedFanoutTask(postId, authorId, publishTimeMs, offset, pageSize);
+            String taskEventId = (event.getEventId() == null ? "feed-fanout" : event.getEventId()) + ":" + offset + ":" + pageSize;
+            FeedFanoutTask task = new FeedFanoutTask(taskEventId, postId, authorId, publishTimeMs, offset, pageSize);
             rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, FeedFanoutConfig.TASK_ROUTING_KEY, task);
         }
         log.info("feed fanout dispatched, postId={}, authorId={}, totalFollowers={}, slices={}, pageSize={}",
@@ -131,4 +147,13 @@ public class FeedFanoutDispatcherConsumer {
         return followerCount >= bigvFollowerThreshold;
     }
 
+    private String toJson(PostPublishedEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
 }
+

@@ -34,7 +34,7 @@ public class InteractionNotifyConsumer {
     private final ICommentRepository commentRepository;
     private final ObjectMapper objectMapper;
 
-    @RabbitListener(queues = InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY)
+    @RabbitListener(queues = InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(InteractionNotifyEvent event) {
         if (event == null || event.getEventId() == null || event.getEventId().isBlank()) {
             return;

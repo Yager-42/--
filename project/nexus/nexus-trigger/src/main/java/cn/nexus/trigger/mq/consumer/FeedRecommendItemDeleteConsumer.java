@@ -1,10 +1,13 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.social.adapter.port.IRecommendationPort;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
 import cn.nexus.trigger.mq.config.FeedRecommendItemMqConfig;
 import cn.nexus.types.event.PostDeletedEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
@@ -21,19 +24,36 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class FeedRecommendItemDeleteConsumer {
 
-    private final IRecommendationPort recommendationPort;
+    private static final String CONSUMER_NAME = "FeedRecommendItemDeleteConsumer";
 
-    @RabbitListener(queues = FeedRecommendItemMqConfig.Q_FEED_RECOMMEND_ITEM_DELETE)
+    private final IRecommendationPort recommendationPort;
+    private final ReliableMqConsumerRecordService consumerRecordService;
+    private final ObjectMapper objectMapper;
+
+    @RabbitListener(queues = FeedRecommendItemMqConfig.Q_FEED_RECOMMEND_ITEM_DELETE, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(PostDeletedEvent event) {
-        if (event == null || event.getPostId() == null) {
+        if (event == null || event.getPostId() == null || event.getEventId() == null || event.getEventId().isBlank()) {
+            throw new AmqpRejectAndDontRequeueException("recommend item delete payload invalid");
+        }
+        if (!consumerRecordService.start(event.getEventId(), CONSUMER_NAME, toJson(event))) {
             return;
         }
         try {
             recommendationPort.deleteItem(event.getPostId());
+            consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
         } catch (Exception e) {
-            log.warn("recommend item delete failed, eventId={}, postId={}, operatorId={}",
+            consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, e.getMessage());
+            log.error("recommend item delete failed, eventId={}, postId={}, operatorId={}",
                     event.getEventId(), event.getPostId(), event.getOperatorId(), e);
+            throw new AmqpRejectAndDontRequeueException("recommend item delete failed", e);
+        }
+    }
+
+    private String toJson(PostDeletedEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            return "{}";
         }
     }
 }
-

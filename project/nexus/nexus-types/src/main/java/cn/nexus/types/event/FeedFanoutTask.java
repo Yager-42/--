@@ -20,7 +20,8 @@ import java.io.Serializable;
  * @author codex
  * @since 2026-01-14
  */
-public record FeedFanoutTask(Long postId,
+public record FeedFanoutTask(String eventId,
+                             Long postId,
                              Long authorId,
                              Long publishTimeMs,
                              Integer offset,

@@ -2,7 +2,14 @@ package cn.nexus.infrastructure.adapter.social.repository;
 
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -13,6 +20,7 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 @RequiredArgsConstructor
+@Slf4j
 public class FeedFollowSeenRepository implements IFeedFollowSeenRepository {
 
     private static final String KEY_PREFIX = "feed:follow:seen:";
@@ -35,6 +43,50 @@ public class FeedFollowSeenRepository implements IFeedFollowSeenRepository {
         }
         Boolean member = stringRedisTemplate.opsForSet().isMember(key(userId), postId.toString());
         return Boolean.TRUE.equals(member);
+    }
+
+    @Override
+    public Set<Long> batchSeen(Long userId, List<Long> postIds) {
+        if (userId == null || postIds == null || postIds.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> normalized = new ArrayList<>();
+        LinkedHashSet<Long> dedup = new LinkedHashSet<>();
+        for (Long postId : postIds) {
+            if (postId != null && dedup.add(postId)) {
+                normalized.add(postId);
+            }
+        }
+        if (normalized.isEmpty()) {
+            return Set.of();
+        }
+        String redisKey = key(userId);
+        List<Object> raw;
+        try {
+            raw = stringRedisTemplate.executePipelined(new SessionCallback<Object>() {
+                @Override
+                public Object execute(RedisOperations operations) {
+                    for (Long postId : normalized) {
+                        operations.opsForSet().isMember(redisKey, postId.toString());
+                    }
+                    return null;
+                }
+            });
+        } catch (Exception e) {
+            log.warn("feed follow seen batch query failed, userId={}", userId, e);
+            return Set.of();
+        }
+        if (raw == null || raw.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> seen = new LinkedHashSet<>();
+        int size = Math.min(normalized.size(), raw.size());
+        for (int i = 0; i < size; i++) {
+            if (Boolean.TRUE.equals(raw.get(i))) {
+                seen.add(normalized.get(i));
+            }
+        }
+        return seen;
     }
 
     @Override

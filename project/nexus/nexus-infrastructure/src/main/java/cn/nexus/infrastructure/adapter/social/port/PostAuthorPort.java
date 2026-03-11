@@ -2,6 +2,7 @@ package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
+import cn.nexus.infrastructure.support.SingleFlight;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -22,6 +23,8 @@ public class PostAuthorPort implements IPostAuthorPort {
     private final StringRedisTemplate stringRedisTemplate;
     private final IContentPostDao contentPostDao;
 
+    private final SingleFlight singleFlight = new SingleFlight();
+
     @Override
     public Long getPostAuthorId(Long postId) {
         if (postId == null) {
@@ -33,9 +36,8 @@ public class PostAuthorPort implements IPostAuthorPort {
             return cacheLookup.userId();
         }
 
-        LoadAuthorResult result = loadAuthor(postId);
-        writeBack(key, result);
-        return result.userId();
+        LoadAuthorResult result = singleFlight.execute(String.valueOf(postId), () -> loadAuthorWithSecondRead(postId, key));
+        return result == null ? null : result.userId();
     }
 
     private CacheLookup readCache(String key) {
@@ -59,6 +61,18 @@ public class PostAuthorPort implements IPostAuthorPort {
             // ignore
             return CacheLookup.miss();
         }
+    }
+
+    private LoadAuthorResult loadAuthorWithSecondRead(Long postId, String key) {
+        CacheLookup cacheLookup = readCache(key);
+        if (cacheLookup.hit()) {
+            return cacheLookup.userId() == null
+                    ? new LoadAuthorResult(LoadStatus.NOT_FOUND, null)
+                    : new LoadAuthorResult(LoadStatus.FOUND, cacheLookup.userId());
+        }
+        LoadAuthorResult result = loadAuthor(postId);
+        writeBack(key, result);
+        return result;
     }
 
     private LoadAuthorResult loadAuthor(Long postId) {

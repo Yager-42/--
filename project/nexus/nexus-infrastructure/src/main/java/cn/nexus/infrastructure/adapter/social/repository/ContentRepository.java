@@ -70,8 +70,12 @@ public class ContentRepository implements IContentRepository {
 
     private static final String POST_REDIS_KEY_PREFIX = "interact:content:post:";
     private static final String POST_REDIS_NULL_VALUE = "NULL";
+    // 方案契约：正文缓存 60s 基础 TTL + 0~15s 抖动，避免实现者自行放大范围。
     private static final long POST_REDIS_TTL_SECONDS = 60;
+    private static final long POST_REDIS_TTL_JITTER_SECONDS = 15;
+    // 方案契约：空值缓存 30s 基础 TTL + 0~10s 抖动，只用于防穿透，不得长期停留。
     private static final long POST_REDIS_NULL_TTL_SECONDS = 30;
+    private static final long POST_REDIS_NULL_TTL_JITTER_SECONDS = 10;
 
     private final SingleFlight singleFlight = new SingleFlight();
 
@@ -560,7 +564,7 @@ public class ContentRepository implements IContentRepository {
                 continue;
             }
             try {
-                valueOps.set(postRedisKey(id), POST_REDIS_NULL_VALUE, POST_REDIS_NULL_TTL_SECONDS, TimeUnit.SECONDS);
+                valueOps.set(postRedisKey(id), POST_REDIS_NULL_VALUE, nullTtlSeconds(), TimeUnit.SECONDS);
             } catch (Exception ignored) {
                 // ignore
             }
@@ -640,7 +644,13 @@ public class ContentRepository implements IContentRepository {
     }
 
     private long positiveTtlSeconds() {
-        return POST_REDIS_TTL_SECONDS + ThreadLocalRandom.current().nextLong(0, POST_REDIS_TTL_SECONDS + 1);
+        return POST_REDIS_TTL_SECONDS
+                + ThreadLocalRandom.current().nextLong(POST_REDIS_TTL_JITTER_SECONDS + 1);
+    }
+
+    private long nullTtlSeconds() {
+        return POST_REDIS_NULL_TTL_SECONDS
+                + ThreadLocalRandom.current().nextLong(POST_REDIS_NULL_TTL_JITTER_SECONDS + 1);
     }
 
     private String normalizeInflightKey(List<Long> ids) {

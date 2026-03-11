@@ -12,8 +12,6 @@ import lombok.NoArgsConstructor;
 public class FeedCardBaseVO {
     private Long postId;
     private Long authorId;
-    private String authorNickname;
-    private String authorAvatar;
     private String text;
     private String summary;
     private Integer mediaType;

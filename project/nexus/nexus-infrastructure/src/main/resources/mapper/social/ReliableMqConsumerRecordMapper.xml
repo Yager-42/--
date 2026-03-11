@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IReliableMqConsumerRecordDao">
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.ReliableMqConsumerRecordPO">
+        INSERT IGNORE INTO reliable_mq_consumer_record(
+            event_id, consumer_name, payload_json, status, last_error, create_time, update_time
+        ) VALUES(
+            #{eventId}, #{consumerName}, #{payloadJson}, #{status}, #{lastError}, NOW(), NOW()
+        )
+    </insert>
+
+    <select id="selectOne" resultType="cn.nexus.infrastructure.dao.social.po.ReliableMqConsumerRecordPO">
+        SELECT id,
+               event_id AS eventId,
+               consumer_name AS consumerName,
+               payload_json AS payloadJson,
+               status,
+               last_error AS lastError,
+               create_time AS createTime,
+               update_time AS updateTime
+        FROM reliable_mq_consumer_record
+        WHERE event_id = #{eventId}
+          AND consumer_name = #{consumerName}
+        LIMIT 1
+    </select>
+
+    <update id="updateStatus">
+        UPDATE reliable_mq_consumer_record
+        SET status = #{status},
+            last_error = #{lastError},
+            update_time = NOW()
+        WHERE event_id = #{eventId}
+          AND consumer_name = #{consumerName}
+    </update>
+</mapper>

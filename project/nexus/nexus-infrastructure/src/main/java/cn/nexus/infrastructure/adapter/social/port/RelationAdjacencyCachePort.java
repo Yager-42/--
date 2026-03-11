@@ -115,13 +115,13 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
             if (raw == null || raw.isBlank()) {
                 return null;
             }
-            String[] parts = raw.split(":", 2);
+            String[] parts = raw.trim().split(":", 2);
             if (parts.length != 2) {
                 return null;
             }
             try {
                 return new Cursor(Long.parseLong(parts[0]), Long.parseLong(parts[1]));
-            } catch (Exception ignored) {
+            } catch (NumberFormatException ignored) {
                 return null;
             }
         }

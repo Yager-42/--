@@ -32,7 +32,10 @@ public class ContentScheduleDelayConfig {
 
     @Bean
     public Queue delayQueue() {
-        return new Queue(QUEUE, true);
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
+        args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY);
+        return new Queue(QUEUE, true, false, false, args);
     }
 
     @Bean

@@ -4,11 +4,11 @@ import cn.nexus.domain.social.adapter.port.IContentCacheEvictPort;
 import cn.nexus.infrastructure.adapter.social.repository.ContentRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardStatRepository;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.trigger.http.social.support.ContentDetailQueryService;
 import cn.nexus.trigger.mq.config.ContentCacheEvictConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -34,7 +34,7 @@ public class ContentCacheEvictPort implements IContentCacheEvictPort {
         return t;
     });
 
-    private final RabbitTemplate rabbitTemplate;
+    private final ReliableMqOutboxService reliableMqOutboxService;
     private final StringRedisTemplate stringRedisTemplate;
     private final ContentRepository contentRepository;
     private final ContentDetailQueryService contentDetailQueryService;
@@ -70,11 +70,8 @@ public class ContentCacheEvictPort implements IContentCacheEvictPort {
         scheduleDelayDelete(postId);
 
         // broadcast local evict
-        try {
-            rabbitTemplate.convertAndSend(ContentCacheEvictConfig.EXCHANGE, "", new ContentCacheEvictEvent(postId));
-        } catch (Exception e) {
-            log.warn("publish cache evict event failed, postId={}", postId, e);
-        }
+        ContentCacheEvictEvent event = new ContentCacheEvictEvent(postId);
+        reliableMqOutboxService.save(event.getEventId(), ContentCacheEvictConfig.EXCHANGE, "", event);
     }
 
     private void deleteRedis(Long postId) {

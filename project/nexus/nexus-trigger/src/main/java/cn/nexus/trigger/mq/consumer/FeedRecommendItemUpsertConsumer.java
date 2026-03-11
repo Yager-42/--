@@ -3,8 +3,10 @@ package cn.nexus.trigger.mq.consumer;
 import cn.nexus.domain.social.adapter.port.IRecommendationPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
 import cn.nexus.trigger.mq.config.FeedRecommendItemMqConfig;
 import cn.nexus.types.event.PostPublishedEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
@@ -27,21 +29,33 @@ import java.util.List;
 @RequiredArgsConstructor
 public class FeedRecommendItemUpsertConsumer {
 
+    private static final String CONSUMER_NAME = "FeedRecommendItemUpsertConsumer";
+
     private final IContentRepository contentRepository;
     private final IRecommendationPort recommendationPort;
+    private final ReliableMqConsumerRecordService consumerRecordService;
+    private final ObjectMapper objectMapper;
 
     /**
      * 消费发布事件，回表读取 labels（postTypes）并写入推荐系统。
      *
      * @param event 发布事件 {@link PostPublishedEvent}
      */
-    @RabbitListener(queues = FeedRecommendItemMqConfig.Q_FEED_RECOMMEND_ITEM_UPSERT)
+    @RabbitListener(queues = FeedRecommendItemMqConfig.Q_FEED_RECOMMEND_ITEM_UPSERT, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(PostPublishedEvent event) {
+        if (event == null || event.getEventId() == null || event.getEventId().isBlank()) {
+            throw new AmqpRejectAndDontRequeueException("recommend item upsert eventId missing");
+        }
+        if (!consumerRecordService.start(event.getEventId(), CONSUMER_NAME, toJson(event))) {
+            return;
+        }
         try {
             handle(event);
+            consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
         } catch (Exception e) {
-            Long postId = event == null ? null : event.getPostId();
-            Long authorId = event == null ? null : event.getAuthorId();
+            consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, e.getMessage());
+            Long postId = event.getPostId();
+            Long authorId = event.getAuthorId();
             log.error("MQ recommend item upsert failed, postId={}, authorId={}", postId, authorId, e);
             throw new AmqpRejectAndDontRequeueException("recommend item upsert failed", e);
         }
@@ -80,5 +94,12 @@ public class FeedRecommendItemUpsertConsumer {
         }
         return result;
     }
-}
 
+    private String toJson(PostPublishedEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+}

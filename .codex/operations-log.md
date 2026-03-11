@@ -380,3 +380,62 @@
 
 - 修复：`SearchIndexBackfillRunner.loadNicknames` 回灌索引时优先读取 `user_base.nickname`；若为空则回退 `username`，避免把展示昵称写成 handle
 - 本地验证：全量 `mvn test`，BUILD SUCCESS
+
+## 2026-03-11 Codex 缓存方案消歧审计
+- 审计对象：`缓存/nexus-redis-统一实施与审计合并方案-2026-03-09.md`
+- 结论 1：`B4/B5` 明确收口为“候选池，不是直接实现契约”，禁止实现模型直接编码。
+- 结论 2：实施顺序显式排除 `B4/B5`，要求先补独立子文档。
+- 结论 3：`followers` keyset 路径增加硬门槛：若未确认目标侧复合索引 `target_id + relation_type + status + create_time + source_id`，按硬阻塞处理。
+- 执行者：Codex
+
+## 2026-03-11 Codex ContentRepository 第 4 步收口
+- 文件：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ContentRepository.java`
+- 修正正缓存 TTL 抖动：从 `60~120s` 收口为方案要求的 `60~75s`
+- 修正空值缓存 TTL：从固定 `30s` 收口为方案要求的 `30~40s`
+- 复核 `listPostsByIds`：保留输入顺序与重复 id；`NULL` 不回源；坏 key 删除后回源；single-flight leader 内二次查 Redis 仍保留
+
+## 2026-03-11 Codex ContentDetailQueryService 第 5 步收口
+- 文件：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/support/ContentDetailQueryService.java`
+- 收口详情稳定快照 TTL：显式固定为 `24h + 0~1h`
+- 修正坏 key 语义：Redis 命中空串/空白值时，先删坏 key 再按 miss 处理
+- 保留固定流程：L1 -> L2 -> NULL -> single-flight -> leader 内二次查 Redis -> 回源构建稳定快照 -> 返回前补作者资料与点赞数
+- 保留固定降级：作者资料失败返回空串、点赞数失败返回 `0`、正文 KV 失败返回空串
+
+## 2026-03-11 Codex CommentRepository 第 6 步收口
+- 文件：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/CommentRepository.java`
+- 修正 `listByIds` 负缓存语义：Redis 命中 `NULL` 后标记为已解析，禁止继续回表
+- 修正 `pageReplyCommentIds` preview 边界：只允许 `viewerId == null` 的公共首屏小页进入共享 preview cache
+- 修正 `addReplyCount` 失效矩阵：除删除 `comment:view:{rootId}` 外，必须同步删除 `comment:reply:preview:{rootId}:{1..10}`
+
+## 2026-03-11 Codex ReactionCachePort 第 7 步审计
+- 文件：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionCachePort.java`
+- 结论：当前 `getCount` 已符合方案，无需编码改动
+- 已确认：热点先查 L1，miss 后走 single-flight，leader 先查 `cntKey`，Redis miss 才回表 `interaction_reaction_count`
+- 已确认：`cntKey` 不设 TTL，`applyAtomic` 成功后只做 `countCache.invalidate(hotkey)`，不删 `cntKey`
+- 已确认：`getCount` 未使用 bitmap / set / ops 日志临时拼 count
+
+## 2026-03-11 Codex PostAuthorPort 第 8 步收口
+- 文件：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/PostAuthorPort.java`
+- 补齐 `single-flight`，避免高并发 miss 一起回表 `contentPostDao.selectUserId`
+- 补齐 leader 锁内二次查 Redis，避免并发窗口重复回源
+- 保持边界不变：只缓存 `authorId`，不缓存昵称、头像；正常值 TTL 仍为 `1d + 0~1h`，空值 TTL 仍为 `30~40s`
+
+## 2026-03-11 Codex FeedCard 第 9 步收口
+- 文件：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedCardAssembleService.java`
+- 文件：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedFollowSeenRepository.java`
+- 文件：`project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedFollowSeenRepository.java`
+- 修正 `seen` 装配：从逐条 `isSeen` 改为批量 `batchSeen`，仍然放在装配末尾，不进入共享卡片缓存
+- 保持共享缓存边界：`FeedCardRepository.copyStable` 继续清空 `authorNickname/authorAvatar`，作者展示资料仍由 `IUserBaseRepository` 覆盖补齐
+
+## 2026-03-11 Codex 编码后 Code Review
+- 审查结论：本轮缓存方案编码步骤已完成，进入审查阶段
+- 关键问题：`FeedCardBaseVO` 仍保留 `authorNickname/authorAvatar`，而 `FeedCardRepository.copyStable(...)` 又在稳定快照落缓存前强制清空，属于“数据结构脏、靠下游补丁兜底”
+- 次级问题：`ContentDetailQueryService` 注释出现乱码，影响 TTL/NULL/坏 key 规则的可读性与审计性
+- 风险提示：`IFeedFollowSeenRepository.batchSeen(...)` 当前是 best-effort 降级语义，建议在接口注释显式写死，避免后续被改成异常传播
+- 审查报告：`.codex/review-report.md`
+
+## 2026-03-11 Codex 审查后小修闭环
+- 删除 `FeedCardBaseVO` 的 `authorNickname/authorAvatar`，把共享缓存稳定卡片的数据结构彻底收口
+- 删除 `FeedCardRepository.copyStable(...)` 中对应的强制清空补丁逻辑
+- 修复 `ContentDetailQueryService` 顶部乱码注释，重新写明 TTL 与坏 key 规则
+- 为 `IFeedFollowSeenRepository.batchSeen(...)` 写死“失败按未读处理”契约，并在 `FeedFollowSeenRepository` 中实现异常告警 + 空集合降级

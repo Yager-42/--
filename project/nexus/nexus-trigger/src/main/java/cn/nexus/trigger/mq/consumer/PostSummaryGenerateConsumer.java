@@ -3,8 +3,10 @@ package cn.nexus.trigger.mq.consumer;
 import cn.nexus.domain.social.adapter.port.IPostSummaryPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
 import cn.nexus.trigger.mq.config.PostSummaryMqConfig;
 import cn.nexus.types.event.PostSummaryGenerateEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
@@ -19,20 +21,27 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class PostSummaryGenerateConsumer {
 
+    private static final String CONSUMER_NAME = "PostSummaryGenerateConsumer";
     private static final int SUMMARY_STATUS_DONE = 1;
     private static final int SUMMARY_STATUS_FAILED = 2;
 
     private final IContentRepository contentRepository;
     private final IPostSummaryPort postSummaryPort;
+    private final ReliableMqConsumerRecordService consumerRecordService;
+    private final ObjectMapper objectMapper;
 
-    @RabbitListener(queues = PostSummaryMqConfig.Q_POST_SUMMARY_GENERATE)
+    @RabbitListener(queues = PostSummaryMqConfig.Q_POST_SUMMARY_GENERATE, containerFactory = "reliableMqListenerContainerFactory")
     public void onPostSummaryGenerate(PostSummaryGenerateEvent event) {
-        if (event == null || event.getPostId() == null) {
+        if (event == null || event.getPostId() == null || event.getEventId() == null || event.getEventId().isBlank()) {
             throw new AmqpRejectAndDontRequeueException("post.summary.generate missing postId");
+        }
+        if (!consumerRecordService.start(event.getEventId(), CONSUMER_NAME, toJson(event))) {
+            return;
         }
         Long postId = event.getPostId();
         ContentPostEntity post = contentRepository.findPost(postId);
         if (post == null) {
+            consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
             log.info("event=content.summary.skip postId={} reason=POST_NOT_FOUND", postId);
             return;
         }
@@ -41,6 +50,7 @@ public class PostSummaryGenerateConsumer {
         String existed = post.getSummary();
         if (status != null && status == SUMMARY_STATUS_DONE && existed != null && !existed.isBlank()) {
             // 幂等：已经有摘要就直接跳过，避免重复调用模型。
+            consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
             log.info("event=content.summary.skip postId={} reason=ALREADY_DONE", postId);
             return;
         }
@@ -50,18 +60,28 @@ public class PostSummaryGenerateConsumer {
             summary = postSummaryPort.summarize(post.getContentText(), post.getMediaInfo());
         } catch (Exception e) {
             contentRepository.updatePostSummary(postId, null, SUMMARY_STATUS_FAILED);
+            consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, e.getMessage());
             log.warn("event=content.summary.failed postId={} reason=PORT_EXCEPTION", postId, e);
-            return;
+            throw new AmqpRejectAndDontRequeueException("post summary port failed", e);
         }
 
         if (summary == null || summary.isBlank()) {
             contentRepository.updatePostSummary(postId, null, SUMMARY_STATUS_FAILED);
-            log.info("event=content.summary.failed postId={} reason=EMPTY_SUMMARY", postId);
-            return;
+            consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, "EMPTY_SUMMARY");
+            throw new AmqpRejectAndDontRequeueException("post summary empty");
         }
 
         boolean ok = contentRepository.updatePostSummary(postId, summary, SUMMARY_STATUS_DONE);
+        consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
         log.info("event=content.summary.done postId={} ok={}", postId, ok);
+    }
+
+    private String toJson(PostSummaryGenerateEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            return "{}";
+        }
     }
 }
 

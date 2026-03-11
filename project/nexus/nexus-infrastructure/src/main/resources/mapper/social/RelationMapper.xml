@@ -111,6 +111,11 @@
         LIMIT #{limit}
     </select>
 
+    <!--
+        followers 用户分页主路径：固定使用 keyset，不允许回退成 offset 深分页。
+        上线前必须确认目标侧存在覆盖 target_id + relation_type + status + create_time + source_id 的复合索引，
+        否则这里只能视为功能正确、但未满足性能上线前提。
+    -->
     <select id="pageActiveByTarget" resultMap="RelationMap">
         SELECT id, source_id, target_id, relation_type, status, group_id, create_time
         FROM user_relation

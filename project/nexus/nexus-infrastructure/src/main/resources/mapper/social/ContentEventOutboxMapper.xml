@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IContentEventOutboxDao">
+
+    <insert id="insertIgnore" parameterType="cn.nexus.infrastructure.dao.social.po.ContentEventOutboxPO">
+        INSERT INTO content_event_outbox(event_id, event_type, payload_json, status, retry_count, next_retry_time, create_time, update_time)
+        VALUES(#{eventId}, #{eventType}, #{payloadJson}, #{status}, #{retryCount}, #{nextRetryTime}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE event_id = event_id
+    </insert>
+
+    <select id="selectByStatus" resultType="cn.nexus.infrastructure.dao.social.po.ContentEventOutboxPO">
+        SELECT event_id AS eventId,
+               event_type AS eventType,
+               payload_json AS payloadJson,
+               status,
+               retry_count AS retryCount,
+               next_retry_time AS nextRetryTime,
+               create_time AS createTime,
+               update_time AS updateTime
+        FROM content_event_outbox
+        WHERE status = #{status}
+          AND (next_retry_time IS NULL OR next_retry_time &lt;= #{now})
+        ORDER BY update_time ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markSent">
+        UPDATE content_event_outbox
+        SET status = 'SENT',
+            update_time = NOW()
+        WHERE event_id = #{eventId}
+    </update>
+
+    <update id="markFail">
+        UPDATE content_event_outbox
+        SET status = 'FAIL',
+            retry_count = retry_count + 1,
+            next_retry_time = #{nextRetryTime},
+            update_time = NOW()
+        WHERE event_id = #{eventId}
+    </update>
+
+    <delete id="deleteOlderThan">
+        DELETE FROM content_event_outbox
+        WHERE status = #{status}
+          AND update_time &lt; #{before}
+    </delete>
+
+</mapper>
+

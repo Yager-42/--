@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.kv.ICommentContentDao">
+
+    <resultMap id="CommentContentMap" type="cn.nexus.infrastructure.dao.kv.po.CommentContentPO">
+        <id property="postId" column="post_id"/>
+        <id property="yearMonth" column="year_month"/>
+        <id property="contentId" column="content_id"/>
+        <result property="content" column="content"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <insert id="batchUpsert">
+        INSERT INTO comment_content(post_id, year_month, content_id, content)
+        VALUES
+        <foreach collection="comments" item="c" separator=",">
+            (#{c.postId}, #{c.yearMonth}, #{c.contentId}, #{c.content})
+        </foreach>
+        ON DUPLICATE KEY UPDATE content = VALUES(content), update_time = NOW()
+    </insert>
+
+    <select id="batchSelect" resultMap="CommentContentMap">
+        SELECT post_id, year_month, content_id, content, create_time, update_time
+        FROM comment_content
+        WHERE post_id = #{postId}
+        AND (year_month, content_id) IN
+        <foreach collection="keys" item="k" open="(" separator="," close=")">
+            (#{k.yearMonth}, #{k.contentId})
+        </foreach>
+    </select>
+
+    <delete id="delete">
+        DELETE FROM comment_content
+        WHERE post_id = #{postId}
+          AND year_month = #{yearMonth}
+          AND content_id = #{contentId}
+    </delete>
+
+</mapper>

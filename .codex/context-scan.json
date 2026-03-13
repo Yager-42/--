@@ -1,25 +1,39 @@
 {
-  "workspace": "c:/Users/Administrator/Desktop/文档",
-  "modules": [
-    "nexus-api",
-    "nexus-domain",
-    "nexus-infrastructure",
-    "nexus-trigger",
-    "nexus-app",
-    "nexus-types"
-  ],
-  "existingDomains": [
-    "system"
-  ],
-  "specs": [
-    ".codex/DDD-ARCHITECTURE-SPECIFICATION.md",
-    "社交领域.md",
-    "社交接口.md",
-    "社交领域数据库.md"
-  ],
+  "date": "2026-02-02",
+  "executor": "Codex (Linus-mode)",
+  "cwd": "C:\\\\Users\\\\Administrator\\\\Desktop\\\\文档",
+  "repo": {
+    "type": "git",
+    "language": "Java",
+    "build": "Maven (multi-module)",
+    "javaVersion": 17,
+    "modules": [
+      "project/nexus/nexus-api",
+      "project/nexus/nexus-app",
+      "project/nexus/nexus-domain",
+      "project/nexus/nexus-infrastructure",
+      "project/nexus/nexus-trigger",
+      "project/nexus/nexus-types"
+    ]
+  },
+  "focus": {
+    "feature": "user domain implementation plan vs current code: cross-domain contract conflicts (user_base/nickname, user.nickname_changed, privacy settings, userId source)",
+    "docSource": ".codex/user-domain-implementation.md"
+  },
   "observations": [
-    "当前仅有 system 领域实现，社交领域尚未落地。",
-    "统一使用 Response<T>、ResponseCode，Lombok 开启。",
-    "分层结构符合 DDD/六边形，trigger 实现 api，domain 依赖 types，infrastructure 适配 port。"
+    "RiskService 已实现统一决策入口 decision(RiskEvent)->RiskDecision，并且旧接口 textScan/imageScan 也走统一链路以保证每次判断落 risk_decision_log。",
+    "风控闭环数据表与仓储已落地：risk_decision_log / risk_case / risk_rule_version / risk_punishment / risk_feedback，并接入 MyBatis DAO/Mapper。",
+    "异步链路已实现：REVIEW 会创建 risk_case 并 afterCommit 投递 MQ；risk-worker 消费 LLM/图片扫描回写 decision_log 并推进内容/评论的隔离状态到最终态。",
+    "risk-admin 后台接口已实现：规则版本管理、工单分配/结论、处罚 apply/revoke/query、决策日志查询、申诉处理；用户侧新增 /api/v1/risk/appeals 入口。",
+    "DashScope Spring AI Alibaba 适配已对齐 1.1 API（AssistantMessage.getText + DashScopeChatOptions setter），mvn test 通过。",
+    "搜索域已有 HTTP 契约与占位实现：SearchController(/api/v1/search/*) + ISearchApi + ISearchService/SearchService（当前返回 demo 数据）。",
+    "内容发布/删除事件已复用 RabbitMQ：ContentDispatchPort 投递到 exchange=social.feed，routingKey=post.published / post.deleted（after-commit 触发）。",
+    "FeedFanoutConfig 已提供 social.feed 交换机声明与 Jackson JSON MessageConverter；搜索索引链路应复用该 converter，避免重复声明。",
+    "用户域在本项目中没有独立实现（无 cn.nexus.domain.user）；目前只落了 user_base/user_privacy_setting 等读侧/策略表，并通过 X-User-Id 注入 userId（由网关提供真值）。",
+    "user_base 当前缺少 nickname 字段：多处实现把 nickname= username（UserBriefVO/UserBaseRepository/SearchIndexConsumer），与用户域方案要求“username(不可变) 与 nickname(可变) 分离”冲突。",
+    "Search 侧已声明 user.nickname_changed 队列/绑定并实现消费（SearchIndexMqConfig/SearchIndexConsumer），但当前代码中缺少 producer 发布该事件（没有 RabbitTemplate.convertAndSend(exchange=social.feed, rk=user.nickname_changed)）。",
+    "user_base 与 user_privacy_setting 的 DAO 当前只有 select（没有 insert/update）：评论/搜索/关系等跨域读路径依赖上游数据写入，但当前实现缺少正式写入口（用户域方案建议补齐网关 upsert 与用户自助更新 API）。",
+    "面向客户端的 Controller 基本遵循 UserContext.requireUserId()，但少数历史接口仍保留 userId 参数（ignored），需要在文档里明确“客户端传 userId 不作为真值”。"
   ]
 }
+

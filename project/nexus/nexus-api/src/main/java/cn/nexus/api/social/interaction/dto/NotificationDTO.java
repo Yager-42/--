@@ -16,4 +16,15 @@ public class NotificationDTO {
     private String title;
     private String content;
     private Long createTime;
+
+    /** 用于标记已读与稳定分页 */
+    private Long notificationId;
+    private String bizType;
+    private String targetType;
+    private Long targetId;
+    private Long postId;
+    private Long rootCommentId;
+    private Long lastCommentId;
+    private Long lastActorUserId;
+    private Long unreadCount;
 }

@@ -1,14 +1,9 @@
 package cn.nexus.domain.social.adapter.repository;
 
-import cn.nexus.domain.social.model.entity.FriendRequestEntity;
 import cn.nexus.domain.social.model.entity.RelationEntity;
-import cn.nexus.domain.social.model.entity.RelationGroupEntity;
-
+import java.util.Date;
 import java.util.List;
 
-/**
- * 关系仓储接口，抽象底层存储。
- */
 public interface IRelationRepository {
 
     RelationEntity saveRelation(RelationEntity relation);
@@ -25,37 +20,32 @@ public interface IRelationRepository {
 
     int countRelationsBySource(Long sourceId, Integer relationType);
 
-    void saveFollower(Long id, Long userId, Long followerId);
+    int countActiveRelationsBySource(Long sourceId, Integer relationType);
+
+    int countActiveRelationsByTarget(Long targetId, Integer relationType);
+
+    void saveFollower(Long id, Long userId, Long followerId, Date createTime);
 
     void deleteFollower(Long userId, Long followerId);
 
-    FriendRequestEntity saveFriendRequest(FriendRequestEntity request);
+    /**
+     * 仅供 Feed fanout 批处理使用的粉丝 ID 扫描接口。
+     *
+     * <p>这里保留 offset 语义是为了内部切片写扩散，不能拿去实现用户可见的 followers 分页。</p>
+     */
+    List<Long> pageFollowerIdsForFanout(Long userId, Integer offset, Integer limit);
 
-    FriendRequestEntity findFriendRequest(Long requestId);
+    int countFollowerIds(Long userId);
 
-    java.util.List<FriendRequestEntity> listFriendRequests(java.util.List<Long> requestIds);
+    List<Long> listBigVFollowingIds(Long userId, int followerThreshold, int limit);
 
-    FriendRequestEntity findPendingFriendRequest(Long sourceId, Long targetId);
+    List<RelationEntity> pageActiveFollowsBySource(Long sourceId, Date cursorTime, Long cursorTargetId, int limit);
 
-    boolean updateFriendRequestStatus(Long requestId, Integer status);
+    List<RelationEntity> pageActiveFollowsByTarget(Long targetId, Date cursorTime, Long cursorSourceId, int limit);
 
-    int updateFriendRequestsStatus(java.util.List<Long> requestIds, Integer status);
+    List<Long> batchFindActiveFollowTargets(Long sourceId, List<Long> targetIds);
 
-    void deleteFriendRequestsBetween(Long sourceId, Long targetId);
+    List<Long> batchFindBlockTargetsBySource(Long sourceId, List<Long> targetIds);
 
-    RelationGroupEntity createGroup(RelationGroupEntity group);
-
-    RelationGroupEntity updateGroup(RelationGroupEntity group);
-
-    RelationGroupEntity deleteGroup(Long userId, Long groupId);
-
-    List<RelationGroupEntity> listGroups(Long userId);
-
-    void replaceGroupMembers(Long groupId, java.util.List<Long> memberIds);
-
-    java.util.List<Long> listGroupMembers(Long groupId);
-
-    void addGroupMembers(Long groupId, java.util.List<Long> memberIds);
-
-    void removeGroupMembers(Long groupId, java.util.List<Long> memberIds);
+    List<Long> batchFindBlockSourcesByTarget(Long targetId, List<Long> sourceIds);
 }

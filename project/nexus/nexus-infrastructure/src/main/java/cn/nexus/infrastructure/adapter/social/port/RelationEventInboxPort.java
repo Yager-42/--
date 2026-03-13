@@ -14,6 +14,10 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RelationEventInboxPort implements IRelationEventInboxPort {
 
+    private static final String STATUS_NEW = "NEW";
+    private static final String STATUS_PROCESSED = "PROCESSED";
+    private static final String STATUS_FAILED = "FAILED";
+
     private final IRelationEventInboxDao relationEventInboxDao;
 
     @Override
@@ -22,30 +26,30 @@ public class RelationEventInboxPort implements IRelationEventInboxPort {
         po.setEventType(eventType);
         po.setFingerprint(fingerprint);
         po.setPayload(payload);
-        po.setStatus("NEW");
+        po.setStatus(STATUS_NEW);
         return relationEventInboxDao.insertIgnore(po) > 0;
     }
 
     @Override
     public void markDone(String fingerprint) {
-        relationEventInboxDao.updateStatus(fingerprint, "DONE");
+        relationEventInboxDao.updateStatus(fingerprint, STATUS_PROCESSED);
     }
 
     @Override
     public void markFail(String fingerprint) {
-        relationEventInboxDao.updateStatus(fingerprint, "FAIL");
+        relationEventInboxDao.updateStatus(fingerprint, STATUS_FAILED);
     }
 
     @Override
     public java.util.List<RelationEventInboxVO> fetchRetry(int limit) {
-        return relationEventInboxDao.selectByStatus("FAIL", limit).stream()
+        return relationEventInboxDao.selectByStatus(STATUS_FAILED, limit).stream()
                 .map(this::toVO)
                 .toList();
     }
 
     @Override
     public int cleanBefore(java.util.Date beforeTime) {
-        return relationEventInboxDao.deleteOlderThan(beforeTime, "DONE");
+        return relationEventInboxDao.deleteOlderThan(beforeTime, STATUS_PROCESSED);
     }
 
     private RelationEventInboxVO toVO(RelationEventInboxPO po) {

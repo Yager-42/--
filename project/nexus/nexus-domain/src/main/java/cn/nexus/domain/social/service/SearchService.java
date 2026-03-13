@@ -1,59 +1,207 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.adapter.port.ISocialIdPort;
-import cn.nexus.domain.social.model.valobj.OperationResultVO;
+import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
+import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
+import cn.nexus.domain.social.adapter.repository.IReactionRepository;
+import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
+import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
+import cn.nexus.domain.social.model.valobj.SearchEngineQueryVO;
+import cn.nexus.domain.social.model.valobj.SearchEngineResultVO;
 import cn.nexus.domain.social.model.valobj.SearchResultVO;
 import cn.nexus.domain.social.model.valobj.SearchSuggestVO;
-import cn.nexus.domain.social.model.valobj.SearchTrendingVO;
+import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.types.exception.AppException;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
-
-/**
- * 搜索服务实现。
- */
 @Service
 @RequiredArgsConstructor
 public class SearchService implements ISearchService {
 
-    private final ISocialIdPort socialIdPort;
+    private final ISearchEnginePort searchEnginePort;
+    private final IFeedCardStatRepository feedCardStatRepository;
+    private final IReactionRepository reactionRepository;
 
     @Override
-    public SearchResultVO search(String keyword, String type, String sort, String filters) {
-        SearchResultVO.SearchItemVO item = SearchResultVO.SearchItemVO.builder()
-                .id(String.valueOf(socialIdPort.nextId()))
-                .type(type == null ? "POST" : type)
-                .title(keyword == null ? "示例" : keyword)
-                .summary("占位搜索结果")
-                .build();
+    public SearchResultVO search(Long userId, String keyword, Integer size, String tags, String after) {
+        String normalizedKeyword = normalizeRequiredText(keyword, "q 不能为空");
+        int limit = normalizeSize(size, 20);
+        List<String> tagList = parseTags(tags);
+
+        SearchEngineResultVO engine = searchEnginePort.search(SearchEngineQueryVO.builder()
+                .keyword(normalizedKeyword)
+                .limit(limit)
+                .tags(tagList)
+                .after(after)
+                .build());
+
+        List<SearchEngineResultVO.SearchHitVO> hits = engine == null || engine.getHits() == null ? List.of() : engine.getHits();
+        List<Long> contentIds = new ArrayList<>(hits.size());
+        for (SearchEngineResultVO.SearchHitVO hit : hits) {
+            SearchDocumentVO doc = hit == null ? null : hit.getSource();
+            if (doc != null && doc.getContentId() != null) {
+                contentIds.add(doc.getContentId());
+            }
+        }
+
+        Map<Long, FeedCardStatVO> statMap = loadLikeStats(contentIds);
+        Set<Long> likedSet = Set.of();
+        if (userId != null && !contentIds.isEmpty()) {
+            ReactionTargetVO template = ReactionTargetVO.builder()
+                    .targetType(ReactionTargetTypeEnumVO.POST)
+                    .targetId(0L)
+                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .build();
+            likedSet = reactionRepository.batchExists(template, userId, contentIds);
+        }
+
+        List<SearchResultVO.SearchItemVO> items = new ArrayList<>(hits.size());
+        for (SearchEngineResultVO.SearchHitVO hit : hits) {
+            SearchDocumentVO doc = hit == null ? null : hit.getSource();
+            if (doc == null || doc.getContentId() == null) {
+                continue;
+            }
+            FeedCardStatVO stat = statMap == null ? null : statMap.get(doc.getContentId());
+            Long likeCount = stat == null ? safeLong(doc.getLikeCount()) : safeLong(stat.getLikeCount());
+            items.add(SearchResultVO.SearchItemVO.builder()
+                    .id(String.valueOf(doc.getContentId()))
+                    .title(doc.getTitle())
+                    .description(resolveDescription(hit, doc))
+                    .coverImage(firstImage(doc.getImgUrls()))
+                    .tags(doc.getTags() == null ? List.of() : doc.getTags())
+                    .authorAvatar(doc.getAuthorAvatar())
+                    .authorNickname(doc.getAuthorNickname())
+                    .tagJson(null)
+                    .likeCount(likeCount)
+                    .favoriteCount(0L)
+                    .liked(userId != null && likedSet.contains(doc.getContentId()))
+                    .faved(false)
+                    .isTop(null)
+                    .build());
+        }
+
         return SearchResultVO.builder()
-                .items(List.of(item))
-                .facets("demo")
+                .items(items)
+                .nextAfter(engine == null ? null : engine.getNextAfter())
+                .hasMore(engine != null && engine.isHasMore())
                 .build();
     }
 
     @Override
-    public SearchSuggestVO suggest(String keyword) {
+    public SearchSuggestVO suggest(String prefix, Integer size) {
+        String normalizedPrefix = normalizeRequiredText(prefix, "prefix 不能为空");
+        int limit = normalizeSize(size, 10);
         return SearchSuggestVO.builder()
-                .suggestions(List.of(keyword, keyword + " 热搜"))
+                .items(searchEnginePort.suggest(normalizedPrefix, limit))
                 .build();
     }
 
-    @Override
-    public SearchTrendingVO trending(String category) {
-        return SearchTrendingVO.builder()
-                .keywords(List.of("热门1", "热门2"))
-                .build();
+    private String resolveDescription(SearchEngineResultVO.SearchHitVO hit, SearchDocumentVO doc) {
+        String titleHighlight = hit == null ? null : trimToNull(hit.getHighlightTitle());
+        String bodyHighlight = hit == null ? null : trimToNull(hit.getHighlightBody());
+        if (titleHighlight != null && bodyHighlight != null) {
+            return titleHighlight + " " + bodyHighlight;
+        }
+        if (titleHighlight != null) {
+            return titleHighlight;
+        }
+        if (bodyHighlight != null) {
+            return bodyHighlight;
+        }
+        return doc == null ? null : doc.getDescription();
     }
 
-    @Override
-    public OperationResultVO clearHistory(Long userId) {
-        return OperationResultVO.builder()
-                .success(true)
-                .id(userId)
-                .status("CLEARED")
-                .message("搜索历史已清空")
-                .build();
+    private String firstImage(List<String> imgUrls) {
+        if (imgUrls == null || imgUrls.isEmpty()) {
+            return null;
+        }
+        for (String imgUrl : imgUrls) {
+            String normalized = trimToNull(imgUrl);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return null;
+    }
+
+    private Map<Long, FeedCardStatVO> loadLikeStats(List<Long> contentIds) {
+        Map<Long, FeedCardStatVO> cached = feedCardStatRepository.getBatch(contentIds);
+        Map<Long, FeedCardStatVO> statMap = new java.util.HashMap<>(cached == null ? Map.of() : cached);
+        if (contentIds == null || contentIds.isEmpty()) {
+            return statMap;
+        }
+        List<FeedCardStatVO> toSave = new ArrayList<>();
+        for (Long contentId : contentIds) {
+            if (contentId == null || statMap.containsKey(contentId)) {
+                continue;
+            }
+            long count = reactionRepository.getCount(ReactionTargetVO.builder()
+                    .targetType(ReactionTargetTypeEnumVO.POST)
+                    .targetId(contentId)
+                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .build());
+            FeedCardStatVO stat = FeedCardStatVO.builder()
+                    .postId(contentId)
+                    .likeCount(Math.max(0L, count))
+                    .build();
+            statMap.put(contentId, stat);
+            toSave.add(stat);
+        }
+        if (!toSave.isEmpty()) {
+            feedCardStatRepository.saveBatch(toSave);
+        }
+        return statMap;
+    }
+
+    private List<String> parseTags(String tags) {
+        if (tags == null || tags.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> dedup = new LinkedHashSet<>();
+        for (String part : tags.split(",")) {
+            String normalized = trimToNull(part);
+            if (normalized != null) {
+                dedup.add(normalized);
+            }
+        }
+        return dedup.isEmpty() ? List.of() : new ArrayList<>(dedup);
+    }
+
+    private String normalizeRequiredText(String raw, String message) {
+        String normalized = trimToNull(raw);
+        if (normalized == null) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), message);
+        }
+        return normalized.replaceAll("\\s+", " ");
+    }
+
+    private int normalizeSize(Integer size, int defaultValue) {
+        if (size == null) {
+            return defaultValue;
+        }
+        if (size < 1) {
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
+        }
+        return size;
+    }
+
+    private String trimToNull(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private Long safeLong(Long value) {
+        return value == null ? 0L : Math.max(0L, value);
     }
 }

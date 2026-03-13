@@ -10,3 +10,10 @@ server:
 logging:
   level:
     root: INFO
+
+social:
+  cache:
+    hot-ttl:
+      content-post-seconds: 300
+      reaction-count-seconds: 0
+      feed-card-seconds: 7200

@@ -14,5 +14,6 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class ScheduleContentResponseDTO {
     private Long taskId;
+    private Long postId;
     private String status;
 }

@@ -1,0 +1,29 @@
+package cn.nexus.domain.social.service;
+
+/**
+ * Feed Inbox 重建服务：负责离线用户回归时的 InboxTimeline 重建。
+ *
+ * <p>该服务只负责写入 inbox 缓存，不负责组装返回 DTO。</p>
+ *
+ * @author codex
+ * @since 2026-01-13
+ */
+public interface IFeedInboxRebuildService {
+
+    /**
+     * 在需要时重建用户 InboxTimeline（只在 inbox key miss 场景触发）。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @return true=本次触发了重建；false=无需重建或参数非法
+     */
+    boolean rebuildIfNeeded(Long userId);
+
+    /**
+     * 强制重建用户 InboxTimeline（不判断 inboxExists）。
+     *
+     * <p>典型场景：取消关注/屏蔽等导致关注图发生变化，希望在线用户立刻看到新的时间线。</p>
+     *
+     * @param userId 用户 ID {@link Long}
+     */
+    void forceRebuild(Long userId);
+}

@@ -7,6 +7,8 @@ import cn.nexus.api.social.interaction.dto.*;
 import cn.nexus.domain.social.model.valobj.*;
 import cn.nexus.domain.social.service.IInteractionService;
 import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.types.exception.AppException;
+import cn.nexus.trigger.http.support.UserContext;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -28,35 +30,179 @@ public class InteractionController implements IInteractionApi {
     @PostMapping("/interact/reaction")
     @Override
     public Response<ReactionResponseDTO> react(@RequestBody ReactionRequestDTO requestDTO) {
-        ReactionResultVO vo = interactionService.react(requestDTO.getTargetId(), requestDTO.getTargetType(), requestDTO.getType(), requestDTO.getAction());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                ReactionResponseDTO.builder().currentCount(vo.getCurrentCount()).success(vo.isSuccess()).build());
+        try {
+            Long userId = UserContext.requireUserId();
+            ReactionResultVO vo = interactionService.react(
+                    userId,
+                    requestDTO.getTargetId(),
+                    requestDTO.getTargetType(),
+                    requestDTO.getType(),
+                    requestDTO.getAction(),
+                    requestDTO.getRequestId()
+            );
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
+                    ReactionResponseDTO.builder()
+                            .requestId(vo.getRequestId())
+                            .currentCount(vo.getCurrentCount())
+                            .success(vo.isSuccess())
+                            .build());
+        } catch (AppException e) {
+            return Response.<ReactionResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("reaction api failed, req={}", requestDTO, e);
+            return Response.<ReactionResponseDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
+    }
+
+    @GetMapping("/interact/reaction/state")
+    @Override
+    public Response<ReactionStateResponseDTO> reactionState(ReactionStateRequestDTO requestDTO) {
+        try {
+            Long userId = UserContext.requireUserId();
+            ReactionStateVO vo = interactionService.reactionState(
+                    userId,
+                    requestDTO.getTargetId(),
+                    requestDTO.getTargetType(),
+                    requestDTO.getType()
+            );
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
+                    ReactionStateResponseDTO.builder().state(vo.isState()).currentCount(vo.getCurrentCount()).build());
+        } catch (AppException e) {
+            return Response.<ReactionStateResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("reaction state api failed, req={}", requestDTO, e);
+            return Response.<ReactionStateResponseDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
+    }
+
+    @GetMapping("/interact/reaction/likers")
+    @Override
+    public Response<ReactionLikersResponseDTO> reactionLikers(ReactionLikersRequestDTO requestDTO) {
+        try {
+            ReactionLikersVO vo = interactionService.reactionLikers(
+                    requestDTO.getTargetId(),
+                    requestDTO.getTargetType(),
+                    requestDTO.getType(),
+                    requestDTO.getCursor(),
+                    requestDTO.getLimit()
+            );
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
+                    ReactionLikersResponseDTO.builder()
+                            .items(vo.getItems().stream().map(this::toReactionLikerDTO).collect(Collectors.toList()))
+                            .nextCursor(vo.getNextCursor())
+                            .build());
+        } catch (AppException e) {
+            return Response.<ReactionLikersResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("reaction likers api failed, req={}", requestDTO, e);
+            return Response.<ReactionLikersResponseDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
     }
 
     @PostMapping("/interact/comment")
     @Override
     public Response<CommentResponseDTO> comment(@RequestBody CommentRequestDTO requestDTO) {
-        CommentResultVO vo = interactionService.comment(requestDTO.getPostId(), requestDTO.getParentId(), requestDTO.getContent(), requestDTO.getMentions());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).build());
+        try {
+            Long userId = UserContext.requireUserId();
+            // @提及由后端统一从 content 解析 @username；不接收客户端传入的 mentions(userId 列表)。
+            CommentResultVO vo = interactionService.comment(userId, requestDTO.getPostId(), requestDTO.getParentId(), requestDTO.getContent(), requestDTO.getCommentId());
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
+                    CommentResponseDTO.builder().commentId(vo.getCommentId()).createTime(vo.getCreateTime()).status(vo.getStatus()).build());
+        } catch (AppException e) {
+            return Response.<CommentResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("comment api failed, req={}", requestDTO, e);
+            return Response.<CommentResponseDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
     }
 
     @PostMapping("/interact/comment/pin")
     @Override
     public Response<OperationResultDTO> pinComment(@RequestBody PinCommentRequestDTO requestDTO) {
-        OperationResultVO vo = interactionService.pinComment(requestDTO.getCommentId(), requestDTO.getPostId());
-        return toOperationResult(vo);
+        try {
+            Long userId = UserContext.requireUserId();
+            OperationResultVO vo = interactionService.pinComment(userId, requestDTO.getCommentId(), requestDTO.getPostId());
+            return toOperationResult(vo);
+        } catch (AppException e) {
+            return Response.<OperationResultDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("pin comment api failed, req={}", requestDTO, e);
+            return Response.<OperationResultDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
     }
 
     @GetMapping("/notification/list")
     @Override
     public Response<NotificationListResponseDTO> notifications(NotificationListRequestDTO requestDTO) {
-        NotificationListVO vo = interactionService.notifications(requestDTO.getUserId(), requestDTO.getCursor());
-        NotificationListResponseDTO dto = NotificationListResponseDTO.builder()
-                .notifications(vo.getNotifications().stream().map(this::toNotification).collect(Collectors.toList()))
-                .nextCursor(vo.getNextCursor())
-                .build();
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
+        try {
+            Long userId = UserContext.requireUserId();
+            NotificationListVO vo = interactionService.notifications(userId, requestDTO.getCursor());
+            NotificationListResponseDTO dto = NotificationListResponseDTO.builder()
+                    .notifications(vo.getNotifications().stream().map(this::toNotification).collect(Collectors.toList()))
+                    .nextCursor(vo.getNextCursor())
+                    .build();
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
+        } catch (AppException e) {
+            return Response.<NotificationListResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("notification list api failed, req={}", requestDTO, e);
+            return Response.<NotificationListResponseDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
+    }
+
+    @PostMapping("/notification/read")
+    @Override
+    public Response<OperationResultDTO> readNotification(@RequestBody NotificationReadRequestDTO requestDTO) {
+        try {
+            Long userId = UserContext.requireUserId();
+            Long notificationId = requestDTO == null ? null : requestDTO.getNotificationId();
+            OperationResultVO vo = interactionService.readNotification(userId, notificationId);
+            return toOperationResult(vo);
+        } catch (AppException e) {
+            return Response.<OperationResultDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("notification read api failed, req={}", requestDTO, e);
+            return Response.<OperationResultDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
+    }
+
+    @PostMapping("/notification/read/all")
+    @Override
+    public Response<OperationResultDTO> readAllNotifications() {
+        try {
+            Long userId = UserContext.requireUserId();
+            OperationResultVO vo = interactionService.readAllNotifications(userId);
+            return toOperationResult(vo);
+        } catch (AppException e) {
+            return Response.<OperationResultDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("notification read all api failed", e);
+            return Response.<OperationResultDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
     }
 
     @PostMapping("/wallet/tip")
@@ -100,6 +246,24 @@ public class InteractionController implements IInteractionApi {
                 .title(vo.getTitle())
                 .content(vo.getContent())
                 .createTime(vo.getCreateTime())
+                .notificationId(vo.getNotificationId())
+                .bizType(vo.getBizType())
+                .targetType(vo.getTargetType())
+                .targetId(vo.getTargetId())
+                .postId(vo.getPostId())
+                .rootCommentId(vo.getRootCommentId())
+                .lastCommentId(vo.getLastCommentId())
+                .lastActorUserId(vo.getLastActorUserId())
+                .unreadCount(vo.getUnreadCount())
+                .build();
+    }
+
+    private ReactionLikerDTO toReactionLikerDTO(ReactionLikerVO vo) {
+        return ReactionLikerDTO.builder()
+                .userId(vo.getUserId())
+                .nickname(vo.getNickname())
+                .avatar(vo.getAvatarUrl())
+                .likedAt(vo.getLikedAt())
                 .build();
     }
 

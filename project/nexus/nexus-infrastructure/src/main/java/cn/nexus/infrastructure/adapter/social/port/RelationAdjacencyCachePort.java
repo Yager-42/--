@@ -3,190 +3,127 @@ package cn.nexus.infrastructure.adapter.social.port;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
+import cn.nexus.domain.social.model.valobj.RelationUserEdgeVO;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.SetOperations;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-
 /**
- * Redis 邻接缓存（关注/粉丝集合）。
+ * 关系查询门面端口实现。
+ *
+ * <p>本实现不再维护 Redis 邻接缓存，也不再承担 rebuild 协议职责，
+ * 关系数据统一以 DB 为真相源。</p>
  */
 @Component
 @RequiredArgsConstructor
 public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
 
-    private final RedisTemplate<String, String> redisTemplate;
     private final IRelationRepository relationRepository;
 
-    private static final String KEY_FOLLOWING = "social:adj:following:"; // source -> targets
-    private static final String KEY_FOLLOWERS = "social:adj:followers:"; // target -> sources（普通用户）
-    private static final String KEY_FOLLOWER_BUCKET = "social:adj:followers:bucket:"; // target -> sources（热门分桶）
-    private static final int RELATION_FOLLOW = 1;
-    private static final int HOT_THRESHOLD = 5000;
-    private static final int HOT_BUCKETS = 4;
-
     @Override
-    public void addFollow(Long sourceId, Long targetId) {
-        if (sourceId == null || targetId == null) return;
-        SetOperations<String, String> ops = redisTemplate.opsForSet();
-        ops.add(KEY_FOLLOWING + sourceId, targetId.toString());
-        if (useBucket(targetId)) {
-            ops.add(followerBucketKey(targetId, sourceId), sourceId.toString());
-        } else {
-            ops.add(KEY_FOLLOWERS + targetId, sourceId.toString());
-        }
+    public void addFollow(Long sourceId, Long targetId, Long followTimeMs) {
+        // 关系真相源已经落在 DB，这里不再维护邻接缓存。
     }
 
     @Override
     public void removeFollow(Long sourceId, Long targetId) {
-        if (sourceId == null || targetId == null) return;
-        SetOperations<String, String> ops = redisTemplate.opsForSet();
-        ops.remove(KEY_FOLLOWING + sourceId, targetId.toString());
-        ops.remove(KEY_FOLLOWERS + targetId, sourceId.toString());
-        // 同时尝试从分桶中删除，避免热门用户遗留
-        for (int i = 0; i < HOT_BUCKETS; i++) {
-            ops.remove(followerBucketKey(targetId, i), sourceId.toString());
-        }
+        // 关系真相源已经落在 DB，这里不再维护邻接缓存。
     }
 
     @Override
     public List<Long> listFollowing(Long sourceId, int limit) {
-        if (sourceId == null) return List.of();
-        Set<String> members = redisTemplate.opsForSet().members(KEY_FOLLOWING + sourceId);
-        int dbCount = relationRepository.countRelationsBySource(sourceId, RELATION_FOLLOW);
-        if (members == null || members.size() < dbCount) {
-            rebuildFollowing(sourceId);
-            members = redisTemplate.opsForSet().members(KEY_FOLLOWING + sourceId);
-        }
-        return toLimitedList(members, limit);
+        return pageFollowing(sourceId, null, limit).stream().map(RelationUserEdgeVO::getUserId).toList();
     }
 
     @Override
     public List<Long> listFollowers(Long targetId, int limit) {
-        if (targetId == null) return List.of();
-        Set<String> aggregated = new HashSet<>();
-        Set<String> base = redisTemplate.opsForSet().members(KEY_FOLLOWERS + targetId);
-        if (base != null) {
-            aggregated.addAll(base);
-        }
-        for (int i = 0; i < HOT_BUCKETS; i++) {
-            Set<String> bucketMembers = redisTemplate.opsForSet().members(followerBucketKey(targetId, i));
-            if (bucketMembers != null) {
-                aggregated.addAll(bucketMembers);
-            }
-        }
-        int dbCount = relationRepository.countRelationsByTarget(targetId, RELATION_FOLLOW);
-        if (aggregated.size() < dbCount) {
-            rebuildFollowers(targetId);
-            aggregated.clear();
-            Set<String> base2 = redisTemplate.opsForSet().members(KEY_FOLLOWERS + targetId);
-            if (base2 != null) {
-                aggregated.addAll(base2);
-            }
-            for (int i = 0; i < HOT_BUCKETS; i++) {
-                Set<String> bucketMembers = redisTemplate.opsForSet().members(followerBucketKey(targetId, i));
-                if (bucketMembers != null) {
-                    aggregated.addAll(bucketMembers);
-                }
-            }
-        }
-        return toLimitedList(aggregated, limit);
+        return pageFollowers(targetId, null, limit).stream().map(RelationUserEdgeVO::getUserId).toList();
     }
 
     @Override
-    public void rebuildFollowing(Long sourceId) {
-        if (sourceId == null) {
-            return;
+    public List<RelationUserEdgeVO> pageFollowing(Long sourceId, String cursor, int limit) {
+        if (sourceId == null || limit <= 0) {
+            return List.of();
         }
-        evictFollowing(sourceId);
-        List<RelationEntity> relations = relationRepository.listRelationsBySource(sourceId, RELATION_FOLLOW);
-        if (relations == null || relations.isEmpty()) {
-            return;
-        }
-        relations.forEach(rel -> addFollow(rel.getSourceId(), rel.getTargetId()));
+        return pageFollowingFromDb(sourceId, cursor, limit);
     }
 
     @Override
-    public void rebuildFollowers(Long targetId) {
-        if (targetId == null) {
-            return;
+    public List<RelationUserEdgeVO> pageFollowers(Long targetId, String cursor, int limit) {
+        if (targetId == null || limit <= 0) {
+            return List.of();
         }
-        evictFollowers(targetId);
-        List<RelationEntity> relations = relationRepository.listRelationsByTarget(targetId, RELATION_FOLLOW);
-        if (relations == null || relations.isEmpty()) {
-            return;
-        }
-        SetOperations<String, String> ops = redisTemplate.opsForSet();
-        for (RelationEntity rel : relations) {
-            Long followerId = rel.getSourceId();
-            if (followerId == null) {
-                continue;
-            }
-            if (useBucket(targetId)) {
-                ops.add(followerBucketKey(targetId, followerId), followerId.toString());
-            } else {
-                ops.add(KEY_FOLLOWERS + targetId, followerId.toString());
-            }
-        }
+        return pageFollowersFromDb(targetId, cursor, limit);
     }
 
     @Override
     public void evict(Long userId) {
-        evictFollowing(userId);
-        evictFollowers(userId);
+        // 当前没有关系邻接缓存需要清理，保留该入口只为减少调用方改动。
     }
 
-    private List<Long> toLimitedList(Set<String> set, int limit) {
-        if (set == null || set.isEmpty()) return List.of();
-        List<Long> result = new ArrayList<>();
-        int count = 0;
-        for (String s : set) {
-            if (count >= limit) break;
-            try {
-                result.add(Long.parseLong(s));
-                count++;
-            } catch (NumberFormatException ignored) {
+    private List<RelationUserEdgeVO> pageFollowingFromDb(Long sourceId, String cursor, int limit) {
+        Cursor parsed = Cursor.parse(cursor);
+        Date cursorTime = parsed == null ? null : new Date(parsed.score());
+        Long cursorUserId = parsed == null ? null : parsed.userId();
+        List<RelationEntity> rows = relationRepository.pageActiveFollowsBySource(sourceId, cursorTime, cursorUserId, limit);
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<RelationUserEdgeVO> result = new ArrayList<>(rows.size());
+        for (RelationEntity row : rows) {
+            if (row == null || row.getTargetId() == null) {
+                continue;
             }
+            result.add(RelationUserEdgeVO.builder()
+                    .userId(row.getTargetId())
+                    .followTimeMs(scoreOf(row.getCreateTime()))
+                    .build());
         }
         return result;
     }
 
-    private boolean useBucket(Long targetId) {
-        try {
-            return relationRepository.countRelationsByTarget(targetId, RELATION_FOLLOW) >= HOT_THRESHOLD;
-        } catch (Exception ignored) {
-            return false;
+    private List<RelationUserEdgeVO> pageFollowersFromDb(Long targetId, String cursor, int limit) {
+        Cursor parsed = Cursor.parse(cursor);
+        Date cursorTime = parsed == null ? null : new Date(parsed.score());
+        Long cursorUserId = parsed == null ? null : parsed.userId();
+        List<RelationEntity> rows = relationRepository.pageActiveFollowsByTarget(targetId, cursorTime, cursorUserId, limit);
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
         }
-    }
-
-    private String followerBucketKey(Long targetId, Long followerId) {
-        int bucket = Math.floorMod(followerId != null ? followerId : 0L, HOT_BUCKETS);
-        return followerBucketKey(targetId, bucket);
-    }
-
-    private String followerBucketKey(Long targetId, int bucketIndex) {
-        return KEY_FOLLOWER_BUCKET + targetId + ":b" + bucketIndex;
-    }
-
-    private void evictFollowing(Long userId) {
-        if (userId == null) {
-            return;
+        List<RelationUserEdgeVO> result = new ArrayList<>(rows.size());
+        for (RelationEntity row : rows) {
+            if (row == null || row.getSourceId() == null) {
+                continue;
+            }
+            result.add(RelationUserEdgeVO.builder()
+                    .userId(row.getSourceId())
+                    .followTimeMs(scoreOf(row.getCreateTime()))
+                    .build());
         }
-        redisTemplate.delete(KEY_FOLLOWING + userId);
+        return result;
     }
 
-    private void evictFollowers(Long userId) {
-        if (userId == null) {
-            return;
-        }
-        redisTemplate.delete(KEY_FOLLOWERS + userId);
-        for (int i = 0; i < HOT_BUCKETS; i++) {
-            redisTemplate.delete(followerBucketKey(userId, i));
+    private long scoreOf(Date time) {
+        return time == null ? 0L : time.getTime();
+    }
+
+    private record Cursor(long score, long userId) {
+
+        private static Cursor parse(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            String[] parts = raw.trim().split(":", 2);
+            if (parts.length != 2) {
+                return null;
+            }
+            try {
+                return new Cursor(Long.parseLong(parts[0]), Long.parseLong(parts[1]));
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
         }
     }
 }

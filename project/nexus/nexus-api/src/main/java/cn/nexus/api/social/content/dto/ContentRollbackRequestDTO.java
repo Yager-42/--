@@ -14,5 +14,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class ContentRollbackRequestDTO {
     private Long postId;
+    /** 请求方用户，用于ACL校验 */
+    private Long userId;
     private Long targetVersionId;
 }

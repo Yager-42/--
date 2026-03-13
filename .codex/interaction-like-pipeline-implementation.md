@@ -1,0 +1,1440 @@
+# 点赞业务实现说明书（可照抄实施）
+
+日期：2026-01-19  
+执行者：Codex（Linus-mode）  
+输入：点赞链路流程图（用户截图）+ `社交接口.md` + `.codex/DDD-ARCHITECTURE-SPECIFICATION.md` + 现有代码  
+目标：让另一个不了解项目的 Codex agent 按步骤照抄也能把点赞链路完整实现。
+
+---
+
+## 0. 一句话目标（给 12 岁也能懂）
+
+用户点“赞/取消赞”时：
+
+1) **立刻返回**：按钮马上变红/变灰，并拿到“当前点赞数”。
+2) **后台慢慢对齐**：过一会儿把数据写进数据库，最终一致。
+3) **还能发现热点**：哪个帖子突然爆火，系统要能看见并报警。
+
+## 0.1 本文拍板清单（已定，不再分支）
+
+你已经做出的选择（实现必须严格按这套走）：
+
+1) **端到端范围**：必须跑通链路 1/2/3（在线写入 + 延迟落库 + 实时监控/热榜），不做离线分析（Hive/Spark/日报热榜）。
+2) **接口**：`POST /api/v1/interact/reaction` 的 DTO 增加 `requestId` 字段（String，可选传入）；服务端必须生成并在响应中回传（用于日志串联，不参与幂等）。
+3) **动态窗口**：必须实现 `window_ms`；由“5 分钟热榜聚合结果”驱动自动写入 `interact:reaction:window_ms:{tag}`。
+4) **热点识别**：必须接入「京东 HotKey」（`JdHotKeyStore.isHotKey("like__" + tag)`）作为热点判定；不再使用“读热榜->hotTags 本地集合”的方式。
+5) **热点读优化**：必须启用 L1 Caffeine（只缓存 count，短 TTL）；不做 EMERGENCY（绕过 Redis 的 L1-only）模式。
+6) **读接口**：新增 `GET /api/v1/interact/reaction/state`（查询“我是否点过赞” + `currentCount`）；用于列表/详情页初始化按钮状态。
+
+---
+
+## 1. 需求理解确认（实现不得偏离）
+
+基于现有信息，我理解你的需求是：
+
+- 你已经有一张“点赞/取消点赞”的链路流程图。
+- 你要我把它落成一个 **DDD 分层** 的实现方案（Java Spring Boot + Maven 多模块）。
+- 方案要和现有接口对齐：`POST /api/v1/interact/reaction`（见 `社交接口.md` / 代码）。
+- 你允许我对接口做小幅调整（但不能意外破坏现有调用）。
+- 你允许使用标准生态组件（例如 JD HotKey Detector）。
+- 你要的交付物是一份“像说明书一样”的新文档：步骤细、可照抄、无关内容不写。
+
+请确认我的理解是否准确？（你已经说“继续”，我将默认你认可并直接开干。）
+
+---
+
+## 2. Linus 五层分析（只说关键点）
+
+### 2.1 数据结构分析（核心）
+
+点赞系统里只有两份核心数据：
+
+- **事实（Like/Reaction State）**：`(userId, targetType, targetId, reactionType)` 是否存在。
+- **派生（Like/Reaction Count）**：`(targetType, targetId, reactionType)` 的总数。
+
+关系：计数 = 对事实求和。  
+工程现实：计数不能每次现算，所以要维护一份近实时聚合值。
+
+### 2.2 特殊情况识别（把 if/else 砍掉）
+
+最容易写烂的地方：
+
+- “toggle 反转状态” = 制造垃圾边界情况（重复请求/重试会把计数算飞）。
+
+解决：
+
+- 只接受 **set state**：ADD=1 / REMOVE=0。
+- 幂等靠数据结构：Redis Set 的 `SADD/SREM` 返回值就是天然幂等。
+
+### 2.3 复杂度审查（别发明新概念）
+
+本质一句话：
+
+- **把高频写先写进 Redis（很快），再用延迟队列把“脏数据”批量落库（很省）。**
+
+多余的概念不要加：
+
+- 不做强一致。
+- 不做复杂回退。
+- 不做安全相关东西（鉴权/限流/风控）。
+
+### 2.4 破坏性分析（Never break userspace）
+
+不能破坏的用户可见行为：
+
+- 现有接口 `POST /api/v1/interact/reaction` 仍可用。
+- 请求字段 `target_id/target_type/type/action` 语义不变。
+- 返回 `current_count` 仍然返回一个数字（来自 Redis 近实时计数）。
+
+### 2.5 实用性验证（流程图就是生产现实）
+
+流程图里的组件链路（Redis + 延迟队列 + DB + 日志/实时/离线/监控）是典型生产套路：
+
+- ✅ 值得做：这是“高并发写 + 热点聚集”的标准难题。
+
+---
+
+## 3. 结论：✅ 值得做
+
+原因（不超过 3 条）：
+
+1) 点赞是最高频交互之一，写入/读取都容易爆。
+2) 热点集中，必须有“写轻 + 异步聚合 + 监控告警”。
+3) 现有代码点赞还只是占位，实现空间清晰。
+
+## 3.1 S2+S3 可借鉴点（实现者必须逐条落地）
+
+> 来源：`.codex/interaction-like-s2-s3-adoption-notes.md`  
+> 目的：把“可借鉴点”写进实现契约里，避免实现者边写边发明特殊情况。
+
+必须全部落地：**1 / 2 / 3 / 4 / 5 / 6 / 7**
+
+### 3.1.1 借鉴点 1：禁止 toggle，只做 set-state
+
+你必须做到的事：
+
+- 对外接口只暴露 `ADD/REMOVE`（等价 `desiredState=1/0`），不允许 “toggle 反转”。（见 10.2）
+- 幂等来自数据结构：用 Redis `SADD/SREM` 的返回值决定是否 `INCR/DECR`，别自己写一堆 if/else。（见 11.4）
+
+验收（必须能复现）：
+
+- 同一用户对同一 target 连续 `ADD` 两次：第一次 +1，第二次不变。
+- 再连续 `REMOVE` 两次：第一次 -1，第二次不变。（见 17.1）
+
+### 3.1.2 借鉴点 2：同一用户窗口内以最后一次为准（last-write-wins）
+
+你必须做到的事：
+
+- `ops` 用 Hash 存：`field=userId`，`value=desiredState`；窗口内多次操作必须覆盖写。（见 11.4）
+- 延迟落库时：按快照里的最终状态批量 upsert/delete；不要按事件逐条加减。（见 12.4）
+
+验收（必须能复现）：
+
+- 同一用户在一个窗口内 `ADD -> REMOVE -> ADD`：最终 DB 里必须是“存在”（点赞状态=1），count 最终对齐。
+
+### 3.1.3 借鉴点 7：把“状态”和“计数”当两类数据
+
+你必须做到的事：
+
+- `interaction_reaction` 是真相（是否点赞）；`interaction_reaction_count` 是派生（聚合数）。（见 5/7）
+- 写链路只维护 Redis 近实时计数；DB count 由延迟链路“覆盖式对齐”，不做强一致。（见 12.4）
+
+验收（必须能复现）：
+
+- DB 事实行最终与 Redis set 一致；`count` 永不为负。（见 5.5/17.2/17.3）
+
+### 3.1.4 借鉴点 3：动态窗口（热点更快，冷门更慢）
+
+你要做到的事：
+
+- 热点 target 用更小 `window_ms`（例如 1-10s），冷门用更大窗口（例如默认 5min）。实现见 11.5。
+
+验收：
+
+- 人为制造热点 target：后续延迟消息的 `x-delay` 明显变小（在日志里可见）。
+
+### 3.1.5 借鉴点 5：明确成功语义（success != DB 已一致）
+
+你必须把这句话写进文档/代码注释里（别让前端/产品误解）：
+
+- `success=true` 只代表“Redis 原子更新接住并返回”；DB 由延迟队列最终对齐。（见 10.2）
+
+### 3.1.6 借鉴点 6：requestId（字段可选传入）用于追踪与对账
+
+你必须做到的事：
+
+- DTO 增加 `requestId` 字段：客户端可传；不传则服务端生成并回传。（见 10.3/11.3/13.1）
+- `requestId` 只用于链路追踪，不参与幂等；幂等靠 set-state + Redis set。（见 11.4）
+
+### 3.1.7 借鉴点 4：L1 本地缓存只给热点 key 启用
+
+你必须做到的事：
+
+- 只对热点 key 启用 Caffeine（短 TTL）；常规流量仍回源 Redis。（见 14）
+- 不做 “L1-only 绕过 Redis” 模式；热点读一律按 **L1-first**：L1 miss 必须回源 Redis。（见 14.3）
+
+---
+
+## 4. 现状对齐（你必须先看懂现在是什么）
+
+### 4.1 已存在的接口
+
+- 文档：`社交接口.md`（4.3 核心接口定义）
+- 代码入口：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
+
+当前接口：
+
+- `POST /api/v1/interact/reaction`
+  - 请求：`target_id, target_type, type, action`
+  - 响应：`current_count, success`
+
+### 4.2 已存在的占位实现（你要替换掉）
+
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
+  - `react()` 目前只是在 action=ADD 时返回 1，否则返回 0 —— 这当然是垃圾占位。
+
+### 4.3 已存在的延迟队列范式（直接复用）
+
+- RabbitMQ 延迟交换机（x-delayed-message）：
+  - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/ContentScheduleDelayConfig.java`
+- Producer：`ContentScheduleProducer`
+- Consumer：`ContentScheduleConsumer`
+
+点赞链路会照抄同样模式，只是换一套 exchange/queue/routing。
+
+---
+
+## 5. 核心数据结构（别把数据结构搞错）
+
+### 5.1 LikeTarget（被点赞对象）
+
+一个“点赞目标”由 3 个维度唯一确定：
+
+- `targetType`：目标类型（`POST` / `COMMENT`）
+- `targetId`：目标 ID
+- `reactionType`：态势类型（本说明书把 `LIKE` 当“点赞”，其余 `LOVE/ANGRY` 先不做）
+
+### 5.2 事实（真相）：`interaction_reaction`
+
+回答的问题：**“某用户有没有对某对象点过赞？”**
+
+- 唯一键：`(target_type, target_id, reaction_type, user_id)`
+- 这张表一旦写对，后面所有统计都只是派生。
+
+### 5.3 派生（聚合）：`interaction_reaction_count`
+
+回答的问题：**“这个对象一共有多少赞？”**
+
+- 主键：`(target_type, target_id, reaction_type)`
+- `count` 是派生值，允许短时间不准（最终一致）。
+
+### 5.4 Redis 与 DB 的分工（必须分清）
+
+- Redis：负责“快”和“抗压”
+  - 近实时计数（给接口立即返回）
+  - 去重（幂等）
+  - 脏数据缓冲（等延迟队列来结算）
+- DB：负责“最终正确”和“可追溯”
+  - 最终的事实表与聚合表
+
+### 5.5 数据不变量（写错这里，系统就会悄悄算错）
+
+- `action=ADD` 表示 **desiredState=1**；`action=REMOVE` 表示 **desiredState=0**。
+- 重复 ADD 不得让计数一直 +1；重复 REMOVE 不得让计数一直 -1。
+- `count` 不得小于 0（Redis 侧必须避免 DECR 到负数）。
+- `interaction_reaction` 是真相；`count` 永远是派生值：写链路不要回查 DB“算真相”，出问题只能以事实表重算。
+
+---
+
+## 6. Redis Key 设计（Redis Cluster 必须这么写）
+
+### 6.1 为什么必须用 hash-tag
+
+你的流程里需要两件事：
+
+- 在 Redis 里用 Lua 做“多 key 原子更新”（计数 + 去重 + 记录脏数据）。
+- 在延迟同步时用 `RENAME` 把脏数据快照出来（避免并发丢更新）。
+
+在 Redis Cluster 下：**跨 slot 的 Lua/RENAME 会直接报错。**
+
+所以我们强制所有与某个 target 相关的 key 共享同一个 hash-tag：
+
+- `tag = {<targetType>:<targetId>:<reactionType>}`
+
+### 6.2 Key 列表（实现照抄）
+
+- 去重集合（事实的 Redis 版本）：`interact:reaction:set:{tag}`（Redis Set，成员=userId）
+- 近实时计数：`interact:reaction:cnt:{tag}`（Redis String，值=count）
+- 脏操作缓冲：`interact:reaction:ops:{tag}`（Redis Hash，field=userId，value=0/1）
+- 脏操作快照：`interact:reaction:ops:processing:{tag}`（Redis Hash）
+- 同步标记：`interact:reaction:sync:{tag}`（String：PENDING/SYNCING）
+- 最后同步时间：`interact:reaction:last_sync:{tag}`（String：epochMillis）
+- 动态窗口：`interact:reaction:window_ms:{tag}`（String：毫秒）
+- 同步互斥锁：`interact:reaction:lock:{tag}`（String：uuid，带 TTL）
+
+建议 TTL（按默认 5min 窗口）：
+
+- `sync`：10 分钟（>= 延迟时间，防止 backlog 误删）
+- `lock`：60 秒（够一次批处理）
+
+### 6.3 Redis 可靠性前置条件（生产必须满足，不满足就别做点赞）
+
+- `interact:reaction:set:{tag}` 是在线去重真相：它被驱逐/丢失，你的幂等就死了，count 会乱飞。
+- 生产 Redis 必须开启持久化（AOF/RDB 至少一种），并确保这些 key 不会被内存淘汰策略驱逐（建议 `maxmemory-policy noeviction`）。
+- 如果你真的清库/丢数据：不要“返回 0 当没事发生”。要么重建 Redis（从事实表回放），要么直接让写接口报错，逼着问题暴露出来。
+
+---
+
+## 7. 数据库表结构（DDL 已追加到仓库文档）
+
+已追加到：`project/nexus/docs/social_schema.sql`
+
+### 7.1 表：`interaction_reaction`（事实）
+
+- 主键：`(target_type, target_id, reaction_type, user_id)`
+- 作用：DB 里的真相（用户是否点赞）。
+
+### 7.2 表：`interaction_reaction_count`（派生）
+
+- 主键：`(target_type, target_id, reaction_type)`
+- 字段：`count`（最终一致的聚合数）
+
+注意：
+
+- 写入链路不要同步更新 DB（会炸），DB 更新交给“延迟队列结算”。
+- count 表直接用 Redis 的 count 覆盖即可（流程图第 13 步）。
+
+---
+
+## 8. 全链路总览（把流程图翻译成人话）
+
+你给的流程图可以拆成 3 条链路：
+
+1) **在线写入链路（用户立刻看到结果）**
+2) **延迟落库链路（最终一致）**
+3) **实时监控链路（发现热点并告警）**
+
+对应流程图编号（对齐用）：
+
+- 1-5：在线写入（Redis 原子更新 + sync_flag + 延迟消息）
+- 6-12：实时监控（结构化日志 -> Kafka -> Flink -> 告警/热榜）
+- 13-17：延迟落库（把 Redis 的“脏数据”批量写入 DB）
+
+---
+
+## 9. DDD 分层落地（按现有项目结构照抄）
+
+> 目标：不改现有对外接口，只把占位实现替换成真正的点赞链路。
+
+### 9.1 你要改/新增的模块
+
+- `nexus-api`：新增 `ReactionStateRequestDTO/ReactionStateResponseDTO`（读接口），并给 `ReactionRequestDTO/ReactionResponseDTO` 增加 `requestId` 字段（可选传入/回传）；其余字段保持兼容旧调用。
+- `nexus-domain`：新增“点赞子域”服务 + 端口接口（domain 不直接依赖 Redis/Rabbit/MyBatis）。
+- `nexus-infrastructure`：实现 Redis 端口 + MyBatis 仓储（落库）。
+- `nexus-trigger`：实现 RabbitMQ 延迟队列（config/producer/consumer）。
+
+### 9.2 建议新增的包与类（照抄文件名）
+
+domain（建议放在 `cn.nexus.domain.social.like` 下，保持短类/低缩进）：
+
+- `adapter/port/IReactionCachePort`：Redis 原子写 + 快照读取
+- `adapter/port/IReactionDelayPort`：投递延迟消息
+- `adapter/repository/IReactionRepository`：批量 upsert/delete
+- `model/valobj/ReactionTargetVO`：targetType/targetId/reactionType
+- `service/IReactionLikeService` + `ReactionLikeService`：在线写 + sync 聚合
+
+trigger（建议放在 `cn.nexus.trigger.mq.*` 下）：
+
+- `mq/config/ReactionSyncDelayConfig`
+- `mq/producer/ReactionSyncProducer`
+- `mq/consumer/ReactionSyncConsumer`
+
+---
+
+## 10. 接口契约（保持现有接口不破坏）
+
+### 10.1 写接口：`POST /api/v1/interact/reaction`
+
+请求（现状）：
+
+- `requestId`：String（可选，用于串联日志；不参与幂等）
+- `targetId`：Long
+- `targetType`：String（`POST` / `COMMENT`）
+- `type`：String（本方案只处理 `LIKE`）
+- `action`：String（`ADD` / `REMOVE`）
+
+响应（现状）：
+
+- `requestId`：String（服务端回传；用于排障与对账）
+- `currentCount`：Long（来自 Redis 近实时计数）
+- `success`：boolean
+
+### 10.2 语义约束（强制）
+
+1) 这是 **set state**，不是 toggle：
+   - `ADD` 等价 `desiredState=1`
+   - `REMOVE` 等价 `desiredState=0`
+   - 服务端禁止“反转”语义：一次请求只能表达“我想要的最终状态”，不能让后端去猜当前状态再翻转。
+
+2) `success` 的含义（必须对齐前端/产品）：
+   - `success=true`：表示本次请求已被系统接住，并完成了 Redis 原子更新（你可以把它理解成 `accepted=true`）。
+   - `success=true` **不代表** DB 已一致：DB 由延迟队列最终对齐（见 12）。
+   - 即使本次是幂等 no-op（`delta=0`），也允许 `success=true`（重复 ADD/REMOVE 是正常请求，不是错误）。
+
+3) `currentCount` 的含义：
+   - 来自 Redis 的近实时计数（体验值），允许与 DB 短暂不一致。
+   - 必须保证非负（见 5.5/11.4）。
+
+### 10.3 requestId（字段可选传入，服务端必须回传；不参与幂等）
+
+用途：把一次请求在 “HTTP 入口日志 / 业务结构化日志 / MQ 同步日志” 串起来（便于对账与排障）。
+
+约束：
+
+- 字段是可选的：旧客户端不传也能跑（Never break userspace）。
+- 服务端必须保证每次请求都有 requestId：客户端不传则生成（UUID/雪花均可）。
+- `requestId` 只用于日志串联，不参与幂等；幂等靠 set-state + Redis set（见 11.4）。
+
+你会在本文两个地方用到它：
+
+- 在线链路日志（见 11.3/13.1）：每次请求都打出来。
+- 同步链路日志（见 12.3/12.4）：用它串起 “这个 target 的 sync 在什么时候跑过”。
+
+### 10.4 读接口（必做）：查询“我是否点过赞”（给列表页/详情页初始化按钮用）
+
+接口：`GET /api/v1/interact/reaction/state`
+
+请求（QueryString）：
+
+- `targetId`：Long
+- `targetType`：String（`POST` / `COMMENT`）
+- `type`：String（本方案只处理 `LIKE`；保留该字段是为了将来扩展 reactionType）
+
+响应：
+
+- `state`：boolean（true=已点赞）
+- `currentCount`：Long（来自 Redis 近实时计数）
+
+实现约束：
+
+- `state` 必须走 Redis `SISMEMBER(interact:reaction:set:{tag}, userId)`（不要查 DB；DB 可能落后）。
+- `currentCount` 读取复用 14.3 的 getCount（热点走 L1，非热点走 Redis；`cntKey` 丢失时用 `SCARD(setKey)` 重建，见 11.4/14.3）。
+
+---
+
+## 11. 在线写入链路（API -> Redis 原子更新 -> 延迟消息）
+
+### 11.1 目标
+
+做到两件事：
+
+- 用户请求到达后 **立即返回**（只做 Redis + 必要时投递延迟消息）。
+- 同一个用户重复请求不产生副作用（幂等）。
+
+### 11.2 写入的最小步骤（对应流程图 1-5）
+
+1) 计算 `tag={targetType:targetId:reactionType}`。
+2) 调用 Redis Lua：
+   - Set 去重（SADD/SREM）
+   - Count 计数（INCR/DECR，只在集合变化时）
+   - ops 记录（HSET userId->desiredState）
+   - sync_flag（SETNX：仅首次置 pending）
+3) 如果本次 **首次置 pending**：发送 RabbitMQ 延迟消息（默认 5 分钟）。
+4) 打一条结构化日志（给实时监控链路用）。
+5) 返回 `currentCount`。
+
+### 11.3 领域服务伪代码（照抄就能写）
+
+> 建议实现：`ReactionLikeService.applyReaction()`，由 `InteractionService.react()` 委托调用。
+
+```pseudocode
+applyReaction(userId, targetId, targetType, reactionType, action, requestId):
+  assert reactionType == 'LIKE'           // 先只做 LIKE
+  desiredState = (action == 'ADD') ? 1 : 0
+
+  target = ReactionTargetVO(targetType, targetId, reactionType)
+
+  // requestId：客户端可传；不传则服务端生成，并在响应中回传
+  if requestId is null or blank:
+    requestId = newId()
+
+  // 1) Redis 原子更新
+  res = reactionCachePort.applyAtomic(userId, target, desiredState)
+  // res: {currentCount, delta, firstPending}
+
+  // 2) 首次 pending 才投递延迟消息
+  if res.firstPending:
+    delayMs = reactionCachePort.getWindowMs(target, default=300000)
+    reactionDelayPort.sendDelay(target, delayMs)
+
+  // 3) 结构化日志（给 Logstash/Kafka/Flink 用）
+  logJson({
+    event: 'reaction_like',
+    requestId,
+    userId, targetType, targetId, reactionType,
+    action, desiredState,
+    delta: res.delta,
+    currentCount: res.currentCount,
+    firstPending: res.firstPending,
+    ts: now()
+  })
+
+  return ReactionResultVO(currentCount=res.currentCount, requestId=requestId, success=true)
+```
+
+### 11.4 Redis Lua 伪代码（原子更新，必须同 slot）
+
+> 实现位置建议：infrastructure 的 `ReactionCachePort` 里，用 `StringRedisTemplate.execute()` 执行 Lua。
+
+输入：`userId, desiredState(0/1), syncTtlSec`  
+Keys（全部必须带同一个 `{tag}`）：
+
+- `setKey = interact:reaction:set:{tag}`
+- `cntKey = interact:reaction:cnt:{tag}`
+- `opsKey = interact:reaction:ops:{tag}`
+- `syncKey = interact:reaction:sync:{tag}`
+
+```pseudocode
+luaApplyAtomic(keys, argv):
+  userId = argv[1]
+  desiredState = argv[2]  // '1' or '0'
+  syncTtlSec = argv[3]
+
+  delta = 0
+
+  // 防御：cntKey 丢失时用 set 的基数重建，避免 DECR 产生负数
+  current = GET(cntKey)
+  if current is null:
+    current = SCARD(setKey)
+    SET(cntKey, current)
+
+  if desiredState == '1':
+    added = SADD(setKey, userId)
+    if added == 1:
+      INCR(cntKey)
+      delta = +1
+  else:
+    removed = SREM(setKey, userId)
+    if removed == 1:
+      DECR(cntKey)
+      delta = -1
+
+  // 记录“最后状态”，延迟落库时按 userId 覆盖即可
+  HSET(opsKey, userId, desiredState)
+
+  // 只在首次置 pending 时返回 true，避免重复投递延迟消息
+  firstPending = SET(syncKey, 'PENDING', NX, EX=syncTtlSec)
+
+  current = GET(cntKey)
+
+  return {currentCount=current, delta=delta, firstPending=(firstPending == 'OK')}
+```
+
+注意：
+
+- 幂等来自 `SADD/SREM` 的返回值，不要自己发明 if/else。
+- 这里不写 DB，不写 MQ，只做 Redis。
+
+### 11.5 动态窗口：热点更快，冷门更慢
+
+这一点来自 S2+S3 严格版的“1s~10s 动态 flush”。在当前方案里，它对应的是：**延迟消息的 delayMs（也就是多久把 ops 结算落库一次）**。
+
+核心原则（好品味）：
+
+- 同一个 target 的写入越热，越应该更频繁结算（避免 opsKey 积压、降低“DB 落后太久”的概率）。
+- 冷门 target 用更大窗口，省 MQ/DB IO。
+
+#### 11.5.1 数据结构：window_ms key
+
+- key：`interact:reaction:window_ms:{tag}`（String，毫秒）
+- 读：`getWindowMs(target, defaultMs)`；不存在就用 defaultMs（见 11.3/12.4）
+- 写：热点时写入并设置 TTL（建议 60s）；不再热点时让它过期（回到 defaultMs）
+- 约束：值必须被 clamp 到合理区间，例如 `[1000ms, 600000ms]`，避免被写成 0/负数/极大值
+
+#### 11.5.2 `getWindowMs` 的实现伪代码
+
+```pseudocode
+getWindowMs(target, defaultMs):
+  v = GET(windowMsKey(target))
+  if v is null: return defaultMs
+
+  ms = parseLong(v)
+  if ms is invalid: return defaultMs
+
+  return clamp(ms, min=1000, max=600000)
+```
+
+#### 11.5.3 window_ms 谁来写（本项目：实时链路 Consumer 自动写）
+
+我们不搞“每 5 秒扫一次 ZSET”的轮询（那是额外复杂度），直接用事件驱动：
+
+- 输入：Flink 输出的 Kafka 聚合 `topic_like_5m_agg`（见 13.3 / Step 11）
+- 做法：本仓库内实现一个 Consumer（见 Step 12），每次收到一条聚合结果就写一次 `window_ms`：
+  1) 取 `like_add_count` 作为热度 score
+  2) 依据 score 映射 `window_ms`（分段足够，不要搞复杂公式）
+  3) `SET interact:reaction:window_ms:{tag} = ms, EX=60s`
+- 分段映射建议（示例，按你实际压测调整）：
+  - `score >= 5000` -> `1000ms`
+  - `score >= 2000` -> `3000ms`
+  - `score >= 500`  -> `10000ms`
+  - 否则 -> 不写（让 key 过期，回到 defaultMs）
+
+这样做的结果：热点会持续被写入 `window_ms` 并保持 60s 有效；一旦不再热点，key 自动过期回到默认窗口（没有额外特殊情况）。
+
+验收（建议）：
+
+- 人为刷一个热点 target：后续延迟消息 `x-delay` 明显变小（producer 打印/日志可见）。
+- 停止刷后：60s 以内 `window_ms` 自动失效，delayMs 回到 defaultMs。
+
+注意：
+
+- 把所有 target 都改成 1s 会把 MQ/DB 压炸；动态窗口的意义是“只对热点做”。
+- 开发环境为了加快验证，你可以把 defaultMs 暂时改为 3000-5000ms（本文 17.2 已说明）。
+
+---
+
+## 12. 延迟落库链路（延迟队列 -> 批量写 DB，最终一致）
+
+### 12.1 目标（对应流程图 13-17）
+
+- 把 Redis 里累计的“脏操作”（ops）批量落库到 `interaction_reaction`。
+- 把 Redis 里的 `cnt` 同步到 `interaction_reaction_count`。
+- 清理 sync_flag，记录 last_sync_time。
+
+### 12.2 延迟消息模型（照抄 ContentSchedule）
+
+你需要一套新的 RabbitMQ 延迟队列配置，结构与 `ContentScheduleDelayConfig` 一模一样：
+
+- Exchange：`reaction.sync.exchange`
+- Queue：`reaction.sync.delay.queue`
+- RoutingKey：`reaction.sync.delay`
+- DLX Exchange：`reaction.sync.dlx.exchange`
+- DLX Queue：`reaction.sync.dlx.queue`
+- DLX RoutingKey：`reaction.sync.dlx`
+
+消息 payload（最简单可用）：
+
+- JSON：`{targetType, targetId, reactionType, attempt}`
+
+说明：
+
+- `attempt`：int，可选；默认 0。用于 consumer “抢不到锁/短暂失败”时自重试，避免消息被 ack 掉后无人再触发同步。
+- Producer 首次投递必须把 `attempt=0`；consumer 重投递时 `attempt++`。
+
+### 12.3 Consumer 入口伪代码（触发同步）
+
+> 位置建议：`cn.nexus.trigger.mq.consumer.ReactionSyncConsumer`
+
+照抄现有 `ContentScheduleConsumer` 的三件套：
+
+- Redis 分布式锁（避免重复消费并发写 DB）
+- try/catch + DLQ（失败就丢到死信，别吞）
+- finally 解锁
+
+```pseudocode
+onMessage(rawJson):
+  msg = parse(rawJson)   // {targetType, targetId, reactionType, attempt}
+  target = ReactionTargetVO(msg.targetType, msg.targetId, msg.reactionType)
+  attempt = (msg.attempt is null) ? 0 : msg.attempt
+
+  lockKey = 'interact:reaction:lock:' + tag(target)
+  lockVal = uuid()
+
+  if !SETNX(lockKey, lockVal, ttl=60s):
+    // 同步在跑或锁残留：不能直接 ack 掉，否则可能出现“无人再触发同步”的悬挂。
+    if attempt >= 30:
+      sendToDLQ(rawJson)
+      return
+
+    msg.attempt = attempt + 1
+    sendDelay(msg, delayMs=1000)
+    return
+
+  try:
+    reactionLikeService.syncTarget(target)
+  catch e:
+    sendToDLQ(rawJson)
+    throw
+  finally:
+    if GET(lockKey) == lockVal: DEL(lockKey)
+```
+
+### 12.4 领域同步伪代码（消除并发丢数据：RENAME 快照）
+
+> 关键点：不能“读 opsKey -> 处理 -> DEL opsKey”。并发写会被你删掉。
+> 正确姿势：`opsKey -> processingKey` 的原子快照（同一个 `{tag}` 下才能做）。
+
+```pseudocode
+syncTarget(target):
+  tag = tag(target)
+
+  opsKey = 'interact:reaction:ops:' + tag
+  processingKey = 'interact:reaction:ops:processing:' + tag
+  cntKey = 'interact:reaction:cnt:' + tag
+  syncKey = 'interact:reaction:sync:' + tag
+  lastSyncKey = 'interact:reaction:last_sync:' + tag
+
+  // 1) 快照：把 opsKey 原子挪走
+  moved = reactionCachePort.renameOpsIfExists(target)
+  if !moved:
+    DEL(syncKey)
+    return
+
+  // 2) 读取快照
+  ops = HGETALL(processingKey)        // userId -> '0'/'1'
+
+  addUserIds = []
+  removeUserIds = []
+  for each (userId, desiredState) in ops:
+    if desiredState == '1': addUserIds.add(userId)
+    else: removeUserIds.add(userId)
+
+  // 3) 批量落库（事实）
+  reactionRepository.batchUpsert(target, addUserIds)
+  reactionRepository.batchDelete(target, removeUserIds)
+
+  // 4) 同步计数（派生）
+  count = GET(cntKey) or 0
+  reactionRepository.upsertCount(target, count)
+
+  // 5) 清理标记
+  DEL(processingKey)
+  SET(lastSyncKey, nowMillis())
+  DEL(syncKey)
+
+  // 6) 如果又有新 ops（同步期间有人继续点赞），重新投递
+  if EXISTS(opsKey):
+    delayMs = reactionCachePort.getWindowMs(target, default=300000)
+    SET(syncKey, 'PENDING', EX=600s)
+    reactionDelayPort.sendDelay(target, delayMs)
+```
+
+### 12.5 renameOpsIfExists 的 Lua 伪代码（必须原子）
+
+```pseudocode
+luaRenameOps(keys):
+  opsKey = keys[1]
+  processingKey = keys[2]
+
+  if EXISTS(opsKey) == 0:
+    return 0
+
+  // 保护：如果 processingKey 还在，说明上次同步没清干净，直接拒绝覆盖
+  if EXISTS(processingKey) == 1:
+    return 0
+
+  RENAME(opsKey, processingKey)
+  return 1
+```
+
+这段必须在 Lua 里做：不然你会在 EXISTS/RENAME 之间被并发插队。
+
+### 12.6 DB 批量写入的 SQL 形态（MyBatis 直接照抄）
+
+> 重点：**批量**。别一条条写，DB 会被你打爆。
+
+Upsert（ADD=1）：
+
+```sql
+INSERT INTO interaction_reaction(target_type, target_id, reaction_type, user_id, create_time, update_time)
+VALUES
+  (?, ?, ?, ?, NOW(), NOW()),
+  ...
+ON DUPLICATE KEY UPDATE update_time = VALUES(update_time);
+```
+
+Delete（REMOVE=0）：
+
+```sql
+DELETE FROM interaction_reaction
+WHERE target_type = ? AND target_id = ? AND reaction_type = ?
+  AND user_id IN ( ... );
+```
+
+Upsert Count（直接覆盖 Redis count）：
+
+```sql
+INSERT INTO interaction_reaction_count(target_type, target_id, reaction_type, count, update_time)
+VALUES (?, ?, ?, ?, NOW())
+ON DUPLICATE KEY UPDATE
+  count = VALUES(count),
+  update_time = VALUES(update_time);
+```
+
+建议：每次批量最多 500 个 userId，超了就分批（别折磨 MySQL）。
+
+---
+
+## 13. 实时监控链路（Logstash -> Kafka -> Flink -> 告警/热榜）
+
+> 这条链路是“旁路”：不影响点赞主链路的响应时间。
+
+### 13.1 结构化日志契约（对应流程图 6）
+
+在在线写入成功后，必须打印一条 JSON 日志（建议 event 固定为 `reaction_like`）：
+
+```json
+{
+  "event": "reaction_like",
+  "ts": 1736990000000,
+  "requestId": "rid-20260116-xxxxxx",
+  "userId": 10001,
+  "targetType": "POST",
+  "targetId": 90001,
+  "reactionType": "LIKE",
+  "action": "ADD",
+  "desiredState": 1,
+  "delta": 1,
+  "currentCount": 1234,
+  "firstPending": true
+}
+```
+
+字段解释：
+
+- `requestId`：必填（客户端可不传，但服务端会生成）。用于把一次请求在多条日志之间串起来，不参与业务语义。
+- `delta`：本次是否真的改变了集合（1/-1/0），用于 Flink 聚合。
+- `currentCount`：Redis 的近实时计数，用于监控对齐与排查。
+
+### 13.2 Logstash -> Kafka（对应流程图 7）
+
+目标：把应用日志里的 `event=reaction_like` 抽出来，写入 Kafka：
+
+- topic：`topic_like_monitor`
+
+Logstash 思路（伪配置，照着写即可）：
+
+```pseudocode
+input: tail application log
+filter:
+  parse json
+  if event != 'reaction_like': drop
+output:
+  kafka { topic => 'topic_like_monitor' }
+```
+
+注意：
+
+- 主链路不直接写 Kafka（会把接口延迟拖死）。
+- Kafka 只是监控/分析链路的 WAL，与业务 DB 无关。
+
+### 13.3 Flink 实时计算（对应流程图 8-12）
+
+Flink 输入：Kafka `topic_like_monitor` 里的 JSON 事件。
+
+计算（最小可用）：
+
+- key：`(targetType, targetId, reactionType)`
+- window：5 分钟滚动窗口（tumbling 5m）
+- 指标：`like_add_count = sum(delta == 1 ? 1 : 0)`
+
+输出（写死，必须交付）：
+
+1) Kafka 聚合结果：`topic_like_5m_agg`
+   - 字段：`window_start, window_end, targetType, targetId, reactionType, like_add_count`
+
+2) Kafka 热点告警：`topic_like_hot_alert`
+   - 规则：`like_add_count > 2000`（阈值按压测调）
+   - 最小告警动作（必须）：本仓库内 Consumer 消费后 `log.warn(...)` 打印（见 Step 12）
+
+3) Redis 实时热榜（必须）：本仓库内 Consumer 消费 `topic_like_5m_agg` 后回写
+   - ZSET：`hot:like:5m:{targetType}`
+   - member：`targetId`
+   - score：`like_add_count`
+   - 目的：给业务侧查热榜/给 `window_ms` 写入提供输入（见 11.5.3 / Step 12）
+   
+4) `window_ms` 自动写入（必须）：同一个 Consumer 在回写热榜时同步写入
+   - key：`interact:reaction:window_ms:{tag}`
+   - TTL：60s（不再热点就自动失效，回到 defaultMs）
+   - 目的：热点更快结算，冷门更慢（见 11.5）
+ 
+说明：
+
+- 本文范围内不做 Hive/Spark（离线入湖与日报热榜已移除）。
+- Flink 作业属于外部系统：你需要按本文给的 Kafka topic 与 SQL 模板把它跑起来（见 Step 11）。
+
+---
+
+## 14. 热点治理（必做）：HotKey Detector + L1 Caffeine（只缓存 count）
+
+目标（别把系统写复杂）：
+
+1) 写链路不变：写入仍然以 Redis Lua 为准（11），热点治理只优化“读”。
+2) 热点识别统一：一律用「京东 HotKey」判定热点（`JdHotKeyStore.isHotKey(key)`）。
+3) 热点读路径固定：一律 **L1-first**（热点先查 L1，miss 再回源 Redis 并回填）；冷门一律直读 Redis。
+4) 不做 EMERGENCY：不允许 “L1-only 绕过 Redis”。
+
+### 14.1 HotKey Detector（京东 hotkey）部署与规则（外部系统，必须跑起来）
+
+京东 hotkey 的基本形态是：**etcd + worker + dashboard + client**（client 嵌入你的应用）。
+
+你要做的事（按京东 hotkey README 的“安装教程”走）：
+
+1) 部署 etcd（3.4.x+），得到连接串（示例）：`http://127.0.0.1:2379`
+2) 启动 hotkey worker（可多实例）：
+   - 关键参数：`--etcd.server=<etcd连接串>`
+   - 关键参数：`--workerPath=<你的应用名>`（用于业务隔离）
+3) 启动 hotkey dashboard：
+   - 配置 dashboard 的 DB + etcd 地址
+   - 在 dashboard 里创建你的 APP（appName/workerPath 必须一致）
+   - 配置热点规则（示例，按压测可调）：
+     - `prefix = like__`（前缀匹配，覆盖所有点赞 key）
+     - `interval = 2s`
+     - `threshold = 10`（2 秒内出现 10 次视为热点）
+     - `expire = 60s`（热点标记在 JVM 内保留 60 秒）
+
+### 14.2 应用接入（client 初始化，必须在启动时完成）
+
+你必须在应用启动时初始化 hotkey client（示例伪代码）：
+
+```pseudocode
+initHotkey():
+  starter = ClientStarter.Builder()
+    .setAppName("nexus")                 // 你的 appName（与 dashboard 配置一致）
+    .setEtcdServer("http://127.0.0.1:2379")
+    .setPushPeriod(500ms)               // 默认 500ms；越小越灵敏，但更耗
+    .build()
+  starter.startPipeline()
+```
+
+约束（必须统一）：
+
+- 本项目的 hotkeyKey 统一为：`like__{targetType:targetId:reactionType}`
+  - 例：`like__{POST:90001:LIKE}`
+
+### 14.3 读链路（必做）：热点才进 L1，且一律 L1-first
+
+缓存对象：**点赞数 count**（读多写少，允许短时间不准）。
+
+默认参数（写死成默认值，后续只允许通过压测改）：
+
+- L1 实现：Caffeine
+- L1 TTL：2 秒
+- L1 最大容量：100_000
+
+读侧伪代码（建议实现在 `ReactionCachePort.getCount(target)`）：
+
+```pseudocode
+getCount(target):
+  tag = target.hashTag()                        // {POST:90001:LIKE}
+  hotkey = "like__" + tag
+
+  // isHotKey：即便不是热点也会参与上报，这是它的设计
+  hot = JdHotKeyStore.isHotKey(hotkey)
+  if !hot:
+    return redisGetCntOrRebuild(tag)
+
+  v = caffeine.getIfPresent(hotkey)
+  if v exists:
+    return v
+
+  cnt = redisGetCntOrRebuild(tag)
+  caffeine.put(hotkey, cnt)
+  return cnt
+```
+
+#### 14.3.1 辅助：redisGetCntOrRebuild（cntKey 丢失时用 setKey 重建）
+
+```pseudocode
+redisGetCntOrRebuild(tag):
+  cntKey = 'interact:reaction:cnt:' + tag
+  setKey = 'interact:reaction:set:' + tag
+
+  v = GET(cntKey)
+  if v is not null: return parseLong(v)
+
+  // cntKey 丢失：用 set 的基数重建（不查 DB）
+  n = SCARD(setKey)
+  SET(cntKey, n)
+  return n
+```
+
+#### 14.3.2 读链路（必做）：查询用户是否已点赞（state）
+
+读侧伪代码（建议实现在 `ReactionCachePort.getState(userId, target)`）：
+
+```pseudocode
+getState(userId, target):
+  tag = target.hashTag()                        // {POST:90001:LIKE}
+  // 直接用 setKey 做 Exists 查询；这就是在线真相
+  return SISMEMBER('interact:reaction:set:' + tag, userId)
+```
+
+说明：
+
+- `state` 只保证“近实时正确”（以 Redis 为准）；DB 是最终一致（可能落后）。
+- 列表页需要批量查多个 target 时：用 pipeline/批量命令（别 for 循环一条条打 Redis）。
+
+### 14.4 验收（本地必须能复现）
+
+1) 配置好 dashboard 的规则（prefix=like__），启动应用与 worker。
+2) 对同一个 target 连续高频调用“读 count”接口/路径（可用压测或循环请求）。
+3) 观察：`JdHotKeyStore.isHotKey(like__{...})` 由 false 变 true；随后该 key 的读开始稳定命中 L1（可通过日志打印命中/回源次数验证）。
+
+---
+
+## 16. 逐步实现清单（按这个顺序做，每一步都能验收）
+
+> 你不需要一次写完。按步骤做，每一步都能跑通并验证。
+
+### 16.1 三条链路 <-> 步骤对照（先对齐，你就不会觉得“对照不起来”）
+
+| 链路 | 你要实现什么 | 对应步骤 | 这些步骤在哪里实现 |
+| --- | --- | --- | --- |
+| 链路 1：在线写入 | API -> Redis 原子去重+计数+写入 ops + 返回 currentCount | Step 0、Step 2-5、Step 8、Step 13 | 本仓库（Java 代码） |
+| 链路 2：延迟落库 | RabbitMQ 延迟触发 -> ops 快照 -> 批量写 DB -> 清标记 | Step 0、Step 1、Step 3-7 | 本仓库（Java 代码） |
+| 链路 3：实时监控 | 日志 -> Logstash -> Kafka -> Flink -> Kafka 聚合 -> 回写热榜/写 window_ms/告警 | Step 9-12 | Step 9/12 在本仓库；Step 10-11 属于外部系统 |
+
+一句话总结：
+
+- **Step 0-8 = 把业务链路（链路 1 + 链路 2）做成可运行。**
+- **Step 9-12 = 把实时监控链路（链路 3）补齐为可交付契约 + 可验收项。**
+
+### Step 0：准备本地依赖（端到端必备）
+
+#### Step 0.0 推荐版本（不一致就别抱怨）
+
+- JDK：17
+- MySQL：8.0+
+- Redis：7.0+
+- RabbitMQ：3.12+（启用 x-delayed-message）
+- Kafka：3.x（单机开发用 KRaft/或 ZK 均可，能用就行）
+- Logstash：8.x（或同等能采集日志的工具）
+- Flink SQL：1.17+（能跑 SQL client 即可）
+- etcd：3.5+（HotKey 依赖）
+
+最小本地跑法（别一上来就想跑全套）：
+
+- 只验证链路 1+2：只需要 MySQL/Redis/RabbitMQ（Kafka/Flink/Logstash/HotKey 可先不启动）
+- 验收要过“链路 3”：再补 Kafka/Logstash/Flink/HotKey
+
+你要跑通链路 1/2/3，需要把下面这些组件都跑起来（少一个都别抱怨跑不起来）：
+
+- MySQL：最终落库（事实表 + 计数表）
+- Redis：在线写入/计数/`window_ms`/热榜回写
+- RabbitMQ：延迟队列（**必须**启用 `x-delayed-message` 插件）
+- Kafka：实时链路 WAL（Logstash 写入、Flink 读取/输出、应用 Consumer 回写）
+- Logstash：从应用日志抽取 `event=reaction_like` -> Kafka
+- Flink（SQL）：5 分钟窗口聚合 -> Kafka 输出
+- 京东 HotKey：etcd + worker + dashboard（外部）+ client（应用内）
+
+#### Step 0.1 应用配置（必须能连上）
+
+文件：`project/nexus/nexus-app/src/main/resources/application-dev.yml`
+
+你至少要把这些“连通性”配对（值按你的环境改）：  
+
+- `spring.datasource.*`：MySQL
+- `spring.data.redis.*`：Redis
+- `spring.rabbitmq.*`：RabbitMQ
+
+如果你要跑通链路 3 的“回写热榜 + 写 window_ms”（Step 12），还必须补齐：
+
+- `spring.kafka.bootstrap-servers`：Kafka 地址（示例：`127.0.0.1:9092`）
+
+如果你要跑通热点治理（第 14 章），还必须补齐：
+
+- `hotkey.appName`：应用名（示例：`nexus`）
+- `hotkey.etcdServer`：etcd 地址（示例：`http://127.0.0.1:2379`）
+
+建议你直接把下面这段追加到 `application-dev.yml`（照抄即可，别发明新键名）：
+
+```yml
+spring:
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092
+    consumer:
+      group-id: nexus-like-pipeline
+      auto-offset-reset: earliest
+
+hotkey:
+  appName: nexus
+  etcdServer: http://127.0.0.1:2379
+```
+
+#### Step 0.2 RabbitMQ 延迟插件（必须）
+
+本项目的延迟队列用的是 **x-delayed-message**（见 `ReactionSyncDelayConfig`），你必须在 RabbitMQ 上启用插件：
+
+- 启用：`rabbitmq-plugins enable rabbitmq_delayed_message_exchange`
+- 验收：启动应用后能创建 `reaction.sync.exchange`，并且 Exchange 的 type 是 `x-delayed-message`
+
+#### Step 0.3 Kafka topics（必须）
+
+链路 3 固定用这 3 个 topic（名字写死，不要改）：  
+
+- `topic_like_monitor`：输入（点赞结构化日志）
+- `topic_like_5m_agg`：输出（5 分钟窗口聚合）
+- `topic_like_hot_alert`：输出（热点告警事件）
+
+验收（任选一种方式）：  
+
+- 你能创建出这 3 个 topic；并且能用 consumer 读到消息（见 Step 10/11）。
+
+#### Step 0.4 启动顺序（照抄，不要乱）
+
+1) 启动 MySQL / Redis / RabbitMQ / Kafka。  
+2) 启动 etcd + hotkey worker + hotkey dashboard，并在 dashboard 配好规则（prefix=`like__`）。  
+3) 启动应用（dev 配置）。  
+4) 启动 Logstash pipeline（Step 10）：日志 -> `topic_like_monitor`。  
+5) 启动 Flink SQL（Step 11）：`topic_like_monitor` -> `topic_like_5m_agg` / `topic_like_hot_alert`。  
+6) 启动/确认 Step 12 的回写 Consumer：`topic_like_5m_agg` -> Redis 热榜 + `window_ms`。
+
+### Step 1：创建 DB 表（事实 + 计数）
+
+改动文件：
+
+- `project/nexus/docs/social_schema.sql`（已追加）
+
+你要做的事：
+
+1) 在本地 MySQL 执行新增的两张表 DDL：
+   - `interaction_reaction`
+   - `interaction_reaction_count`
+
+注意：`application-dev.yml` 里 `spring.sql.init.mode: never`，所以你必须手动执行 SQL。
+
+验收：
+
+- 两张表存在，主键/索引与 DDL 一致。
+
+### Step 2：补齐领域值对象（把字符串变成可控枚举）
+
+新增文件（建议位置与现有风格一致）：
+
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/ReactionTargetVO.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/ReactionTypeEnumVO.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/ReactionActionEnumVO.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/ReactionTargetTypeEnumVO.java`
+
+实现要点：
+
+- 外部 API 仍然收 String（不破坏用户）。
+- 进入 domain 后第一件事：把 String 解析成 EnumVO；解析失败直接返回参数错误。
+- `ReactionTargetVO` 负责三元组：`targetType + targetId + reactionType`，并提供 `hashTag()`：
+  - 输出 `{targetType:targetId:reactionType}`
+
+验收：
+
+- 任何非法的 `targetType/type/action` 都被拒绝（返回参数错误）。
+
+### Step 3：定义 domain 端口接口（domain 不碰 Redis/Rabbit/MyBatis）
+
+新增文件：
+
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/port/IReactionCachePort.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/port/IReactionDelayPort.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IReactionRepository.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/ReactionApplyResultVO.java`
+
+接口建议（伪代码签名）：
+
+```pseudocode
+IReactionCachePort:
+  applyAtomic(userId, target, desiredState, syncTtlSec) -> ReactionApplyResultVO
+  renameOpsIfExists(target) -> boolean
+  readOpsSnapshot(target) -> map<userId, desiredState>
+  getCount(target) -> long
+  getState(userId, target) -> boolean
+  getWindowMs(target, defaultMs) -> long
+  setSyncPending(target, ttlSec)
+  clearSyncFlag(target)
+  setLastSyncTime(target, epochMillis)
+
+IReactionDelayPort:
+  sendDelay(target, delayMs)
+  sendToDLQ(rawMessage)
+
+IReactionRepository:
+  batchUpsert(target, userIds)
+  batchDelete(target, userIds)
+  upsertCount(target, count)
+```
+
+验收：
+
+- domain 层代码里看不到 `StringRedisTemplate/RabbitTemplate/MyBatis` 这些实现细节。
+
+### Step 4：实现 domain 服务（在线写 + 延迟同步）
+
+新增文件：
+
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/IReactionLikeService.java`
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
+
+必须实现 3 个方法：
+
+1) `applyReaction(...)`：给 HTTP 写接口用（在线链路）
+2) `syncTarget(target)`：给 MQ consumer 用（延迟落库链路）
+3) `queryState(...)`：给读接口用（查询 state + currentCount，见 10.4/14.3）
+
+实现要点：
+
+- `applyReaction` 只做：Redis 原子更新 +（必要时）投递延迟消息 + 打日志。
+- `syncTarget` 只做：ops 快照 + 批量落库 + 同步 count + 清标记 +（若又脏了）再投递。
+- `queryState` 只做：读 Redis `SISMEMBER(setKey)` + `getCount`（热点读优化见 14.3）。
+
+验收：
+
+- `applyReaction` 的耗时只跟 Redis/MQ 有关，不碰 DB。
+- `syncTarget` 在并发点赞下不会丢更新（靠 rename 快照）。
+
+### Step 5：实现 Redis 端口（Lua 原子更新 + rename 快照）
+
+新增文件（infrastructure）：
+
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionCachePort.java`
+
+依赖：
+
+- 复用项目已有 `spring-boot-starter-data-redis`（已在 infrastructure pom 里）
+
+实现清单：
+
+1) KeyBuilder：
+   - 输入 `ReactionTargetVO`
+   - 输出所有 key（必须带同一个 `{tag}`）
+2) Lua#1：`applyAtomic`（见 11.4）
+3) Lua#2：`renameOpsIfExists`（见 12.5）
+4) 简单读写：`getCount/getState/getWindowMs/setSyncPending/clearSyncFlag/setLastSyncTime`
+
+验收：
+
+- 在 Redis Cluster 环境下也能执行（所有 key 同 slot）。
+- 重复 ADD/REMOVE 返回的 `delta` 正确（0/±1）。
+
+### Step 6：实现 MyBatis 仓储（批量 upsert/delete + upsert count）
+
+新增文件（DAO + PO + Mapper XML）：
+
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/IInteractionReactionDao.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/IInteractionReactionCountDao.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/po/InteractionReactionPO.java`
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/po/InteractionReactionCountPO.java`
+- `project/nexus/nexus-infrastructure/src/main/resources/mapper/social/InteractionReactionMapper.xml`
+- `project/nexus/nexus-infrastructure/src/main/resources/mapper/social/InteractionReactionCountMapper.xml`
+
+新增文件（仓储实现）：
+
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ReactionRepository.java`
+
+实现要点：
+
+- 参考 `RelationRepository` 的风格：domain 实体/VO <-> PO 转换在 repository 内完成。
+- 批量 SQL 形态见 12.6（foreach + 分批）。
+
+验收：
+
+- `batchUpsert/batchDelete/upsertCount` 在本地 MySQL 可执行。
+
+### Step 7：实现 RabbitMQ 延迟队列（点赞同步触发器）
+
+新增文件（trigger）：
+
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/ReactionSyncDelayConfig.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/ReactionSyncProducer.java`
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ReactionSyncConsumer.java`
+
+实现要点：
+
+- 配置照抄 `ContentScheduleDelayConfig`（同样依赖 x-delayed-message 插件）。
+- Producer 照抄 `ContentScheduleProducer`：用 header `x-delay` 设置延迟。
+- Consumer 照抄 `ContentScheduleConsumer`：Redis 锁 + DLQ。
+
+验收：
+
+- 发一条延迟消息，能在延迟后被消费并触发 `syncTarget`。
+
+### Step 8：把占位实现替换成真实链路（不改现有写接口路由）
+
+改动文件：
+
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
+
+你要做的事：
+
+- 在 `InteractionService` 注入 `IReactionLikeService`。
+- `react()` 里：
+  1) 把请求的 String 参数解析成 EnumVO/TargetVO
+  2) 调 `reactionLikeService.applyReaction(...)`（把 requestId 也传进去；不传则服务端生成）
+  3) 把结果塞进 `ReactionResultVO` 返回
+
+注意：
+
+- `InteractionController` 的现有写接口路由不需要改，但你必须改它组装响应 DTO 的部分，把 `requestId` 回传（见 10.1/10.3）。
+
+验收：
+
+- 调用 `POST /api/v1/interact/reaction` 返回的 `currentCount` 是 Redis 真实计数，而不是 0/1 占位；并且响应里包含 `requestId`。
+
+### Step 8.1：新增读接口：查询 state（初始化按钮状态）
+
+改动文件（建议最小变更路径）：
+
+- `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateRequestDTO.java`（新增）
+- `project/nexus/nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateResponseDTO.java`（新增）
+- `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`（新增一个 endpoint）
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`（新增一个 service 方法委托给 `reactionLikeService.queryState`）
+
+你要做的事：
+
+- 新增 endpoint：`GET /api/v1/interact/reaction/state`（契约见 10.4）。
+- controller 里拿 `userId = UserContext.requireUserId()`，把它传给 domain 做查询即可。
+
+验收：
+
+- 调用一次 state 接口：返回 `state`（true/false）和 `currentCount`（近实时）。
+
+### Step 9：把结构化日志“打出来”（链路 3 的入口，项目内可验收）
+
+改动文件（任选其一做埋点即可）：
+
+- `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
+- 或 `project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
+
+你要做的事：
+
+- 在 `applyReaction` 成功后打印一条 JSON 日志（字段对齐本文 13.1 的示例；`requestId` 必须出现，因为服务端每次都会生成并回传）。
+
+验收：
+
+- 本地调用一次点赞接口，在 `logs/nexus.log`（或控制台）能看到 `event=reaction_like` 的 JSON 行。
+
+### Step 10：把日志送进 Kafka（链路 3，外部系统交付物）
+
+交付物（不在本仓库写 Java 代码）：
+
+- Logstash pipeline：从应用日志中筛选 `event=reaction_like`，写入 Kafka topic `topic_like_monitor`。
+- 配置模板：`project/nexus/docs/analytics/like-pipeline/logstash/topic_like_monitor.conf`
+  - 你只要替换：`PATH_TO_NEXUS_LOG` / `SINCE_DB_PATH` / `KAFKA_BOOTSTRAP_SERVERS`
+
+提示（别在这里浪费时间）：  
+
+- 默认日志文件是 `logs/nexus.log`（来自 `project/nexus/nexus-app/src/main/resources/logback-spring.xml`）。  
+- 只要你保持 logback pattern 不改，Logstash 的 grok 才能把 `json_payload` 抠出来。  
+
+启动示例（你按你的 Logstash 安装目录替换即可）：  
+
+- Windows：`logstash.bat -f project/nexus/docs/analytics/like-pipeline/logstash/topic_like_monitor.conf`  
+- Linux/Mac：`bin/logstash -f project/nexus/docs/analytics/like-pipeline/logstash/topic_like_monitor.conf`  
+
+验收：
+
+- Kafka 的 `topic_like_monitor` 能消费到 JSON 事件。
+
+### Step 11：Flink 5min 窗口聚合（链路 3，外部系统交付物）
+
+交付物（不在本仓库写 Java 代码）：
+
+- Flink 作业：按 `(targetType,targetId,reactionType)` 分组，5 分钟窗口聚合 `sum(delta==1)`。
+- 配置模板：`project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
+  - 你只要替换：`KAFKA_BOOTSTRAP_SERVERS`
+
+启动示例（你按你的 Flink 安装目录替换即可）：  
+
+- Windows：`sql-client.bat -f project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
+- Linux/Mac：`bin/sql-client.sh -f project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
+
+输出（写死，必须有）：
+
+- `topic_like_5m_agg`：每个窗口的聚合结果（给热榜/window_ms 用）
+- `topic_like_hot_alert`：超过阈值的热点告警事件（给告警用）
+
+验收：
+
+- 你能消费 `topic_like_5m_agg`，看到 `like_add_count` 随着点赞增长而变大。
+- 人为刷一个热点 target，能消费到 `topic_like_hot_alert`。
+
+### Step 12：回写热榜 + 写 window_ms + 打印告警（链路 3，本仓库交付物）
+
+你要做的事（把实时链路“落地成业务可用”）：
+
+1) 在 `nexus-trigger` 增加 Kafka 消费者（Spring Kafka）：
+   - 消费 `topic_like_5m_agg`
+   - 消费 `topic_like_hot_alert`
+
+2) `topic_like_5m_agg` 的消费逻辑（必须）：
+   - 回写 Redis 热榜 ZSET：`hot:like:5m:{targetType}`（member=`targetId`，score=`like_add_count`）
+   - 同步写入 `window_ms`：`SET interact:reaction:window_ms:{tag} = ms, EX=60s`（映射规则见 11.5.3）
+
+3) `topic_like_hot_alert` 的消费逻辑（最小告警，必须）：
+   - `log.warn(...)` 打印一条“热点告警”结构化日志（含 `targetType/targetId/like_add_count/threshold`）
+
+验收（本地必须能复现）：
+
+- 链路 3 跑起来后：Redis 能查到热榜 ZSET（例如 `ZREVRANGE hot:like:5m:POST 0 10 WITHSCORES`）。
+- 人为刷热点后：Redis 能看到对应 tag 的 `window_ms` key（60s 内存在，停止刷后会自然过期）。 
+
+### Step 13：热点治理（必做）：HotKey Detector + L1 Caffeine
+
+这一步只优化“读”，不碰主写链路语义。按第 14 章照抄落地：
+
+- 外部系统：把 hotkey（etcd + worker + dashboard）跑起来，并配置规则（prefix=`like__`）。（见 14.1）
+- 应用内：启动时初始化 hotkey client；读 count 路径按 **L1-first** 实现（热点才查 L1，miss 回源 Redis 并回填）。（见 14.2/14.3）
+
+验收：见 14.4
+
+---
+
+## 17. 最小验证清单（本地 AI 自测用）
+
+> 你只要验证 4 件事：幂等、状态可查、最终一致、并发不丢。
+
+### 17.1 功能正确性（幂等）
+
+1) 对同一 `(userId, target)` 连续调用两次 `ADD`：
+   - 第一次 `currentCount` +1
+   - 第二次 `currentCount` 不变
+2) 再调用一次 `REMOVE`：
+   - `currentCount` -1
+3) 再调用一次 `REMOVE`：
+   - `currentCount` 不变
+
+### 17.1.1 状态查询（state）
+
+在 17.1 的步骤中穿插验证：
+
+- 第一次 `ADD` 之后，调用 `GET /api/v1/interact/reaction/state`：`state` 必须是 true。
+- `REMOVE` 之后再查：`state` 必须是 false。
+
+### 17.2 最终一致（延迟落库）
+
+为了本地别等 5 分钟，建议开发环境把默认 delay 改成 3-5 秒：
+
+- `reactionCachePort.getWindowMs(..., default=3000)`
+
+验证：
+
+- 延迟后 DB 表出现/消失对应行：`interaction_reaction`
+- `interaction_reaction_count.count` 等于 Redis `cntKey`
+- Redis 的 `syncKey` 被清理，`last_sync` 更新
+
+### 17.3 并发不丢（核心）
+
+模拟：在延迟同步进行时继续发点赞请求。
+
+验证：
+
+- 最终 DB 状态与 Redis set 一致（不会因为 DEL opsKey 丢数据）。
+- 如果同步期间又产生新 ops，会自动再投递一次延迟消息。
+
+---
+
+## 18. 常见坑（踩了就会变垃圾）
+
+- 你没用 hash-tag：Redis Cluster 下 Lua/RENAME 会直接报错。
+- 你用了 toggle：重试/重复请求会把计数算飞。
+- 你做了“读 opsKey 然后 DEL opsKey”：并发写会被你删掉（丢数据）。
+- 你在 HTTP 主链路写 DB：高峰时 DB 会先死，你的接口也跟着死。
+- 你让 count 当真相：计数永远只是派生值，真相是事实表/集合。
+
+---
+
+## 19. 交付物与下一步
+
+- 新文档：`.codex/interaction-like-pipeline-implementation.md`
+- 已更新：`.codex/context-scan.json`、`.codex/operations-log.md`、`project/nexus/docs/social_schema.sql`、`project/nexus/docs/analytics/like-pipeline/flink/reaction_like_5m_agg.sql`
+
+如果你希望我下一步直接把代码也落地（把占位实现变成可运行），你只要回复：
+
+- “继续落地代码”

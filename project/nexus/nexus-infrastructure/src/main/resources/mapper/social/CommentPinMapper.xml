@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.ICommentPinDao">
+
+    <select id="selectByPostId" resultType="cn.nexus.infrastructure.dao.social.po.CommentPinPO">
+        SELECT post_id, comment_id, create_time, update_time
+        FROM interaction_comment_pin
+        WHERE post_id = #{postId}
+        LIMIT 1
+    </select>
+
+    <insert id="insertOrUpdate" parameterType="cn.nexus.infrastructure.dao.social.po.CommentPinPO">
+        INSERT INTO interaction_comment_pin(post_id, comment_id, create_time, update_time)
+        VALUES(#{postId}, #{commentId}, #{createTime}, #{updateTime})
+        ON DUPLICATE KEY UPDATE comment_id = VALUES(comment_id), update_time = VALUES(update_time)
+    </insert>
+
+    <delete id="deleteByPostId">
+        DELETE FROM interaction_comment_pin
+        WHERE post_id = #{postId}
+    </delete>
+
+    <delete id="deleteByPostIdAndCommentId">
+        DELETE FROM interaction_comment_pin
+        WHERE post_id = #{postId} AND comment_id = #{commentId}
+    </delete>
+</mapper>
+

@@ -2,3 +2,15 @@
 logging:
   level:
     root: WARN
+
+feed:
+  inbox:
+    ttlDays: 14
+  outbox:
+    ttlDays: 14
+
+reaction:
+  sync:
+    mode: redis
+  count:
+    model: snapshot

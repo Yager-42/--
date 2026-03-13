@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.ICommentDao">
+
+    <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.CommentPO">
+        INSERT INTO interaction_comment(comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content_id, status, like_count, reply_count, create_time, update_time)
+        VALUES(#{commentId}, #{postId}, #{userId}, #{rootId}, #{parentId}, #{replyToId}, #{contentId}, #{status}, #{likeCount}, #{replyCount}, #{createTime}, #{updateTime})
+    </insert>
+
+    <select id="selectBriefById" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
+        SELECT comment_id, post_id, user_id, root_id, status, like_count, reply_count
+        FROM interaction_comment
+        WHERE comment_id = #{commentId}
+        LIMIT 1
+    </select>
+
+    <select id="selectByIds" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
+        SELECT comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content_id, status, like_count, reply_count, create_time, update_time
+        FROM interaction_comment
+        WHERE comment_id IN
+        <foreach collection="commentIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+    <update id="softDelete">
+        UPDATE interaction_comment
+        SET status = 2, update_time = #{updateTime}
+        WHERE comment_id = #{commentId} AND status = 1
+    </update>
+
+    <update id="softDeleteByRootId">
+        UPDATE interaction_comment
+        SET status = 2, update_time = #{updateTime}
+        WHERE root_id = #{rootId} AND status = 1
+    </update>
+
+    <update id="approvePending">
+        UPDATE interaction_comment
+        SET status = 1, update_time = #{updateTime}
+        WHERE comment_id = #{commentId} AND status = 0
+    </update>
+
+    <update id="rejectPending">
+        UPDATE interaction_comment
+        SET status = 2, update_time = #{updateTime}
+        WHERE comment_id = #{commentId} AND status = 0
+    </update>
+
+    <update id="addReplyCount">
+        UPDATE interaction_comment
+        SET reply_count = GREATEST(0, reply_count + #{delta}), update_time = NOW()
+        WHERE comment_id = #{commentId}
+    </update>
+
+    <update id="addLikeCount">
+        UPDATE interaction_comment
+        SET like_count = GREATEST(0, like_count + #{delta}), update_time = NOW()
+        WHERE comment_id = #{commentId}
+    </update>
+
+    <select id="pageRootIds" resultType="java.lang.Long">
+        SELECT comment_id
+        FROM interaction_comment
+        WHERE post_id = #{postId}
+          AND root_id IS NULL
+          AND status = 1
+          <if test="pinnedId != null">
+            AND comment_id &lt;&gt; #{pinnedId}
+          </if>
+          <if test="cursorTime != null and cursorId != null">
+            AND (create_time &lt; #{cursorTime} OR (create_time = #{cursorTime} AND comment_id &lt; #{cursorId}))
+          </if>
+        ORDER BY create_time DESC, comment_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="pageRootIdsForViewer" resultType="java.lang.Long">
+        SELECT comment_id
+        FROM interaction_comment
+        WHERE post_id = #{postId}
+          AND root_id IS NULL
+          AND (status = 1 OR (status = 0 AND user_id = #{viewerId}))
+          <if test="pinnedId != null">
+            AND comment_id &lt;&gt; #{pinnedId}
+          </if>
+          <if test="cursorTime != null and cursorId != null">
+            AND (create_time &lt; #{cursorTime} OR (create_time = #{cursorTime} AND comment_id &lt; #{cursorId}))
+          </if>
+        ORDER BY create_time DESC, comment_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="pageReplyIds" resultType="java.lang.Long">
+        SELECT comment_id
+        FROM interaction_comment
+        WHERE root_id = #{rootId}
+          AND status = 1
+          <if test="cursorTime != null and cursorId != null">
+            AND (create_time &gt; #{cursorTime} OR (create_time = #{cursorTime} AND comment_id &gt; #{cursorId}))
+          </if>
+        ORDER BY create_time ASC, comment_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="pageReplyIdsForViewer" resultType="java.lang.Long">
+        SELECT comment_id
+        FROM interaction_comment
+        WHERE root_id = #{rootId}
+          AND (status = 1 OR (status = 0 AND user_id = #{viewerId}))
+          <if test="cursorTime != null and cursorId != null">
+            AND (create_time &gt; #{cursorTime} OR (create_time = #{cursorTime} AND comment_id &gt; #{cursorId}))
+          </if>
+        ORDER BY create_time ASC, comment_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectRecentRootBriefs" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
+        SELECT comment_id, post_id, user_id, root_id, status, like_count, reply_count
+        FROM interaction_comment
+        WHERE post_id = #{postId}
+          AND root_id IS NULL
+          AND status = 1
+        ORDER BY create_time DESC, comment_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <delete id="deleteSoftDeletedBefore">
+        DELETE FROM interaction_comment
+        WHERE status = 2
+          AND update_time &lt; #{cutoff}
+        ORDER BY update_time ASC, comment_id ASC
+        LIMIT #{limit}
+    </delete>
+</mapper>

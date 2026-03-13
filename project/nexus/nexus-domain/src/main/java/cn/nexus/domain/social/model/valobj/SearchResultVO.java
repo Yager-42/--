@@ -1,22 +1,19 @@
 package cn.nexus.domain.social.model.valobj;
 
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.List;
-
-/**
- * 搜索结果。
- */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class SearchResultVO {
     private List<SearchItemVO> items;
-    private String facets;
+    private String nextAfter;
+    private boolean hasMore;
 
     @Data
     @Builder
@@ -24,8 +21,17 @@ public class SearchResultVO {
     @AllArgsConstructor
     public static class SearchItemVO {
         private String id;
-        private String type;
         private String title;
-        private String summary;
+        private String description;
+        private String coverImage;
+        private List<String> tags;
+        private String authorAvatar;
+        private String authorNickname;
+        private String tagJson;
+        private Long likeCount;
+        private Long favoriteCount;
+        private Boolean liked;
+        private Boolean faved;
+        private Boolean isTop;
     }
 }

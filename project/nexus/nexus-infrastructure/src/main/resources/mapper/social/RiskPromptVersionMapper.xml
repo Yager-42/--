@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IRiskPromptVersionDao">
+
+    <resultMap id="RiskPromptVersionMap" type="cn.nexus.infrastructure.dao.social.po.RiskPromptVersionPO">
+        <id property="version" column="version"/>
+        <result property="contentType" column="content_type"/>
+        <result property="status" column="status"/>
+        <result property="promptText" column="prompt_text"/>
+        <result property="model" column="model"/>
+        <result property="createBy" column="create_by"/>
+        <result property="publishBy" column="publish_by"/>
+        <result property="publishTime" column="publish_time"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.RiskPromptVersionPO">
+        INSERT INTO risk_prompt_version(
+            version, content_type, status, prompt_text, model, create_by, publish_by, publish_time, create_time, update_time
+        ) VALUES(
+            #{version}, #{contentType}, #{status}, #{promptText}, #{model}, #{createBy}, #{publishBy}, #{publishTime}, NOW(), NOW()
+        )
+    </insert>
+
+    <select id="selectByVersion" resultMap="RiskPromptVersionMap">
+        SELECT version, content_type, status, prompt_text, model, create_by, publish_by, publish_time, create_time, update_time
+        FROM risk_prompt_version
+        WHERE version = #{version}
+    </select>
+
+    <select id="selectActive" resultMap="RiskPromptVersionMap">
+        SELECT version, content_type, status, prompt_text, model, create_by, publish_by, publish_time, create_time, update_time
+        FROM risk_prompt_version
+        WHERE status = 'PUBLISHED'
+          AND content_type = #{contentType}
+        ORDER BY publish_time DESC, version DESC
+        LIMIT 1
+    </select>
+
+    <select id="selectAll" resultMap="RiskPromptVersionMap">
+        SELECT version, content_type, status, prompt_text, model, create_by, publish_by, publish_time, create_time, update_time
+        FROM risk_prompt_version
+        <where>
+            <if test="contentType != null and contentType != ''">
+                AND content_type = #{contentType}
+            </if>
+        </where>
+        ORDER BY create_time DESC, version DESC
+    </select>
+
+    <select id="selectMaxVersion" resultType="java.lang.Long">
+        SELECT IFNULL(MAX(version), 0)
+        FROM risk_prompt_version
+    </select>
+
+    <update id="updatePrompt">
+        UPDATE risk_prompt_version
+        SET prompt_text = #{promptText},
+            model = #{model},
+            update_time = NOW()
+        WHERE version = #{version}
+          AND status = #{expectedStatus}
+    </update>
+
+    <update id="markAllPublishedRolledBack">
+        UPDATE risk_prompt_version
+        SET status = #{toStatus},
+            update_time = NOW()
+        WHERE status = 'PUBLISHED'
+          AND content_type = #{contentType}
+    </update>
+
+    <update id="publish">
+        UPDATE risk_prompt_version
+        SET status = #{status},
+            publish_by = #{publishBy},
+            publish_time = #{publishTime},
+            update_time = NOW()
+        WHERE version = #{version}
+    </update>
+
+</mapper>
+

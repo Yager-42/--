@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IInteractionNotificationDao">
+
+    <select id="pageByUser" resultType="cn.nexus.infrastructure.dao.social.po.InteractionNotificationPO">
+        SELECT notification_id, to_user_id, biz_type, target_type, target_id,
+               post_id, root_comment_id, last_actor_user_id, last_comment_id,
+               unread_count, create_time, update_time
+        FROM interaction_notification
+        WHERE to_user_id = #{toUserId}
+          AND unread_count &gt; 0
+        <if test="cursorTime != null and cursorId != null">
+            AND (update_time &lt; #{cursorTime} OR (update_time = #{cursorTime} AND notification_id &lt; #{cursorId}))
+        </if>
+        ORDER BY update_time DESC, notification_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <insert id="upsertIncrement">
+        INSERT INTO interaction_notification(
+            notification_id, to_user_id, biz_type, target_type, target_id,
+            post_id, root_comment_id, last_actor_user_id, last_comment_id,
+            unread_count, create_time, update_time)
+        VALUES(
+            #{notificationId}, #{toUserId}, #{bizType}, #{targetType}, #{targetId},
+            #{postId}, #{rootCommentId}, #{lastActorUserId}, #{lastCommentId},
+            #{delta}, NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+            unread_count = unread_count + #{delta},
+            post_id = COALESCE(VALUES(post_id), post_id),
+            root_comment_id = COALESCE(VALUES(root_comment_id), root_comment_id),
+            last_actor_user_id = VALUES(last_actor_user_id),
+            last_comment_id = COALESCE(VALUES(last_comment_id), last_comment_id),
+            update_time = NOW()
+    </insert>
+
+    <update id="markRead">
+        UPDATE interaction_notification
+        SET unread_count = 0
+        WHERE to_user_id = #{toUserId}
+          AND notification_id = #{notificationId}
+    </update>
+
+    <update id="markReadAll">
+        UPDATE interaction_notification
+        SET unread_count = 0
+        WHERE to_user_id = #{toUserId}
+    </update>
+
+</mapper>
+

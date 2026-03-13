@@ -14,5 +14,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class PublishContentResponseDTO {
     private Long postId;
+    private Long attemptId;
+    private Integer versionNum;
     private String status;
 }

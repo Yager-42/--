@@ -16,6 +16,10 @@ import java.util.List;
 @AllArgsConstructor
 public class ContentHistoryResponseDTO {
     private List<ContentVersionDTO> versions;
+    /**
+     * 下一次分页的偏移量，null 表示没有更多。
+     */
+    private Integer nextCursor;
 
     @Data
     @Builder
@@ -23,6 +27,7 @@ public class ContentHistoryResponseDTO {
     @AllArgsConstructor
     public static class ContentVersionDTO {
         private Long versionId;
+        private String title;
         private String content;
         private Long time;
     }

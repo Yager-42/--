@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IContentPublishAttemptDao">
+
+    <resultMap id="ContentPublishAttemptMap" type="cn.nexus.infrastructure.dao.social.po.ContentPublishAttemptPO">
+        <id property="attemptId" column="attempt_id"/>
+        <result property="postId" column="post_id"/>
+        <result property="userId" column="user_id"/>
+        <result property="idempotentToken" column="idempotent_token"/>
+        <result property="transcodeJobId" column="transcode_job_id"/>
+        <result property="attemptStatus" column="attempt_status"/>
+        <result property="riskStatus" column="risk_status"/>
+        <result property="transcodeStatus" column="transcode_status"/>
+        <result property="snapshotTitle" column="snapshot_title"/>
+        <result property="snapshotContent" column="snapshot_content"/>
+        <result property="snapshotMedia" column="snapshot_media"/>
+        <result property="locationInfo" column="location_info"/>
+        <result property="visibility" column="visibility"/>
+        <result property="publishedVersionNum" column="published_version_num"/>
+        <result property="errorCode" column="error_code"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentPublishAttemptPO">
+        INSERT INTO content_publish_attempt(
+            attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
+            attempt_status, risk_status, transcode_status,
+            snapshot_title, snapshot_content, snapshot_media, location_info, visibility,
+            published_version_num, error_code, error_message,
+            create_time, update_time
+        )
+        VALUES(
+            #{attemptId}, #{postId}, #{userId}, #{idempotentToken}, #{transcodeJobId},
+            #{attemptStatus}, #{riskStatus}, #{transcodeStatus},
+            #{snapshotTitle}, #{snapshotContent}, #{snapshotMedia}, #{locationInfo}, #{visibility},
+            #{publishedVersionNum}, #{errorCode}, #{errorMessage},
+            #{createTime}, #{updateTime}
+        )
+    </insert>
+
+    <select id="selectById" resultMap="ContentPublishAttemptMap">
+        SELECT attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
+               attempt_status, risk_status, transcode_status,
+               snapshot_title, snapshot_content, snapshot_media, location_info, visibility,
+               published_version_num, error_code, error_message,
+               create_time, update_time
+        FROM content_publish_attempt
+        WHERE attempt_id = #{attemptId}
+    </select>
+
+    <select id="selectByToken" resultMap="ContentPublishAttemptMap">
+        SELECT attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
+               attempt_status, risk_status, transcode_status,
+               snapshot_title, snapshot_content, snapshot_media, location_info, visibility,
+               published_version_num, error_code, error_message,
+               create_time, update_time
+        FROM content_publish_attempt
+        WHERE idempotent_token = #{idempotentToken}
+    </select>
+
+    <select id="selectLatestActiveAttempt" resultMap="ContentPublishAttemptMap">
+        SELECT attempt_id, post_id, user_id, idempotent_token, transcode_job_id,
+               attempt_status, risk_status, transcode_status,
+               snapshot_title, snapshot_content, snapshot_media, location_info, visibility,
+               published_version_num, error_code, error_message,
+               create_time, update_time
+        FROM content_publish_attempt
+        WHERE post_id = #{postId}
+          AND user_id = #{userId}
+          AND attempt_status IN (#{statusCreated}, #{statusTranscoding}, #{statusPendingReview})
+        ORDER BY attempt_id DESC
+        LIMIT 1
+    </select>
+
+    <update id="updateStatus">
+        UPDATE content_publish_attempt
+        <set>
+            attempt_status = #{attemptStatus},
+            risk_status = #{riskStatus},
+            transcode_status = #{transcodeStatus},
+            transcode_job_id = #{transcodeJobId},
+            published_version_num = #{publishedVersionNum},
+            error_code = #{errorCode},
+            error_message = #{errorMessage},
+            update_time = CURRENT_TIMESTAMP
+        </set>
+        WHERE attempt_id = #{attemptId}
+          <if test="expectedAttemptStatus != null">
+            AND attempt_status = #{expectedAttemptStatus}
+          </if>
+    </update>
+
+</mapper>
+

@@ -1,5 +1,6 @@
 package cn.nexus.domain.social.model.entity;
 
+import java.util.Date;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -26,11 +27,11 @@ public class RelationEntity {
      */
     private Long targetId;
     /**
-     * 关系类型：1关注、2好友、3屏蔽。
+     * 关系类型：1关注、3屏蔽。
      */
     private Integer relationType;
     /**
-     * 状态：1正常/通过，2待审批，3已拒绝，4删除。
+     * 状态：1正常/通过。
      */
     private Integer status;
     /**
@@ -41,4 +42,8 @@ public class RelationEntity {
      * 乐观锁版本。
      */
     private Long version;
+    /**
+     * 创建时间。
+     */
+    private Date createTime;
 }

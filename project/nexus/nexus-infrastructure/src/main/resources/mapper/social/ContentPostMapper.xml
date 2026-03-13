@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IContentPostDao">
+
+    <resultMap id="ContentPostMap" type="cn.nexus.infrastructure.dao.social.po.ContentPostPO">
+        <id property="postId" column="post_id"/>
+        <result property="userId" column="user_id"/>
+        <result property="title" column="title"/>
+        <result property="contentUuid" column="content_uuid"/>
+        <result property="summary" column="summary"/>
+        <result property="summaryStatus" column="summary_status"/>
+        <result property="mediaType" column="media_type"/>
+        <result property="mediaInfo" column="media_info"/>
+        <result property="locationInfo" column="location_info"/>
+        <result property="status" column="status"/>
+        <result property="visibility" column="visibility"/>
+        <result property="versionNum" column="version_num"/>
+        <result property="isEdited" column="is_edited"/>
+        <result property="createTime" column="create_time"/>
+        <result property="publishTime" column="publish_time"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.ContentPostPO">
+        INSERT INTO content_post(post_id, user_id, title, content_uuid, media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time)
+        VALUES(#{postId}, #{userId}, #{title}, #{contentUuid}, #{mediaType}, #{mediaInfo}, #{locationInfo}, #{status}, #{visibility}, #{versionNum}, #{isEdited}, NOW(), #{publishTime})
+    </insert>
+
+    <select id="selectById" resultMap="ContentPostMap">
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
+        FROM content_post
+        WHERE post_id = #{postId}
+    </select>
+
+    <select id="selectUserId" resultType="java.lang.Long">
+        SELECT user_id
+        FROM content_post
+        WHERE post_id = #{postId}
+        LIMIT 1
+    </select>
+
+    <select id="selectByIdForUpdate" resultMap="ContentPostMap">
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
+        FROM content_post
+        WHERE post_id = #{postId}
+        FOR UPDATE
+    </select>
+
+    <update id="updateStatus">
+        UPDATE content_post
+        SET status = #{status}
+        WHERE post_id = #{postId}
+    </update>
+
+    <update id="updateStatusIfMatch">
+        UPDATE content_post
+        SET status = #{status}
+        WHERE post_id = #{postId}
+          AND status = #{expectedStatus}
+    </update>
+
+    <update id="updateStatusIfMatchAndVersion">
+        UPDATE content_post
+        SET status = #{status}
+        WHERE post_id = #{postId}
+          AND status = #{expectedStatus}
+          AND version_num = #{expectedVersion}
+    </update>
+
+    <update id="updateStatusAndPublishTimeIfMatchAndVersion">
+        UPDATE content_post
+        SET status = #{status},
+            publish_time = COALESCE(publish_time, #{publishTime})
+        WHERE post_id = #{postId}
+          AND status = #{expectedStatus}
+          AND version_num = #{expectedVersion}
+    </update>
+
+    <update id="softDeleteIfMatchAndVersion">
+        UPDATE content_post
+        SET status = 6,
+            delete_time = #{deleteTime}
+        WHERE post_id = #{postId}
+          AND status = #{expectedStatus}
+          AND version_num = #{expectedVersion}
+    </update>
+
+    <update id="updateStatusWithUser">
+        UPDATE content_post
+        SET status = #{status}
+        WHERE post_id = #{postId}
+          AND user_id = #{userId}
+    </update>
+
+    <update id="updateSummary">
+        UPDATE content_post
+        SET summary = #{summary},
+            summary_status = #{summaryStatus}
+        WHERE post_id = #{postId}
+    </update>
+
+    <select id="selectSoftDeletedIdsBefore" resultType="java.lang.Long">
+        SELECT post_id
+        FROM content_post
+        WHERE status = 6
+          AND delete_time IS NOT NULL
+          AND delete_time &lt; #{cutoff}
+        ORDER BY delete_time ASC, post_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <delete id="deleteSoftDeletedByIds">
+        DELETE FROM content_post
+        WHERE status = 6
+          AND delete_time IS NOT NULL
+          AND delete_time &lt; #{cutoff}
+          AND post_id IN
+        <foreach collection="postIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+    <update id="updateContentAndVersion">
+        UPDATE content_post
+        SET title = #{title},
+            publish_time = #{publishTime},
+            content_uuid = #{contentUuid},
+            media_info = #{mediaInfo},
+            location_info = #{locationInfo},
+            version_num = #{versionNum},
+            is_edited = #{isEdited},
+            status = #{status},
+            visibility = #{visibility}
+        WHERE post_id = #{postId}
+          AND version_num = #{expectedVersion}
+    </update>
+
+    <select id="selectByIds" resultMap="ContentPostMap">
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
+        FROM content_post
+        WHERE status = 2
+          AND post_id IN
+        <foreach collection="postIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+    <select id="selectByUserPage" resultMap="ContentPostMap">
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
+        FROM content_post
+        WHERE user_id = #{userId}
+          AND status IN (1, 2)
+        <if test="cursorTime != null and cursorPostId != null">
+            AND (create_time &lt; #{cursorTime}
+                 OR (create_time = #{cursorTime} AND post_id &lt; #{cursorPostId}))
+        </if>
+        ORDER BY create_time DESC, post_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectPublishedPage" resultMap="ContentPostMap">
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
+        FROM content_post
+        WHERE status = 2
+        <if test="cursorTime != null and cursorPostId != null">
+            AND (create_time &lt; #{cursorTime}
+                 OR (create_time = #{cursorTime} AND post_id &lt; #{cursorPostId}))
+        </if>
+        ORDER BY create_time DESC, post_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectPublishedPageForSearch" resultMap="ContentPostMap">
+        SELECT post_id, user_id, title, content_uuid, summary, summary_status,
+               media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time
+        FROM content_post
+        WHERE status = #{publishedStatus}
+          AND visibility = #{publicVisibility}
+          AND publish_time IS NOT NULL
+        <if test="cursorPublishTime != null and cursorPostId != null">
+            AND (publish_time &gt; #{cursorPublishTime}
+                 OR (publish_time = #{cursorPublishTime} AND post_id &gt; #{cursorPostId}))
+        </if>
+        ORDER BY publish_time ASC, post_id ASC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

@@ -11,11 +11,19 @@ public interface IInteractionApi {
 
     Response<ReactionResponseDTO> react(ReactionRequestDTO requestDTO);
 
+    Response<ReactionStateResponseDTO> reactionState(ReactionStateRequestDTO requestDTO);
+
+    Response<ReactionLikersResponseDTO> reactionLikers(ReactionLikersRequestDTO requestDTO);
+
     Response<CommentResponseDTO> comment(CommentRequestDTO requestDTO);
 
     Response<OperationResultDTO> pinComment(PinCommentRequestDTO requestDTO);
 
     Response<NotificationListResponseDTO> notifications(NotificationListRequestDTO requestDTO);
+
+    Response<OperationResultDTO> readNotification(NotificationReadRequestDTO requestDTO);
+
+    Response<OperationResultDTO> readAllNotifications();
 
     Response<TipResponseDTO> tip(TipRequestDTO requestDTO);
 

@@ -1,0 +1,8 @@
+# IntelliJ project settings
+.idea/
+
+# Maven outputs (ensure nested targets ignored if not already)
+**/target/
+
+# Local tooling (do not commit binaries)
+.codex/tools/

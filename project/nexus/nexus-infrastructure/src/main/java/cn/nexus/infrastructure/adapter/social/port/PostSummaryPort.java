@@ -1,0 +1,31 @@
+package cn.nexus.infrastructure.adapter.social.port;
+
+import cn.nexus.domain.social.adapter.port.IPostSummaryPort;
+import org.springframework.stereotype.Component;
+
+/**
+ * 摘要生成端口默认实现（占位）：当前用简单规则生成摘要，后续可替换为真实 AI/模型调用。
+ */
+@Component
+public class PostSummaryPort implements IPostSummaryPort {
+
+    private static final int MAX_LEN = 80;
+
+    @Override
+    public String summarize(String text, String mediaInfo) {
+        String t = text == null ? "" : text.trim();
+        if (!t.isEmpty()) {
+            String normalized = t.replaceAll("\\s+", " ");
+            if (normalized.length() <= MAX_LEN) {
+                return normalized;
+            }
+            return normalized.substring(0, MAX_LEN) + "...";
+        }
+        String media = mediaInfo == null ? "" : mediaInfo.trim();
+        if (!media.isEmpty()) {
+            return "一条媒体内容";
+        }
+        return "";
+    }
+}
+

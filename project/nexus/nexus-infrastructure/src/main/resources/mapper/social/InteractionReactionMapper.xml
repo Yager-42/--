@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IInteractionReactionDao">
+
+    <resultMap id="ReactionMap" type="cn.nexus.infrastructure.dao.social.po.InteractionReactionPO">
+        <result property="targetType" column="target_type"/>
+        <result property="targetId" column="target_id"/>
+        <result property="reactionType" column="reaction_type"/>
+        <result property="userId" column="user_id"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <insert id="batchUpsert">
+        INSERT INTO interaction_reaction(target_type, target_id, reaction_type, user_id, create_time, update_time)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.targetType}, #{item.targetId}, #{item.reactionType}, #{item.userId}, NOW(), NOW())
+        </foreach>
+        ON DUPLICATE KEY UPDATE update_time = VALUES(update_time)
+    </insert>
+
+    <delete id="batchDelete">
+        DELETE FROM interaction_reaction
+        WHERE target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND reaction_type = #{reactionType}
+          AND user_id IN
+        <foreach collection="userIds" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
+    </delete>
+
+    <select id="selectExists" resultType="java.lang.Integer">
+        SELECT 1
+        FROM interaction_reaction
+        WHERE target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND reaction_type = #{reactionType}
+          AND user_id = #{userId}
+        LIMIT 1
+    </select>
+
+    <insert id="insertIgnore">
+        INSERT IGNORE INTO interaction_reaction(target_type, target_id, reaction_type, user_id, create_time, update_time)
+        VALUES(#{targetType}, #{targetId}, #{reactionType}, #{userId}, NOW(), NOW())
+    </insert>
+
+    <delete id="deleteOne">
+        DELETE FROM interaction_reaction
+        WHERE target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND reaction_type = #{reactionType}
+          AND user_id = #{userId}
+    </delete>
+
+    <select id="pageByTarget" resultMap="ReactionMap">
+        SELECT target_type, target_id, reaction_type, user_id, create_time, update_time
+        FROM interaction_reaction
+        WHERE target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND reaction_type = #{reactionType}
+          <if test="cursorTime != null">
+              AND (
+                update_time < #{cursorTime}
+                OR (update_time = #{cursorTime} AND user_id < #{cursorUserId})
+              )
+          </if>
+        ORDER BY update_time DESC, user_id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="batchExists" resultType="java.lang.Long">
+        SELECT target_id
+        FROM interaction_reaction
+        WHERE target_type = #{targetType}
+          AND reaction_type = #{reactionType}
+          AND user_id = #{userId}
+          AND target_id IN
+        <foreach collection="targetIds" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
+    </select>
+</mapper>

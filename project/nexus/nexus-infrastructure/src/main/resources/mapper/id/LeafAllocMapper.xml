@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.id.ILeafAllocDao">
+
+    <resultMap id="LeafAllocMap" type="cn.nexus.infrastructure.dao.id.po.LeafAllocPO">
+        <id property="bizTag" column="biz_tag"/>
+        <result property="maxId" column="max_id"/>
+        <result property="step" column="step"/>
+        <result property="description" column="description"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <select id="selectByBizTagForUpdate" resultMap="LeafAllocMap">
+        SELECT biz_tag, max_id, step, description, update_time
+        FROM leaf_alloc
+        WHERE biz_tag = #{bizTag}
+        FOR UPDATE
+    </select>
+
+    <insert id="insert" parameterType="cn.nexus.infrastructure.dao.id.po.LeafAllocPO">
+        INSERT INTO leaf_alloc(biz_tag, max_id, step, description, update_time)
+        VALUES(#{bizTag}, #{maxId}, #{step}, #{description}, NOW())
+    </insert>
+
+    <update id="updateMaxId">
+        UPDATE leaf_alloc
+        SET max_id = #{maxId},
+            update_time = NOW()
+        WHERE biz_tag = #{bizTag}
+    </update>
+
+</mapper>

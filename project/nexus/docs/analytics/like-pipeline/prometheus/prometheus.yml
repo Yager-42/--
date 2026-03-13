@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+
+rule_files:
+  - alert_rules.yml
+
+scrape_configs:
+  - job_name: flink
+    static_configs:
+      - targets:
+          - FLINK_METRICS_HOST:PORT
+
+  - job_name: kafka_exporter
+    static_configs:
+      - targets:
+          - KAFKA_EXPORTER_HOST:PORT
+
+  - job_name: redis_exporter
+    static_configs:
+      - targets:
+          - REDIS_EXPORTER_HOST:PORT

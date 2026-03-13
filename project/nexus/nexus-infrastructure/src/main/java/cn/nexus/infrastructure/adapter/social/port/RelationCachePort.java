@@ -2,51 +2,107 @@ package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IRelationCachePort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-import java.util.concurrent.TimeUnit;
-
 /**
- * 基于 Redis 的关注计数缓存，缺失时回源数据库。
+ * 基于 Redis Hash 的关系计数缓存。
  */
 @Component
 @RequiredArgsConstructor
 public class RelationCachePort implements IRelationCachePort {
 
+    private static final String KEY_PREFIX = "social:relation:count:";
+    private static final String FIELD_FOLLOWING = "followingCount";
+    private static final String FIELD_FOLLOWER = "followerCount";
+    private static final long BASE_TTL_SECONDS = 1800;
+    private static final long JITTER_SECONDS = 300;
+
     private final StringRedisTemplate redisTemplate;
     private final IRelationRepository relationRepository;
 
-    private static final String KEY_FOLLOW_COUNT = "social:follow:count:";
-    private static final long TTL_SECONDS = 3600;
-
     @Override
-    public long getFollowCount(Long sourceId) {
-        String key = KEY_FOLLOW_COUNT + sourceId;
-        String cached = redisTemplate.opsForValue().get(key);
-        if (cached != null) {
-            try {
-                return Long.parseLong(cached);
-            } catch (NumberFormatException ignored) {
-            }
+    public long getFollowingCount(Long sourceId) {
+        if (sourceId == null) {
+            return 0L;
         }
-        int count = relationRepository.countRelationsBySource(sourceId, 1);
-        redisTemplate.opsForValue().set(key, String.valueOf(count), TTL_SECONDS, TimeUnit.SECONDS);
+        String key = key(sourceId);
+        Long cached = parseLong(redisTemplate.opsForHash().get(key, FIELD_FOLLOWING));
+        if (cached != null && cached >= 0) {
+            return cached;
+        }
+        long count = relationRepository.countActiveRelationsBySource(sourceId, 1);
+        redisTemplate.opsForHash().put(key, FIELD_FOLLOWING, String.valueOf(count));
+        expire(key);
         return count;
     }
 
     @Override
-    public void incrFollow(Long sourceId) {
-        String key = KEY_FOLLOW_COUNT + sourceId;
-        redisTemplate.opsForValue().increment(key);
-        redisTemplate.expire(key, TTL_SECONDS, TimeUnit.SECONDS);
+    public long getFollowerCount(Long targetId) {
+        if (targetId == null) {
+            return 0L;
+        }
+        String key = key(targetId);
+        Long cached = parseLong(redisTemplate.opsForHash().get(key, FIELD_FOLLOWER));
+        if (cached != null && cached >= 0) {
+            return cached;
+        }
+        long count = relationRepository.countFollowerIds(targetId);
+        redisTemplate.opsForHash().put(key, FIELD_FOLLOWER, String.valueOf(count));
+        expire(key);
+        return count;
     }
 
     @Override
-    public void decrFollow(Long sourceId) {
-        String key = KEY_FOLLOW_COUNT + sourceId;
-        redisTemplate.opsForValue().decrement(key);
-        redisTemplate.expire(key, TTL_SECONDS, TimeUnit.SECONDS);
+    public void incrFollowing(Long sourceId, long delta) {
+        adjust(sourceId, FIELD_FOLLOWING, delta);
+    }
+
+    @Override
+    public void incrFollower(Long targetId, long delta) {
+        adjust(targetId, FIELD_FOLLOWER, delta);
+    }
+
+    @Override
+    public void evict(Long userId) {
+        if (userId == null) {
+            return;
+        }
+        redisTemplate.delete(key(userId));
+    }
+
+    private void adjust(Long userId, String field, long delta) {
+        if (userId == null || delta == 0) {
+            return;
+        }
+        String key = key(userId);
+        Long updated = redisTemplate.opsForHash().increment(key, field, delta);
+        if (updated != null && updated < 0) {
+            redisTemplate.opsForHash().put(key, field, "0");
+        }
+        expire(key);
+    }
+
+    private void expire(String key) {
+        long ttl = BASE_TTL_SECONDS + ThreadLocalRandom.current().nextLong(JITTER_SECONDS + 1);
+        redisTemplate.expire(key, ttl, TimeUnit.SECONDS);
+    }
+
+    private String key(Long userId) {
+        return KEY_PREFIX + userId;
+    }
+
+    private Long parseLong(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(String.valueOf(raw));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 }

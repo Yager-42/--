@@ -26,7 +26,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 用户 Profile 写接口入口。
+ * 用户 Profile 接口入口。
+ *
+ * <p>这里同时承载“看自己”“看别人”和“改自己”三条链路，但控制器本身只做参数接收、异常转码和 DTO/VO 转换，
+ * 真正规则仍然收口在领域服务与仓储里。</p>
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-02-03
  */
 @Slf4j
 @RestController
@@ -46,6 +53,11 @@ public class UserProfileController implements IUserProfileApi {
     @Resource
     private IRelationPolicyPort relationPolicyPort;
 
+    /**
+     * 查询当前登录用户的资料。
+     *
+     * @return 当前用户资料，类型：{@link Response}&lt;{@link UserProfileResponseDTO}&gt;
+     */
     @GetMapping("/user/me/profile")
     @Override
     public Response<UserProfileResponseDTO> myProfile() {
@@ -68,6 +80,12 @@ public class UserProfileController implements IUserProfileApi {
         }
     }
 
+    /**
+     * 查询目标用户的公开资料。
+     *
+     * @param requestDTO 查询请求，包含目标用户 ID，类型：{@link UserProfileQueryRequestDTO}
+     * @return 目标用户资料，类型：{@link Response}&lt;{@link UserProfileResponseDTO}&gt;
+     */
     @GetMapping("/user/profile")
     @Override
     public Response<UserProfileResponseDTO> profile(UserProfileQueryRequestDTO requestDTO) {
@@ -77,7 +95,7 @@ public class UserProfileController implements IUserProfileApi {
             if (targetUserId == null) {
                 throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "targetUserId 不能为空");
             }
-            // 最小隐私：任一方向屏蔽 => NOT_FOUND（不泄露用户存在性）
+            // 最小隐私策略：任一方向屏蔽都返回 NOT_FOUND，不泄露“这个人其实存在”。
             if (relationPolicyPort.isBlocked(viewerId, targetUserId) || relationPolicyPort.isBlocked(targetUserId, viewerId)) {
                 throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
             }
@@ -99,11 +117,18 @@ public class UserProfileController implements IUserProfileApi {
         }
     }
 
+    /**
+     * 更新当前登录用户的资料。
+     *
+     * @param requestDTO 资料更新请求，类型：{@link UserProfileUpdateRequestDTO}
+     * @return 更新结果，类型：{@link Response}&lt;{@link OperationResultDTO}&gt;
+     */
     @PostMapping("/user/me/profile")
     @Override
     public Response<OperationResultDTO> updateMyProfile(@RequestBody UserProfileUpdateRequestDTO requestDTO) {
         try {
             Long userId = UserContext.requireUserId();
+            // 控制器只负责把 HTTP DTO 压成领域 Patch，不在这里做业务判断。
             UserProfilePatchVO patch = requestDTO == null ? null : UserProfilePatchVO.builder()
                     .nickname(requestDTO.getNickname())
                     .avatarUrl(requestDTO.getAvatarUrl())

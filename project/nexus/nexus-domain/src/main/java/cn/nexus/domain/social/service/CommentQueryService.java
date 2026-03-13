@@ -22,10 +22,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * 评论读侧查询服务实现（列表/回复/热榜）。
+ * 评论读侧查询服务。
  *
+ * <p>负责把评论主干、回复预览、热榜和用户昵称头像拼成前端可以直接消费的结果。</p>
+ *
+ * @author rr
  * @author codex
- * @since 2026-01-20
+ * @since 2026-01-21
  */
 @Service
 @RequiredArgsConstructor
@@ -36,12 +39,23 @@ public class CommentQueryService implements ICommentQueryService {
     private final ICommentHotRankRepository commentHotRankRepository;
     private final IUserBaseRepository userBaseRepository;
 
+    /**
+     * 查询一级评论列表，并尽量顺手补齐置顶评论和回复预览。
+     *
+     * @param postId 帖子 ID，类型：{@link Long}
+     * @param viewerId 查看者 ID；匿名可为 `null`，类型：{@link Long}
+     * @param cursor 翻页游标，类型：{@link String}
+     * @param limit 页大小，类型：{@link Integer}
+     * @param preloadReplyLimit 每条根评论预加载的回复数，类型：{@link Integer}
+     * @return 一级评论分页结果，类型：{@link RootCommentPageVO}
+     */
     @Override
     public RootCommentPageVO listRootComments(Long postId, Long viewerId, String cursor, Integer limit, Integer preloadReplyLimit) {
         requireNonNull(postId, "postId");
         int normalizedLimit = normalizeLimit(limit, 20, 50);
         int preload = normalizePreload(preloadReplyLimit, 3, 10);
 
+        // 置顶评论和普通评论走两条读取路径，避免置顶项被分页逻辑吞掉。
         Long pinnedId = commentPinRepository.getPinnedCommentId(postId);
         RootCommentViewVO pinned = loadPinned(postId, pinnedId, preload, viewerId);
 
@@ -63,6 +77,15 @@ public class CommentQueryService implements ICommentQueryService {
                 .build();
     }
 
+    /**
+     * 查询某条一级评论下的回复列表。
+     *
+     * @param rootId 根评论 ID，类型：{@link Long}
+     * @param viewerId 查看者 ID；匿名可为 `null`，类型：{@link Long}
+     * @param cursor 翻页游标，类型：{@link String}
+     * @param limit 页大小，类型：{@link Integer}
+     * @return 回复分页结果，类型：{@link ReplyCommentPageVO}
+     */
     @Override
     public ReplyCommentPageVO listReplies(Long rootId, Long viewerId, String cursor, Integer limit) {
         requireNonNull(rootId, "rootId");
@@ -71,6 +94,7 @@ public class CommentQueryService implements ICommentQueryService {
         List<Long> ids = commentRepository.pageReplyCommentIds(rootId, cursor, normalizedLimit, viewerId);
         List<CommentViewVO> items = loadComments(ids);
         if (!items.isEmpty()) {
+            // 查看者不可见的回复要在这里过滤掉，避免把后续资料补齐浪费在无效行上。
             List<CommentViewVO> visible = new ArrayList<>(items.size());
             for (CommentViewVO v : items) {
                 if (visibleToViewer(v, viewerId)) {
@@ -89,6 +113,14 @@ public class CommentQueryService implements ICommentQueryService {
         return ReplyCommentPageVO.builder().items(items).nextCursor(nextCursor).build();
     }
 
+    /**
+     * 查询评论热榜。
+     *
+     * @param postId 帖子 ID，类型：{@link Long}
+     * @param limit 返回条数上限，类型：{@link Integer}
+     * @param preloadReplyLimit 每条根评论预加载的回复数，类型：{@link Integer}
+     * @return 评论热榜结果，类型：{@link CommentHotVO}
+     */
     @Override
     public CommentHotVO hotComments(Long postId, Integer limit, Integer preloadReplyLimit) {
         requireNonNull(postId, "postId");
@@ -102,6 +134,7 @@ public class CommentQueryService implements ICommentQueryService {
         List<Long> raw = commentHotRankRepository.topIds(postId, fetchCount);
         List<Long> hotIds = new ArrayList<>();
         if (raw != null) {
+            // 热榜里如果混进置顶评论，要主动去掉，避免前端重复展示。
             for (Long id : raw) {
                 if (id == null) {
                     continue;

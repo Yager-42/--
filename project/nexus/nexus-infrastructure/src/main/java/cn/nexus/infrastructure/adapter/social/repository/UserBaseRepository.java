@@ -20,20 +20,50 @@ import java.util.concurrent.TimeUnit;
 /**
  * 用户基础信息仓储 MyBatis 实现。
  *
+ * @author rr
  * @author codex
- * @since 2026-01-20
+ * @since 2026-01-21
  */
 @Repository
 public class UserBaseRepository implements IUserBaseRepository {
 
+    /**
+     * 用户基础信息 DAO。
+     */
     private final IUserBaseDao userBaseDao;
+
+    /**
+     * Redis 字符串值操作。
+     */
     private final ValueOperations<String, String> valueOps;
+
+    /**
+     * JSON 序列化工具。
+     */
     private final ObjectMapper objectMapper;
 
+    /**
+     * 用户基础信息缓存 Key 前缀。
+     */
     private static final String KEY_USER_BASE = "social:userbase:";
+
+    /**
+     * 用户名到用户 ID 的映射缓存 Key 前缀。
+     */
     private static final String KEY_USER_ID_BY_USERNAME = "social:userbase:uid:";
+
+    /**
+     * 缓存过期时间，单位：秒。
+     */
     private static final long TTL_SECONDS = 3600;
 
+    /**
+     * 创建用户基础信息仓储。
+     *
+     * @param userBaseDao 用户基础表 DAO，类型：{@link IUserBaseDao}
+     * @param redisTemplate Redis 模板，类型：{@link StringRedisTemplate}
+     * @param objectMapper JSON 序列化工具，类型：{@link ObjectMapper}
+     */
     @Autowired
     public UserBaseRepository(IUserBaseDao userBaseDao, StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
         this(userBaseDao, redisTemplate.opsForValue(), objectMapper);
@@ -50,7 +80,7 @@ public class UserBaseRepository implements IUserBaseRepository {
             return null;
         }
         String nickname = po.getNickname();
-        // 迁移期兼容：仅允许在这一处 fallback，避免补丁扩散到调用方
+        // 迁移期兼容：仅允许在仓储这一处 fallback，避免补丁扩散到调用方。
         if (nickname == null || nickname.isBlank()) {
             nickname = po.getUsername();
         }
@@ -81,7 +111,7 @@ public class UserBaseRepository implements IUserBaseRepository {
             String json = objectMapper.writeValueAsString(cacheValue);
             valueOps.set(userBaseKey(vo.getUserId()), json, TTL_SECONDS, TimeUnit.SECONDS);
         } catch (Exception ignored) {
-            // 缓存失败视为 miss，不影响主流程
+            // 缓存失败视为 miss，不影响主流程。
         }
     }
 
@@ -104,6 +134,12 @@ public class UserBaseRepository implements IUserBaseRepository {
         }
     }
 
+    /**
+     * 批量按用户 ID 查询基础信息。
+     *
+     * @param userIds 用户 ID 列表，类型：{@link List}&lt;{@link Long}&gt;
+     * @return 用户基础信息列表，类型：{@link List}&lt;{@link UserBriefVO}&gt;
+     */
     @Override
     public List<UserBriefVO> listByUserIds(List<Long> userIds) {
         if (userIds == null || userIds.isEmpty()) {
@@ -124,6 +160,7 @@ public class UserBaseRepository implements IUserBaseRepository {
             keys.add(userBaseKey(id));
         }
 
+        // 先批量读缓存，保持接口天然是批量语义，避免上层写成 N + 1。
         Map<Long, UserBriefVO> hit = new HashMap<>();
         List<Long> missIds = new ArrayList<>();
         try {
@@ -142,11 +179,12 @@ public class UserBaseRepository implements IUserBaseRepository {
                 missIds.addAll(ids);
             }
         } catch (Exception ignored) {
-            // Redis 异常视为 miss，仍回源 DB
+            // Redis 异常视为 miss，仍回源 DB。
             missIds.addAll(ids);
         }
 
         if (!missIds.isEmpty()) {
+            // 只回源 miss 的用户，命中缓存的数据不重复查库。
             List<UserBasePO> list = userBaseDao.selectByUserIds(missIds);
             if (list != null && !list.isEmpty()) {
                 for (UserBasePO po : list) {
@@ -169,6 +207,12 @@ public class UserBaseRepository implements IUserBaseRepository {
         return res;
     }
 
+    /**
+     * 批量按用户名查询基础信息。
+     *
+     * @param usernames 用户名列表，类型：{@link List}&lt;{@link String}&gt;
+     * @return 用户基础信息列表，类型：{@link List}&lt;{@link UserBriefVO}&gt;
+     */
     @Override
     public List<UserBriefVO> listByUsernames(List<String> usernames) {
         if (usernames == null || usernames.isEmpty()) {
@@ -189,6 +233,7 @@ public class UserBaseRepository implements IUserBaseRepository {
             keys.add(userIdByUsernameKey(name));
         }
 
+        // 第一段只做 `username -> userId` 解析，第二段再复用 `listByUserIds` 补完整名片。
         Map<String, Long> nameToUserId = new HashMap<>();
         List<String> missNames = new ArrayList<>();
         try {
@@ -233,6 +278,7 @@ public class UserBaseRepository implements IUserBaseRepository {
         }
 
         if (!missNames.isEmpty()) {
+            // 缓存没命中的用户名统一回表，顺手把 `username -> userId` 和名片缓存一起补齐。
             List<UserBasePO> list = userBaseDao.selectByUsernames(missNames);
             if (list != null && !list.isEmpty()) {
                 for (UserBasePO po : list) {

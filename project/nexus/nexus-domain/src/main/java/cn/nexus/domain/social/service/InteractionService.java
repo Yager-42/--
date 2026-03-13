@@ -27,7 +27,13 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 互动服务实现。
+ * 互动服务。
+ *
+ * <p>把点赞、评论、通知和轻量互动能力收口在一处，对外提供统一业务入口。</p>
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Slf4j
 @Service
@@ -49,6 +55,17 @@ public class InteractionService implements IInteractionService {
     private static final int COMMENT_STATUS_PENDING_REVIEW = 0;
     private static final int COMMENT_STATUS_NORMAL = 1;
 
+    /**
+     * 统一点赞/取消点赞入口。
+     *
+     * @param userId 操作人 ID，类型：{@link Long}
+     * @param targetId 目标 ID，类型：{@link Long}
+     * @param targetType 目标类型，类型：{@link String}
+     * @param type 互动类型，类型：{@link String}
+     * @param action 动作类型，类型：{@link String}
+     * @param requestId 请求幂等号，类型：{@link String}
+     * @return 点赞执行结果，类型：{@link ReactionResultVO}
+     */
     @Override
     public ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action, String requestId) {
         ReactionTargetVO target = parseTarget(targetId, targetType, type);
@@ -58,7 +75,7 @@ public class InteractionService implements IInteractionService {
         }
         ReactionResultVO res = reactionLikeService.applyReaction(userId, target, actionEnum, requestId);
 
-        // 评论点赞：把 delta 通过 MQ 回写到 interaction_comment.like_count，并驱动热榜刷新（最终一致）。
+        // 评论点赞的计数不是同步写回主表，而是发事件让聚合链路最终一致收敛。
         if (target != null && target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT) {
             Integer delta = res == null ? null : res.getDelta();
             if (delta != null && delta != 0 && targetId != null) {
@@ -72,18 +89,47 @@ public class InteractionService implements IInteractionService {
         return res;
     }
 
+    /**
+     * 查询当前用户的点赞状态。
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @param targetId 目标 ID，类型：{@link Long}
+     * @param targetType 目标类型，类型：{@link String}
+     * @param type 互动类型，类型：{@link String}
+     * @return 点赞状态结果，类型：{@link ReactionStateVO}
+     */
     @Override
     public ReactionStateVO reactionState(Long userId, Long targetId, String targetType, String type) {
         ReactionTargetVO target = parseTarget(targetId, targetType, type);
         return reactionLikeService.queryState(userId, target);
     }
 
+    /**
+     * 查询点赞人列表。
+     *
+     * @param targetId 目标 ID，类型：{@link Long}
+     * @param targetType 目标类型，类型：{@link String}
+     * @param type 互动类型，类型：{@link String}
+     * @param cursor 翻页游标，类型：{@link String}
+     * @param limit 页大小，类型：{@link Integer}
+     * @return 点赞人分页结果，类型：{@link ReactionLikersVO}
+     */
     @Override
     public ReactionLikersVO reactionLikers(Long targetId, String targetType, String type, String cursor, Integer limit) {
         ReactionTargetVO target = parseTarget(targetId, targetType, type);
         return reactionLikeService.queryLikers(target, cursor, limit);
     }
 
+    /**
+     * 创建评论或楼内回复。
+     *
+     * @param userId 评论人 ID，类型：{@link Long}
+     * @param postId 帖子 ID，类型：{@link Long}
+     * @param parentId 父评论 ID；一级评论时可为 `null`，类型：{@link Long}
+     * @param content 评论内容，类型：{@link String}
+     * @param commentId 指定评论 ID；为空时自动生成，类型：{@link Long}
+     * @return 评论执行结果，类型：{@link CommentResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public CommentResultVO comment(Long userId, Long postId, Long parentId, String content, Long commentId) {
@@ -98,6 +144,7 @@ public class InteractionService implements IInteractionService {
         Long replyToId = null;
 
         if (parentId != null) {
+            // 回复场景先把父评论校验清楚，再把 root / parent / replyTo 三个 ID 一次性算准。
             CommentBriefVO parent = commentRepository.getBrief(parentId);
             if (parent == null
                     || parent.getPostId() == null
@@ -122,6 +169,7 @@ public class InteractionService implements IInteractionService {
                 .extJson("{\"biz\":\"comment\",\"commentId\":" + cid + ",\"postId\":" + postId + ",\"parentId\":" + (parentId == null ? "null" : parentId) + "}")
                 .occurTime(nowMs)
                 .build();
+        // 评论先过风控，再决定直接发布还是进入待审核。
         RiskDecisionVO decision = riskService.decision(riskEvent);
         String riskResult = decision == null ? "PASS" : decision.getResult();
         if ("BLOCK".equalsIgnoreCase(riskResult) || "LIMIT".equalsIgnoreCase(riskResult) || "CHALLENGE".equalsIgnoreCase(riskResult)) {
@@ -141,10 +189,18 @@ public class InteractionService implements IInteractionService {
             publishReplyCountChanged(rootId, postId, +1L, nowMs);
         }
 
-        // @提及：后端从 content 解析 @username 并发布 COMMENT_MENTIONED（旁路，不允许影响评论创建）。
+        // `@username` 提及走旁路事件；即使发布失败，也不能反向拖垮评论主流程。
         return CommentResultVO.builder().commentId(cid).createTime(nowMs).status("OK").build();
     }
 
+    /**
+     * 应用评论风控复审结果。
+     *
+     * @param commentId 评论 ID，类型：{@link Long}
+     * @param finalResult 复审结果，类型：{@link String}
+     * @param reasonCode 原因码，类型：{@link String}
+     * @return 处理结果，类型：{@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO applyCommentRiskReviewResult(Long commentId, String finalResult, String reasonCode) {
@@ -161,6 +217,7 @@ public class InteractionService implements IInteractionService {
 
         Long nowMs = socialIdPort.now();
         if ("PASS".equalsIgnoreCase(finalResult)) {
+            // 复审通过后要补齐“正式发布”阶段该发的所有事件，保证审核前后行为一致。
             boolean approved = commentRepository.approvePending(commentId, nowMs);
             if (!approved) {
                 return ok(commentId, "SKIP", "已处理");
@@ -182,6 +239,14 @@ public class InteractionService implements IInteractionService {
         return ok(commentId, "SKIP", "未知结论");
     }
 
+    /**
+     * 置顶一级评论。
+     *
+     * @param userId 操作人 ID，类型：{@link Long}
+     * @param commentId 评论 ID，类型：{@link Long}
+     * @param postId 帖子 ID，类型：{@link Long}
+     * @return 处理结果，类型：{@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO pinComment(Long userId, Long commentId, Long postId) {
@@ -215,6 +280,13 @@ public class InteractionService implements IInteractionService {
         return ok(commentId, "PINNED", "已置顶");
     }
 
+    /**
+     * 删除评论。
+     *
+     * @param userId 操作人 ID，类型：{@link Long}
+     * @param commentId 评论 ID，类型：{@link Long}
+     * @return 处理结果，类型：{@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO deleteComment(Long userId, Long commentId) {
@@ -230,7 +302,7 @@ public class InteractionService implements IInteractionService {
             return fail(commentId, "NO_PERMISSION", "无权限");
         }
 
-        // 回复：只有 status=1->2 成功才允许扣 reply_count
+        // 回复删除只影响本楼的 reply_count，不需要清热榜和置顶。
         if (c.getRootId() != null) {
             boolean deleted = commentRepository.softDelete(commentId, nowMs);
             if (deleted) {
@@ -239,7 +311,7 @@ public class InteractionService implements IInteractionService {
             return ok(commentId, "DELETED", "已删除");
         }
 
-        // 一级评论：同步级联删楼内回复 + 清理热榜/置顶
+        // 一级评论删除要顺手级联清楼内回复，并把热榜和置顶状态一起回收。
         commentRepository.softDelete(commentId, nowMs);
         commentRepository.softDeleteByRootId(commentId, nowMs);
 
@@ -253,6 +325,13 @@ public class InteractionService implements IInteractionService {
         return ok(commentId, "DELETED", "已删除");
     }
 
+    /**
+     * 查询通知聚合列表。
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @param cursor 翻页游标，类型：{@link String}
+     * @return 通知列表结果，类型：{@link NotificationListVO}
+     */
     @Override
     public NotificationListVO notifications(Long userId, String cursor) {
         requireNonNull(userId, "userId");
@@ -262,6 +341,7 @@ public class InteractionService implements IInteractionService {
             return NotificationListVO.builder().notifications(List.of()).nextCursor(null).build();
         }
 
+        // 标题和摘要不直接存库，查询时按业务类型动态渲染，减少写链路冗余。
         List<NotificationVO> items = new ArrayList<>(raw.size());
         for (NotificationVO n : raw) {
             if (n == null) {
@@ -282,6 +362,13 @@ public class InteractionService implements IInteractionService {
         return NotificationListVO.builder().notifications(items).nextCursor(nextCursor).build();
     }
 
+    /**
+     * 标记单条通知已读。
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @param notificationId 通知 ID，类型：{@link Long}
+     * @return 处理结果，类型：{@link OperationResultVO}
+     */
     @Override
     public OperationResultVO readNotification(Long userId, Long notificationId) {
         requireNonNull(userId, "userId");
@@ -290,6 +377,12 @@ public class InteractionService implements IInteractionService {
         return ok(notificationId, "READ", "已读");
     }
 
+    /**
+     * 标记当前用户的全部通知已读。
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @return 处理结果，类型：{@link OperationResultVO}
+     */
     @Override
     public OperationResultVO readAllNotifications(Long userId) {
         requireNonNull(userId, "userId");
@@ -297,6 +390,15 @@ public class InteractionService implements IInteractionService {
         return ok(userId, "READ_ALL", "已全部已读");
     }
 
+    /**
+     * 模拟打赏。
+     *
+     * @param toUserId 收款人 ID，类型：{@link Long}
+     * @param amount 金额，类型：{@link BigDecimal}
+     * @param currency 币种，类型：{@link String}
+     * @param postId 关联帖子 ID，类型：{@link Long}
+     * @return 打赏结果，类型：{@link TipResultVO}
+     */
     @Override
     public TipResultVO tip(Long toUserId, BigDecimal amount, String currency, Long postId) {
         return TipResultVO.builder()
@@ -305,16 +407,38 @@ public class InteractionService implements IInteractionService {
                 .build();
     }
 
+    /**
+     * 创建投票。
+     *
+     * @param question 问题文本，类型：{@link String}
+     * @param options 选项列表，类型：{@link List}&lt;{@link String}&gt;
+     * @param allowMulti 是否允许多选，类型：{@link Boolean}
+     * @param expireSeconds 过期秒数，类型：{@link Integer}
+     * @return 投票创建结果，类型：{@link PollCreateResultVO}
+     */
     @Override
     public PollCreateResultVO createPoll(String question, List<String> options, Boolean allowMulti, Integer expireSeconds) {
         return PollCreateResultVO.builder().pollId(socialIdPort.nextId()).build();
     }
 
+    /**
+     * 提交投票。
+     *
+     * @param pollId 投票 ID，类型：{@link Long}
+     * @param optionIds 选项 ID 列表，类型：{@link List}&lt;{@link Long}&gt;
+     * @return 投票结果，类型：{@link PollVoteResultVO}
+     */
     @Override
     public PollVoteResultVO vote(Long pollId, List<Long> optionIds) {
         return PollVoteResultVO.builder().updatedStats("VOTED").build();
     }
 
+    /**
+     * 查询钱包余额。
+     *
+     * @param currencyType 币种，类型：{@link String}
+     * @return 钱包余额结果，类型：{@link WalletBalanceVO}
+     */
     @Override
     public WalletBalanceVO balance(String currencyType) {
         return WalletBalanceVO.builder()
@@ -330,7 +454,7 @@ public class InteractionService implements IInteractionService {
         if (targetId == null || targetTypeEnum == null || reactionTypeEnum == null) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
         }
-        // 业务约束：楼内回复不允许被点赞（只允许点赞一级评论）
+        // 楼内回复不开放点赞，避免把评论树的互动模型越做越复杂。
         if (targetTypeEnum == ReactionTargetTypeEnumVO.COMMENT) {
             CommentBriefVO c = commentRepository.getBrief(targetId);
             if (c == null || c.getStatus() == null || c.getStatus() != 1) {
@@ -435,6 +559,7 @@ public class InteractionService implements IInteractionService {
                 return;
             }
 
+            // 每个被提及的人发一条独立事件，消费侧才能按收件人做幂等和聚合。
             for (Long toUserId : mentionedUserIds) {
                 InteractionNotifyEvent event = new InteractionNotifyEvent();
                 event.setEventType(EventType.COMMENT_MENTIONED);

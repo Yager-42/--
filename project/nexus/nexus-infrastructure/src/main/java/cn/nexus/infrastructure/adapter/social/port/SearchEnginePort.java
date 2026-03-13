@@ -22,6 +22,15 @@ import org.elasticsearch.client.RestClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+/**
+ * Elasticsearch 搜索引擎端口实现。
+ *
+ * <p>这个类只做三件事：组装请求、调用 ES、把结果转回领域对象，不在这里掺业务兜底。</p>
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-02-02
+ */
 @Component
 @RequiredArgsConstructor
 public class SearchEnginePort implements ISearchEnginePort {
@@ -32,12 +41,19 @@ public class SearchEnginePort implements ISearchEnginePort {
     @Value("${search.es.indexAlias:zhiguang_content_index}")
     private String indexAlias;
 
+    /**
+     * 执行全文搜索。
+     *
+     * @param query 搜索请求，类型：{@link SearchEngineQueryVO}
+     * @return 搜索结果，类型：{@link SearchEngineResultVO}
+     */
     @Override
     public SearchEngineResultVO search(SearchEngineQueryVO query) {
         if (query == null || query.getKeyword() == null || query.getKeyword().isBlank()) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
         }
         try {
+            // 搜索和建议共用同一个索引别名，这样索引切换时上层不需要知道真实索引名。
             Request request = new Request("POST", "/" + indexAlias + "/_search");
             request.setJsonEntity(buildSearchRequestBody(query).toString());
             Response response = searchRestClient.performRequest(request);
@@ -50,6 +66,13 @@ public class SearchEnginePort implements ISearchEnginePort {
         }
     }
 
+    /**
+     * 执行联想建议查询。
+     *
+     * @param prefix 建议前缀，类型：{@link String}
+     * @param limit 返回数量上限，类型：{@code int}
+     * @return 建议词列表，类型：{@link List}&lt;{@link String}&gt;
+     */
     @Override
     public List<String> suggest(String prefix, int limit) {
         try {
@@ -63,12 +86,18 @@ public class SearchEnginePort implements ISearchEnginePort {
         }
     }
 
+    /**
+     * 新增或覆盖一条搜索文档。
+     *
+     * @param doc 搜索文档，类型：{@link SearchDocumentVO}
+     */
     @Override
     public void upsert(SearchDocumentVO doc) {
         if (doc == null || doc.getContentId() == null) {
             throw new IllegalArgumentException("SearchDocumentVO invalid");
         }
         try {
+            // 直接按 `contentId` 覆盖文档，避免外层先查再写造成额外往返。
             Request request = new Request("PUT", "/" + indexAlias + "/_doc/" + doc.getContentId());
             request.addParameter("refresh", "wait_for");
             request.setJsonEntity(toIndexBody(doc).toString());
@@ -78,6 +107,11 @@ public class SearchEnginePort implements ISearchEnginePort {
         }
     }
 
+    /**
+     * 软删除搜索文档。
+     *
+     * @param contentId 内容 ID，类型：{@link Long}
+     */
     @Override
     public void softDelete(Long contentId) {
         if (contentId == null) {
@@ -90,6 +124,7 @@ public class SearchEnginePort implements ISearchEnginePort {
             doc.put("status", "deleted");
             body.put("doc_as_upsert", true);
 
+            // 用 `_update` + `doc_as_upsert`，保证“索引里原本没有文档”时也能落下删除标记。
             Request request = new Request("POST", "/" + indexAlias + "/_update/" + contentId);
             request.addParameter("refresh", "wait_for");
             request.setJsonEntity(body.toString());
@@ -99,6 +134,13 @@ public class SearchEnginePort implements ISearchEnginePort {
         }
     }
 
+    /**
+     * 批量更新作者昵称。
+     *
+     * @param authorId 作者 ID，类型：{@link Long}
+     * @param authorNickname 最新昵称，类型：{@link String}
+     * @return 受影响文档数，类型：{@code long}
+     */
     @Override
     public long updateAuthorNickname(Long authorId, String authorNickname) {
         if (authorId == null) {
@@ -115,6 +157,7 @@ public class SearchEnginePort implements ISearchEnginePort {
             ObjectNode term = query.putObject("term");
             term.put("author_id", authorId);
 
+            // `update_by_query` 让昵称刷新一次命中作者全部文档，不需要先分页再逐条回写。
             Request request = new Request("POST", "/" + indexAlias + "/_update_by_query");
             request.addParameter("conflicts", "proceed");
             request.addParameter("refresh", "true");
@@ -134,6 +177,7 @@ public class SearchEnginePort implements ISearchEnginePort {
         root.put("track_total_hits", true);
         root.put("size", limit + 1);
 
+        // 查询体分三层：全文匹配、过滤条件、函数打分。这样相关性和业务排序可以分开调。
         ObjectNode functionScore = root.putObject("query").putObject("function_score");
         ObjectNode bool = functionScore.putObject("query").putObject("bool");
         ArrayNode must = bool.putArray("must");
@@ -190,6 +234,7 @@ public class SearchEnginePort implements ISearchEnginePort {
         sort.addObject().putObject("view_count").put("order", "desc");
         sort.addObject().putObject("content_id").put("order", "desc");
 
+        // `search_after` 只在游标合法时追加，避免第一页和翻页逻辑混在一起。
         ArrayNode after = decodeAfter(query.getAfter());
         if (after != null && !after.isEmpty()) {
             root.set("search_after", after);
@@ -229,6 +274,7 @@ public class SearchEnginePort implements ISearchEnginePort {
                         .build());
             }
             if (hasMore && upper > 0) {
+                // 游标总是取“最后一条可见结果”的 sort 值，保证下一页从它后面继续读。
                 JsonNode lastVisible = hitsNode.get(upper - 1);
                 nextAfter = encodeAfter(lastVisible.path("sort"));
             }
@@ -263,6 +309,7 @@ public class SearchEnginePort implements ISearchEnginePort {
         if (source == null || source.isMissingNode() || source.isNull()) {
             return null;
         }
+        // 字段映射保持一一对应，避免把 ES 文档结构偷偷夹带成领域规则。
         return SearchDocumentVO.builder()
                 .contentId(safeLong(source.get("content_id")))
                 .contentType(safeText(source.get("content_type")))
@@ -289,6 +336,7 @@ public class SearchEnginePort implements ISearchEnginePort {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("content_id", doc.getContentId());
         root.put("content_type", doc.getContentType() == null ? "POST" : doc.getContentType());
+        // 空列表统一写成空数组，避免同一字段一会儿是 null，一会儿是 []。
         putNullable(root, "title", doc.getTitle());
         putNullable(root, "description", doc.getDescription());
         putNullable(root, "body", doc.getBody());
@@ -372,6 +420,7 @@ public class SearchEnginePort implements ISearchEnginePort {
                 return null;
             }
             ArrayNode array = objectMapper.createArrayNode();
+            // 顺序必须和 `sort` 完全一致，否则翻页会跳数据或重复数据。
             array.add(Double.parseDouble(parts[0]));
             array.add(Long.parseLong(parts[1]));
             array.add(Long.parseLong(parts[2]));

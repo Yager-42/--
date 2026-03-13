@@ -25,6 +25,15 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.util.List;
 
+/**
+ * 内容详情查询服务。
+ *
+ * <p>本地只缓存“稳定快照”，作者资料和点赞数这种动态字段每次现查，避免把旧展示值长期卡在本地缓存里。</p>
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-03
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -43,16 +52,24 @@ public class ContentDetailQueryService {
 
     private final SingleFlight singleFlight = new SingleFlight();
 
+    /**
+     * 查询内容详情。
+     *
+     * @param postId 帖子 ID，类型：{@link Long}
+     * @return 详情响应，类型：{@link ContentDetailResponseDTO}
+     */
     public ContentDetailResponseDTO query(Long postId) {
         if (postId == null) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "postId is required");
         }
 
+        // 本地缓存只存稳定字段；命中后仍会在 `buildResponse` 阶段现查动态展示数据。
         StableSnapshot local = localCache.getIfPresent(postId);
         if (local != null) {
             return buildResponse(local);
         }
 
+        // `SingleFlight` 收口并发 miss，避免同一篇帖子被瞬时并发打爆主仓储。
         StableSnapshot snapshot = singleFlight.execute(detailQueryInflightKey(postId), () -> {
             StableSnapshot secondCheck = localCache.getIfPresent(postId);
             if (secondCheck != null) {
@@ -84,6 +101,11 @@ public class ContentDetailQueryService {
         return buildResponse(snapshot);
     }
 
+    /**
+     * 失效本地详情缓存。
+     *
+     * @param postId 帖子 ID，类型：{@link Long}
+     */
     public void evictLocal(Long postId) {
         if (postId == null) {
             return;
@@ -132,6 +154,7 @@ public class ContentDetailQueryService {
         if (snapshot == null) {
             throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
         }
+        // 昵称、头像、点赞数都是动态字段，不跟稳定快照一起长时间缓存。
         UserBriefVO author = loadAuthor(snapshot.getAuthorId());
         Long likeCount = loadLikeCount(snapshot.getPostId());
         return ContentDetailResponseDTO.builder()

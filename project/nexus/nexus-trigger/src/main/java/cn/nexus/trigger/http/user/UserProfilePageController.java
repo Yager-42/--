@@ -23,7 +23,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 个人主页聚合接口：Profile + 关系统计 + 风控能力。
+ * 个人主页聚合接口：Profile、关系统计和风控能力的统一出口。
+ *
+ * <p>这类接口天然是“读时拼装”场景，所以控制器只负责接收查询条件并把聚合结果转成前端 DTO，不把聚合规则散落到
+ * 触发层。</p>
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-02-03
  */
 @Slf4j
 @RestController
@@ -34,6 +41,12 @@ public class UserProfilePageController implements IUserProfilePageApi {
     @Resource
     private UserProfilePageQueryService userProfilePageQueryService;
 
+    /**
+     * 查询目标用户的主页聚合数据。
+     *
+     * @param requestDTO 主页查询请求，类型：{@link UserProfileQueryRequestDTO}
+     * @return 主页聚合结果，类型：{@link Response}&lt;{@link UserProfilePageResponseDTO}&gt;
+     */
     @GetMapping("/user/profile/page")
     @Override
     public Response<UserProfilePageResponseDTO> profilePage(UserProfileQueryRequestDTO requestDTO) {

@@ -17,13 +17,26 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * 用户域服务：Profile/Settings/Status 的最小写入实现。
+ * 用户域服务：收口 `Profile / Settings / Status` 这几条最小写链路。
+ *
+ * <p>这个服务故意不做“自动补建用户”之类的兜底，边界错误就让它暴露出来。</p>
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-02-03
  */
 @Service
 @RequiredArgsConstructor
 public class UserService {
 
+    /**
+     * 正常可写状态。
+     */
     public static final String STATUS_ACTIVE = "ACTIVE";
+
+    /**
+     * 已停用状态。
+     */
     public static final String STATUS_DEACTIVATED = "DEACTIVATED";
 
     private final IUserProfileRepository userProfileRepository;
@@ -32,7 +45,13 @@ public class UserService {
     private final IUserEventOutboxPort userEventOutboxPort;
 
     /**
-     * 用户自助更新 Profile（只允许更新 nickname/avatarUrl）。
+     * 用户自助更新 `Profile`。
+     *
+     * <p>只允许更新 `nickname / avatarUrl`；`null` 表示不改，昵称空白字符串一律非法。</p>
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @param patch Profile Patch 参数，类型：{@link UserProfilePatchVO}
+     * @return 操作结果，类型：{@link OperationResultVO}
      */
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO updateMyProfile(Long userId, UserProfilePatchVO patch) {
@@ -41,14 +60,17 @@ public class UserService {
         }
         ensureActiveForUserWrite(userId);
 
+        // 先拿当前真值，再决定这次请求到底是“值没变”还是“真的要更新”
         UserProfileVO before = requireProfile(userId);
         validateNicknamePatch(patch.getNickname());
 
+        // 先把“是否要写库”和“是否要发昵称变更事件”拆开算清楚，避免混在一起写出补丁逻辑
         boolean needUpdate = patch.getNickname() != null || patch.getAvatarUrl() != null;
         boolean nicknameChanged = patch.getNickname() != null && !eq(patch.getNickname(), before.getNickname());
         Long tsMs = nicknameChanged ? System.currentTimeMillis() : null;
 
         if (needUpdate) {
+            // 仓储层会处理“值相同导致 affectedRows = 0”的情况，这里只认用户是否真实存在
             boolean ok = userProfileRepository.updatePatch(userId, patch.getNickname(), patch.getAvatarUrl());
             if (!ok) {
                 throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
@@ -56,6 +78,7 @@ public class UserService {
         }
 
         if (nicknameChanged) {
+            // 先落 outbox，再等事务提交后尝试投递，避免消息比数据库更早被消费者看到
             userEventOutboxPort.saveNicknameChanged(userId, tsMs);
             afterCommit(userEventOutboxPort::tryPublishPending);
         }
@@ -64,7 +87,13 @@ public class UserService {
     }
 
     /**
-     * 用户自助更新隐私设置（当前仅 needApproval）。
+     * 用户自助更新隐私设置。
+     *
+     * <p>当前只支持 `needApproval`；规则和 `Profile` 一样，用户不存在就直接报错，不在这里偷偷补数据。</p>
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @param needApproval 是否需要关注审批，类型：{@link Boolean}
+     * @return 操作结果，类型：{@link OperationResultVO}
      */
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO updateMyPrivacy(Long userId, Boolean needApproval) {
@@ -72,7 +101,7 @@ public class UserService {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "userId/needApproval 不能为空");
         }
         ensureActiveForUserWrite(userId);
-        // 与 Profile 一致：user_base 不存在视为用户不存在，禁止在这里打补丁自动创建
+        // 与 Profile 写链路保持同一条边界：user_base 不存在就报错，不做自动创建
         requireProfile(userId);
 
         userPrivacyRepository.upsertNeedApproval(userId, needApproval);
@@ -80,7 +109,12 @@ public class UserService {
     }
 
     /**
-     * 网关同步更新（update-only）：不负责创建用户；不拦 DEACTIVATED（internal 例外允许写）。
+     * 网关内部同步更新。
+     *
+     * <p>这是一个 `update-only` 入口：不负责创建用户；同时内部同步允许改停用用户，所以这里不走普通写链路的停用拦截。</p>
+     *
+     * @param req 内部同步请求，类型：{@link UserInternalUpsertRequestVO}
+     * @return 操作结果，类型：{@link OperationResultVO}
      */
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO internalUpsert(UserInternalUpsertRequestVO req) {
@@ -93,6 +127,7 @@ public class UserService {
         validateNicknamePatch(req.getNickname());
         validateStatusPatch(req.getStatus());
 
+        // 先确认目标用户真的存在，再做 username 一致性校验，避免把错误请求写成脏数据
         Long userId = req.getUserId();
         UserProfileVO before = userProfileRepository.get(userId);
         if (before == null) {
@@ -107,6 +142,7 @@ public class UserService {
         Long tsMs = nicknameChanged ? System.currentTimeMillis() : null;
 
         if (needUpdateProfile) {
+            // Profile 真值和隐私/状态拆开写，避免把所有字段硬塞进一个大 Patch
             boolean ok = userProfileRepository.updatePatch(userId, req.getNickname(), req.getAvatarUrl());
             if (!ok) {
                 throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
@@ -121,6 +157,7 @@ public class UserService {
         }
 
         if (nicknameChanged) {
+            // 内部同步改昵称也要走同一套 outbox 链路，保证搜索和读侧最终一致
             userEventOutboxPort.saveNicknameChanged(userId, tsMs);
             afterCommit(userEventOutboxPort::tryPublishPending);
         }
@@ -176,4 +213,3 @@ public class UserService {
         return a == null ? b == null : a.equals(b);
     }
 }
-

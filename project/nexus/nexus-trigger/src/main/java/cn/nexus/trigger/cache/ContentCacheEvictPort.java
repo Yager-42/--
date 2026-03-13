@@ -3,7 +3,6 @@ package cn.nexus.trigger.cache;
 import cn.nexus.domain.social.adapter.port.IContentCacheEvictPort;
 import cn.nexus.infrastructure.adapter.social.repository.ContentRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardRepository;
-import cn.nexus.infrastructure.adapter.social.repository.FeedCardStatRepository;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.trigger.http.social.support.ContentDetailQueryService;
 import cn.nexus.trigger.mq.config.ContentCacheEvictConfig;
@@ -22,13 +21,11 @@ import java.util.concurrent.TimeUnit;
 public class ContentCacheEvictPort implements IContentCacheEvictPort {
 
     private static final String POST_REDIS_KEY_PREFIX = "interact:content:post:";
-    private static final String DETAIL_REDIS_KEY_PREFIX = "interact:content:detail:";
     private static final String FEED_CARD_REDIS_KEY_PREFIX = "feed:card:";
-    private static final String FEED_CARD_STAT_REDIS_KEY_PREFIX = "feed:card:stat:";
 
     private static final long DELAY_MS = 1000L;
 
-    private static final ScheduledExecutorService SCHEDULER = Executors.newSingleThreadScheduledExecutor(r -> {
+    private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(4, r -> {
         Thread t = new Thread(r, "content-cache-evict");
         t.setDaemon(true);
         return t;
@@ -39,7 +36,6 @@ public class ContentCacheEvictPort implements IContentCacheEvictPort {
     private final ContentRepository contentRepository;
     private final ContentDetailQueryService contentDetailQueryService;
     private final FeedCardRepository feedCardRepository;
-    private final FeedCardStatRepository feedCardStatRepository;
 
     @Override
     public void evictPost(Long postId) {
@@ -47,23 +43,7 @@ public class ContentCacheEvictPort implements IContentCacheEvictPort {
             return;
         }
 
-        // local first
-        try {
-            contentRepository.evictLocalPostCache(postId);
-        } catch (Exception ignored) {
-        }
-        try {
-            contentDetailQueryService.evictLocal(postId);
-        } catch (Exception ignored) {
-        }
-        try {
-            feedCardRepository.evictLocal(postId);
-        } catch (Exception ignored) {
-        }
-        try {
-            feedCardStatRepository.evictLocal(postId);
-        } catch (Exception ignored) {
-        }
+        deleteLocal(postId);
 
         // redis double delete
         deleteRedis(postId);
@@ -80,30 +60,36 @@ public class ContentCacheEvictPort implements IContentCacheEvictPort {
         } catch (Exception ignored) {
         }
         try {
-            stringRedisTemplate.delete(DETAIL_REDIS_KEY_PREFIX + postId);
-        } catch (Exception ignored) {
-        }
-        try {
             feedCardRepository.evictRedis(postId);
-        } catch (Exception ignored) {
-        }
-        try {
-            feedCardStatRepository.evictRedis(postId);
         } catch (Exception ignored) {
         }
         try {
             stringRedisTemplate.delete(FEED_CARD_REDIS_KEY_PREFIX + postId);
         } catch (Exception ignored) {
         }
-        try {
-            stringRedisTemplate.delete(FEED_CARD_STAT_REDIS_KEY_PREFIX + postId);
-        } catch (Exception ignored) {
-        }
     }
 
     private void scheduleDelayDelete(Long postId) {
         try {
-            SCHEDULER.schedule(() -> deleteRedis(postId), DELAY_MS, TimeUnit.MILLISECONDS);
+            SCHEDULER.schedule(() -> {
+                deleteRedis(postId);
+                deleteLocal(postId);
+            }, DELAY_MS, TimeUnit.MILLISECONDS);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void deleteLocal(Long postId) {
+        try {
+            contentRepository.evictLocalPostCache(postId);
+        } catch (Exception ignored) {
+        }
+        try {
+            contentDetailQueryService.evictLocal(postId);
+        } catch (Exception ignored) {
+        }
+        try {
+            feedCardRepository.evictLocal(postId);
         } catch (Exception ignored) {
         }
     }

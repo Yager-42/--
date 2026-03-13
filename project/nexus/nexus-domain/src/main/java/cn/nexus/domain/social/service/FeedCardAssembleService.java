@@ -1,14 +1,13 @@
 package cn.nexus.domain.social.service;
 
+import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
-import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
@@ -30,7 +29,7 @@ import org.springframework.stereotype.Service;
 public class FeedCardAssembleService {
 
     private final IFeedCardRepository feedCardRepository;
-    private final IFeedCardStatRepository feedCardStatRepository;
+    private final IReactionCachePort reactionCachePort;
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
     private final IReactionRepository reactionRepository;
@@ -52,7 +51,7 @@ public class FeedCardAssembleService {
         }
 
         Map<Long, FeedCardBaseVO> baseMap = loadBaseCards(candidateIds);
-        Map<Long, FeedCardStatVO> statMap = loadStatCards(candidateIds);
+        Map<Long, Long> likeCountMap = loadLikeCounts(candidateIds);
         Map<Long, UserBriefVO> authorMap = loadAuthorBriefs(baseMap.values());
 
         Set<Long> likedSet = Set.of();
@@ -75,7 +74,7 @@ public class FeedCardAssembleService {
             if (base == null) {
                 continue;
             }
-            FeedCardStatVO stat = statMap.get(postId);
+            Long likeCount = likeCountMap.get(postId);
             UserBriefVO author = authorMap.get(base.getAuthorId());
             boolean seen = userId != null && seenSet.contains(postId);
             items.add(FeedItemVO.builder()
@@ -89,7 +88,7 @@ public class FeedCardAssembleService {
                     .mediaInfo(base.getMediaInfo())
                     .publishTime(base.getPublishTime())
                     .source(source)
-                    .likeCount(stat == null ? 0L : stat.getLikeCount())
+                    .likeCount(likeCount == null ? 0L : likeCount)
                     .liked(userId != null && likedSet.contains(postId))
                     .followed(userId != null && followedSet.contains(base.getAuthorId()))
                     .seen(seen)
@@ -103,10 +102,6 @@ public class FeedCardAssembleService {
 
     private Map<Long, FeedCardBaseVO> loadBaseCards(List<Long> candidateIds) {
         return new HashMap<>(feedCardRepository.getOrLoadBatch(candidateIds, this::rebuildBaseCards));
-    }
-
-    private Map<Long, FeedCardStatVO> loadStatCards(List<Long> candidateIds) {
-        return new HashMap<>(feedCardStatRepository.getOrLoadBatch(candidateIds, this::rebuildStatCards));
     }
 
     private Map<Long, FeedCardBaseVO> rebuildBaseCards(List<Long> missIds) {
@@ -140,24 +135,30 @@ public class FeedCardAssembleService {
         return rebuilt;
     }
 
-    private Map<Long, FeedCardStatVO> rebuildStatCards(List<Long> missIds) {
-        if (missIds == null || missIds.isEmpty()) {
+    private Map<Long, Long> loadLikeCounts(List<Long> candidateIds) {
+        if (candidateIds == null || candidateIds.isEmpty()) {
             return Map.of();
         }
-        Map<Long, FeedCardStatVO> rebuilt = new HashMap<>();
-        for (Long postId : missIds) {
-            ReactionTargetVO target = ReactionTargetVO.builder()
+
+        List<ReactionTargetVO> targets = new ArrayList<>(candidateIds.size());
+        for (Long postId : candidateIds) {
+            if (postId == null) {
+                continue;
+            }
+            targets.add(ReactionTargetVO.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(postId)
                     .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            FeedCardStatVO stat = FeedCardStatVO.builder()
-                    .postId(postId)
-                    .likeCount(reactionRepository.getCount(target))
-                    .build();
-            rebuilt.put(postId, stat);
+                    .build());
         }
-        return rebuilt;
+
+        Map<String, Long> countByTag = reactionCachePort.batchGetCount(targets);
+        Map<Long, Long> likeCountMap = new HashMap<>(candidateIds.size());
+        for (ReactionTargetVO target : targets) {
+            Long count = countByTag.get(target.hashTag());
+            likeCountMap.put(target.getTargetId(), count == null ? 0L : count);
+        }
+        return likeCountMap;
     }
 
     private Map<Long, UserBriefVO> loadAuthorBriefs(Collection<FeedCardBaseVO> cards) {

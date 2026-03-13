@@ -145,13 +145,84 @@ public class ContentRepository implements IContentRepository {
             }
         }
 
-        ContentPostEntity post = toPostEntity(contentPostDao.selectById(postId));
-        fillPostTypes(post == null ? List.of() : List.of(post));
-        fillPostContent(post == null ? List.of() : List.of(post));
+        String redisKey = postRedisKey(postId);
+        String cached = null;
+        try {
+            cached = stringRedisTemplate.opsForValue().get(redisKey);
+        } catch (Exception e) {
+            log.warn("findPost redis get failed, key={}", redisKey, e);
+        }
+
+        if (POST_REDIS_NULL_VALUE.equals(cached)) {
+            return null;
+        }
+        if (cached != null) {
+            if (cached.isBlank()) {
+                deleteRedisQuietly(redisKey);
+            } else {
+                ContentPostEntity entity = parsePostCache(cached);
+                if (entity != null && entity.getPostId() != null) {
+                    if (hot) {
+                        postCache.put(postId, copyPost(entity));
+                    }
+                    tryExtendHotCacheTtl(postId, entity);
+                    return copyPost(entity);
+                }
+                deleteRedisQuietly(redisKey);
+            }
+        }
+
+        ContentPostEntity post = singleFlight.execute(findPostInflightKey(postId), () -> {
+            String secondCheck = null;
+            try {
+                secondCheck = stringRedisTemplate.opsForValue().get(redisKey);
+            } catch (Exception ignored) {
+            }
+
+            if (POST_REDIS_NULL_VALUE.equals(secondCheck)) {
+                return null;
+            }
+            if (secondCheck != null) {
+                if (secondCheck.isBlank()) {
+                    deleteRedisQuietly(redisKey);
+                } else {
+                    ContentPostEntity entity = parsePostCache(secondCheck);
+                    if (entity != null && entity.getPostId() != null) {
+                        return entity;
+                    }
+                    deleteRedisQuietly(redisKey);
+                }
+            }
+
+            ContentPostEntity rebuilt = toPostEntity(contentPostDao.selectById(postId));
+            fillPostTypes(rebuilt == null ? List.of() : List.of(rebuilt));
+            fillPostContent(rebuilt == null ? List.of() : List.of(rebuilt));
+            if (rebuilt == null) {
+                try {
+                    stringRedisTemplate.opsForValue().set(redisKey, POST_REDIS_NULL_VALUE, nullTtlSeconds(), TimeUnit.SECONDS);
+                } catch (Exception ignored) {
+                    // ignore
+                }
+                return null;
+            }
+
+            String json = serializePostCache(rebuilt);
+            if (json != null) {
+                try {
+                    stringRedisTemplate.opsForValue().set(redisKey, json, positiveTtlSeconds(), TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    log.warn("findPost redis set failed, key={}", redisKey, e);
+                }
+            }
+            return rebuilt;
+        });
         if (hot && post != null) {
             postCache.put(postId, copyPost(post));
         }
-        return post;
+        if (post != null) {
+            tryExtendHotCacheTtl(postId, post);
+        }
+        return post == null ? null : copyPost(post);
     }
 
     @Override
@@ -239,7 +310,7 @@ public class ContentRepository implements IContentRepository {
             }
 
             if (!dbMissIds.isEmpty()) {
-                Map<Long, ContentPostEntity> rebuilt = singleFlight.execute(normalizeInflightKey(dbMissIds),
+                Map<Long, ContentPostEntity> rebuilt = singleFlight.execute(listPostsInflightKey(dbMissIds),
                         () -> rebuildPosts(dbMissIds, valueOps));
                 if (rebuilt != null && !rebuilt.isEmpty()) {
                     for (Map.Entry<Long, ContentPostEntity> entry : rebuilt.entrySet()) {
@@ -255,7 +326,7 @@ public class ContentRepository implements IContentRepository {
         List<ContentPostEntity> ordered = new ArrayList<>(postIds.size());
         for (Long id : postIds) {
             ContentPostEntity entity = resultById.get(id);
-            if (entity != null) {
+            if (entity != null && entity.getStatus() != null && entity.getStatus() == 2) {
                 ordered.add(copyPost(entity));
                 tryExtendHotCacheTtl(id, entity);
             }
@@ -552,21 +623,12 @@ public class ContentRepository implements IContentRepository {
                 postCache.put(id, copyPost(entity));
             }
             try {
-                String json = objectMapper.writeValueAsString(entity);
-                valueOps.set(postRedisKey(id), json, positiveTtlSeconds(), TimeUnit.SECONDS);
+                String json = serializePostCache(entity);
+                if (json != null) {
+                    valueOps.set(postRedisKey(id), json, positiveTtlSeconds(), TimeUnit.SECONDS);
+                }
             } catch (Exception ignored) {
                 // 缓存写失败视为 miss，不影响主链路。
-            }
-        }
-
-        for (Long id : unresolvedIds) {
-            if (id == null || dbHits.containsKey(id)) {
-                continue;
-            }
-            try {
-                valueOps.set(postRedisKey(id), POST_REDIS_NULL_VALUE, nullTtlSeconds(), TimeUnit.SECONDS);
-            } catch (Exception ignored) {
-                // ignore
             }
         }
         return resolved;
@@ -633,10 +695,6 @@ public class ContentRepository implements IContentRepository {
             if (ttl == null || ttl <= 0 || ttl >= targetTtlSeconds) {
                 return;
             }
-            String raw = stringRedisTemplate.opsForValue().get(key);
-            if (raw == null || POST_REDIS_NULL_VALUE.equals(raw)) {
-                return;
-            }
             stringRedisTemplate.expire(key, targetTtlSeconds, TimeUnit.SECONDS);
         } catch (Exception ignored) {
             // 热点延寿失败不影响主链路。
@@ -651,6 +709,26 @@ public class ContentRepository implements IContentRepository {
     private long nullTtlSeconds() {
         return POST_REDIS_NULL_TTL_SECONDS
                 + ThreadLocalRandom.current().nextLong(POST_REDIS_NULL_TTL_JITTER_SECONDS + 1);
+    }
+
+    private String serializePostCache(ContentPostEntity post) {
+        if (post == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(post);
+        } catch (Exception e) {
+            log.warn("serialize post cache failed, postId={}", post.getPostId(), e);
+            return null;
+        }
+    }
+
+    private String findPostInflightKey(Long postId) {
+        return "findPost:" + postId;
+    }
+
+    private String listPostsInflightKey(List<Long> ids) {
+        return "listPosts:" + normalizeInflightKey(ids);
     }
 
     private String normalizeInflightKey(List<Long> ids) {

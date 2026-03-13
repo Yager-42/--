@@ -2,6 +2,7 @@ package cn.nexus.domain.social.adapter.port;
 
 import cn.nexus.domain.social.model.valobj.ReactionApplyResultVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -18,6 +19,8 @@ public interface IReactionCachePort {
     void clearOpsSnapshot(ReactionTargetVO target);
 
     long getCount(ReactionTargetVO target);
+
+    Map<String, Long> batchGetCount(List<ReactionTargetVO> targets);
 
     long getCountFromRedis(ReactionTargetVO target);
 

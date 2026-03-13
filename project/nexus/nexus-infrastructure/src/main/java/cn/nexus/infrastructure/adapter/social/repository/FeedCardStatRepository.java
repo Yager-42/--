@@ -1,7 +1,12 @@
 package cn.nexus.infrastructure.adapter.social.repository;
 
+import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashSet;
@@ -13,11 +18,40 @@ import org.springframework.stereotype.Repository;
 @Repository
 @RequiredArgsConstructor
 public class FeedCardStatRepository implements IFeedCardStatRepository {
+    private final IReactionCachePort reactionCachePort;
     private final SingleFlight singleFlight = new SingleFlight();
 
     @Override
     public Map<Long, FeedCardStatVO> getBatch(List<Long> postIds) {
-        return Map.of();
+        if (postIds == null || postIds.isEmpty()) {
+            return Map.of();
+        }
+
+        List<ReactionTargetVO> targets = new java.util.ArrayList<>(postIds.size());
+        for (Long postId : postIds) {
+            if (postId == null) {
+                continue;
+            }
+            targets.add(ReactionTargetVO.builder()
+                    .targetType(ReactionTargetTypeEnumVO.POST)
+                    .targetId(postId)
+                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .build());
+        }
+        if (targets.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, Long> countByTag = reactionCachePort.batchGetCount(targets);
+        Map<Long, FeedCardStatVO> result = new HashMap<>(targets.size());
+        for (ReactionTargetVO target : targets) {
+            Long count = countByTag.get(target.hashTag());
+            result.put(target.getTargetId(), FeedCardStatVO.builder()
+                    .postId(target.getTargetId())
+                    .likeCount(count == null ? 0L : count)
+                    .build());
+        }
+        return result;
     }
 
     @Override
@@ -36,7 +70,7 @@ public class FeedCardStatRepository implements IFeedCardStatRepository {
 
     @Override
     public void saveBatch(List<FeedCardStatVO> stats) {
-        // stat 默认不做独立缓存，保留接口避免上层改动扩散。
+        // 点赞计数由 ReactionCachePort 统一维护。
     }
 
     public void evictLocal(Long postId) {

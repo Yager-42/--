@@ -1,7 +1,6 @@
 package cn.nexus.trigger.http.social.support;
 
 import cn.nexus.api.social.content.dto.ContentDetailResponseDTO;
-import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
@@ -13,7 +12,6 @@ import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.infrastructure.support.SingleFlight;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.AllArgsConstructor;
@@ -22,34 +20,21 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ContentDetailQueryService {
 
-    private static final String REDIS_KEY_PREFIX = "interact:content:detail:";
-    private static final String REDIS_NULL = "NULL";
-
     private static final Duration LOCAL_TTL = Duration.ofHours(1);
-    // 详情稳定快照写入 Redis L2，TTL 固定为 24h + 0~1h 抖动，避免固定时刻集中过期。
-    private static final long REDIS_TTL_SECONDS = 24 * 60 * 60;
-    private static final long REDIS_TTL_JITTER_SECONDS = 60 * 60;
-    // 负缓存只缓存 NOT_FOUND，TTL 固定为 90s；命中空串或坏 JSON 时先删坏 key，再按 miss 处理。
-    private static final Duration REDIS_NULL_TTL = Duration.ofSeconds(90);
 
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
     private final IReactionCachePort reactionCachePort;
-    private final IPostContentKvPort postContentKvPort;
-    private final StringRedisTemplate stringRedisTemplate;
-    private final ObjectMapper objectMapper;
 
     private final Cache<Long, StableSnapshot> localCache = Caffeine.newBuilder()
             .maximumSize(100_000)
@@ -68,30 +53,33 @@ public class ContentDetailQueryService {
             return buildResponse(local);
         }
 
-        String redisKey = redisKey(postId);
-        String cached = null;
-        try {
-            cached = stringRedisTemplate.opsForValue().get(redisKey);
-        } catch (Exception e) {
-            log.warn("content detail redis get failed, key={}", redisKey, e);
-        }
-        if (REDIS_NULL.equals(cached)) {
-            throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
-        }
-        if (cached != null) {
-            if (cached.isBlank()) {
-                deleteRedisQuietly(redisKey);
-            } else {
-                StableSnapshot snapshot = parse(cached);
-                if (snapshot != null) {
-                    localCache.put(postId, snapshot);
-                    return buildResponse(snapshot);
-                }
-                deleteRedisQuietly(redisKey);
+        StableSnapshot snapshot = singleFlight.execute(detailQueryInflightKey(postId), () -> {
+            StableSnapshot secondCheck = localCache.getIfPresent(postId);
+            if (secondCheck != null) {
+                return secondCheck;
             }
-        }
 
-        StableSnapshot snapshot = singleFlight.execute(String.valueOf(postId), () -> rebuildSnapshot(postId, redisKey));
+            ContentPostEntity post = contentRepository.findPost(postId);
+            if (post == null || post.getPostId() == null) {
+                throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
+            }
+            return StableSnapshot.builder()
+                    .postId(post.getPostId())
+                    .authorId(post.getUserId())
+                    .title(post.getTitle())
+                    .content(post.getContentText() == null ? "" : post.getContentText())
+                    .summary(post.getSummary())
+                    .summaryStatus(post.getSummaryStatus())
+                    .mediaType(post.getMediaType())
+                    .mediaInfo(post.getMediaInfo())
+                    .locationInfo(post.getLocationInfo())
+                    .status(post.getStatus())
+                    .visibility(post.getVisibility())
+                    .versionNum(post.getVersionNum())
+                    .edited(post.getEdited())
+                    .createTime(post.getCreateTime())
+                    .build();
+        });
         localCache.put(postId, snapshot);
         return buildResponse(snapshot);
     }
@@ -136,103 +124,8 @@ public class ContentDetailQueryService {
         }
     }
 
-    private String loadContent(String contentUuid) {
-        if (contentUuid == null || contentUuid.isBlank()) {
-            return "";
-        }
-        try {
-            return postContentKvPort.find(contentUuid);
-        } catch (Exception e) {
-            log.warn("load content from kv failed, uuid={}", contentUuid, e);
-            return "";
-        }
-    }
-
-    private void cacheNull(String redisKey) {
-        try {
-            stringRedisTemplate.opsForValue().set(redisKey, REDIS_NULL, REDIS_NULL_TTL);
-        } catch (Exception ignored) {
-        }
-    }
-
-    private void cacheValue(String redisKey, StableSnapshot snapshot) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            String json = objectMapper.writeValueAsString(snapshot);
-            stringRedisTemplate.opsForValue().set(redisKey, json, stableSnapshotTtl());
-        } catch (Exception e) {
-            log.warn("content detail redis set failed, key={}", redisKey, e);
-        }
-    }
-
-    private StableSnapshot parse(String json) {
-        try {
-            return objectMapper.readValue(json, StableSnapshot.class);
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private String redisKey(Long postId) {
-        return REDIS_KEY_PREFIX + postId;
-    }
-
-    private Duration stableSnapshotTtl() {
-        long ttlSeconds = REDIS_TTL_SECONDS
-                + ThreadLocalRandom.current().nextLong(REDIS_TTL_JITTER_SECONDS + 1);
-        return Duration.ofSeconds(ttlSeconds);
-    }
-
-    private StableSnapshot rebuildSnapshot(Long postId, String redisKey) {
-        try {
-            String cached = stringRedisTemplate.opsForValue().get(redisKey);
-            if (REDIS_NULL.equals(cached)) {
-                throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
-            }
-            if (cached != null) {
-                if (cached.isBlank()) {
-                    deleteRedisQuietly(redisKey);
-                } else {
-                    StableSnapshot snapshot = parse(cached);
-                    if (snapshot != null) {
-                        return snapshot;
-                    }
-                    deleteRedisQuietly(redisKey);
-                }
-            }
-        } catch (AppException appException) {
-            throw appException;
-        } catch (Exception e) {
-            log.warn("content detail redis second get failed, key={}", redisKey, e);
-        }
-
-
-        ContentPostEntity post = contentRepository.findPostMeta(postId);
-        if (post == null || post.getPostId() == null) {
-            cacheNull(redisKey);
-            throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
-        }
-
-        StableSnapshot snapshot = StableSnapshot.builder()
-                .postId(post.getPostId())
-                .authorId(post.getUserId())
-                .title(post.getTitle())
-                .content(loadContent(post.getContentUuid()))
-                .summary(post.getSummary())
-                .summaryStatus(post.getSummaryStatus())
-                .mediaType(post.getMediaType())
-                .mediaInfo(post.getMediaInfo())
-                .locationInfo(post.getLocationInfo())
-                .status(post.getStatus())
-                .visibility(post.getVisibility())
-                .versionNum(post.getVersionNum())
-                .edited(post.getEdited())
-                .createTime(post.getCreateTime())
-                .build();
-        cacheValue(redisKey, snapshot);
-        return snapshot;
+    private String detailQueryInflightKey(Long postId) {
+        return "detailQuery:" + postId;
     }
 
     private ContentDetailResponseDTO buildResponse(StableSnapshot snapshot) {
@@ -260,14 +153,6 @@ public class ContentDetailQueryService {
                 .createTime(snapshot.getCreateTime())
                 .likeCount(likeCount == null ? 0L : Math.max(0L, likeCount))
                 .build();
-    }
-
-    private void deleteRedisQuietly(String redisKey) {
-        try {
-            stringRedisTemplate.delete(redisKey);
-        } catch (Exception ignored) {
-            // ignore
-        }
     }
 
     private String safe(String a, String fallback) {

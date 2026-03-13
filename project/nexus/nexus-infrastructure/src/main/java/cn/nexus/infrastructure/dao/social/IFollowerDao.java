@@ -1,5 +1,6 @@
 package cn.nexus.infrastructure.dao.social;
 
+import cn.nexus.infrastructure.dao.social.po.FollowerPO;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;

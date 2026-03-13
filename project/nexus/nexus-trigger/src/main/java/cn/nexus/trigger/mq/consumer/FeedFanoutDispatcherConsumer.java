@@ -1,10 +1,10 @@
-﻿package cn.nexus.trigger.mq.consumer;
+package cn.nexus.trigger.mq.consumer;
 
-import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
 import cn.nexus.domain.social.service.FeedAuthorCategoryStateMachine;
@@ -156,4 +156,3 @@ public class FeedFanoutDispatcherConsumer {
     }
 
 }
-

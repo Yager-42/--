@@ -665,6 +665,9 @@ public class ContentService implements IContentService {
                     .snapshotMedia(post == null ? null : post.getMediaInfo())
                     .createTime(socialIdPort.now())
                     .build());
+            if (ok) {
+                dispatchUpdateAfterCommit(postId, userId, newVersion);
+            }
             return OperationResultVO.builder()
                     .success(ok)
                     .id(postId)
@@ -937,6 +940,29 @@ public class ContentService implements IContentService {
             attempt.setRiskStatus(ContentPublishAttemptRiskStatusEnumVO.REJECTED.getCode());
             attempt.setErrorCode(reasonCode == null ? "RISK_REJECTED" : reasonCode);
             attempt.setErrorMessage("风控拦截");
+
+            long tsMs = socialIdPort.now();
+            contentEventOutboxPort.savePostUpdated(postId, userId, attempt.getPublishedVersionNum(), tsMs);
+            if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+                try {
+                    contentCacheEvictPort.evictPost(postId);
+                } catch (Exception e) {
+                    log.warn("evict content caches failed after BLOCK, postId={}", postId, e);
+                }
+                contentEventOutboxPort.tryPublishPending();
+                return toPublishResultFromAttempt(attempt);
+            }
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        contentCacheEvictPort.evictPost(postId);
+                        contentEventOutboxPort.tryPublishPending();
+                    } catch (Exception e) {
+                        log.error("evict/publish failed after BLOCK commit, postId={}", postId, e);
+                    }
+                }
+            });
             return toPublishResultFromAttempt(attempt);
         }
 

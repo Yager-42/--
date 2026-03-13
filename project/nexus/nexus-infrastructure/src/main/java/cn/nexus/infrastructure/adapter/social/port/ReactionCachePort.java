@@ -166,6 +166,66 @@ public class ReactionCachePort implements IReactionCachePort {
     }
 
     @Override
+    public Map<String, Long> batchGetCount(List<ReactionTargetVO> targets) {
+        if (targets == null || targets.isEmpty()) {
+            return Map.of();
+        }
+
+        List<String> keys = new ArrayList<>(targets.size());
+        for (ReactionTargetVO target : targets) {
+            if (target == null) {
+                keys.add(null);
+                continue;
+            }
+            keys.add(cntKey(target));
+        }
+
+        List<String> values;
+        try {
+            values = stringRedisTemplate.opsForValue().multiGet(keys);
+        } catch (Exception e) {
+            log.warn("batchGetCount redis multiGet failed", e);
+            values = null;
+        }
+
+        Map<String, Long> result = new HashMap<>(targets.size());
+        List<ReactionTargetVO> missTargets = new ArrayList<>();
+        for (int i = 0; i < targets.size(); i++) {
+            ReactionTargetVO target = targets.get(i);
+            if (target == null) {
+                continue;
+            }
+            String raw = values != null && i < values.size() ? values.get(i) : null;
+            Long count = parseLong(raw);
+            if (count != null && count >= 0) {
+                result.put(target.hashTag(), count);
+                continue;
+            }
+            missTargets.add(target);
+        }
+
+        for (ReactionTargetVO target : missTargets) {
+            String targetType = target.getTargetType() == null ? null : target.getTargetType().getCode();
+            Long targetId = target.getTargetId();
+            String reactionType = target.getReactionType() == null ? null : target.getReactionType().getCode();
+            long rebuilt;
+            if (targetType == null || targetType.isBlank() || targetId == null || reactionType == null || reactionType.isBlank()) {
+                rebuilt = 0L;
+            } else {
+                Long dbCount = interactionReactionCountDao.selectCount(targetType, targetId, reactionType);
+                rebuilt = dbCount == null ? 0L : Math.max(0L, dbCount);
+            }
+            try {
+                stringRedisTemplate.opsForValue().set(cntKey(target), String.valueOf(rebuilt));
+            } catch (Exception ignored) {
+                // ignore
+            }
+            result.put(target.hashTag(), rebuilt);
+        }
+        return result;
+    }
+
+    @Override
     public long getCountFromRedis(ReactionTargetVO target) {
         if (target == null) {
             return 0L;

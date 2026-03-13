@@ -106,8 +106,12 @@ public class FeedCardRepository implements IFeedCardRepository {
             }
             FeedCardBaseVO stableCard = copyStable(card);
             try {
-                stringRedisTemplate.opsForValue().set(key(stableCard.getPostId()), objectMapper.writeValueAsString(stableCard));
-                stringRedisTemplate.expire(key(stableCard.getPostId()), ttlSeconds(), TimeUnit.SECONDS);
+                stringRedisTemplate.opsForValue().set(
+                        key(stableCard.getPostId()),
+                        objectMapper.writeValueAsString(stableCard),
+                        ttlSeconds(),
+                        TimeUnit.SECONDS
+                );
                 l1.put(stableCard.getPostId(), copyStable(stableCard));
                 tryExtendHotCacheTtl(stableCard.getPostId(), stableCard);
             } catch (Exception e) {
@@ -181,10 +185,6 @@ public class FeedCardRepository implements IFeedCardRepository {
         try {
             Long ttl = stringRedisTemplate.getExpire(redisKey, TimeUnit.SECONDS);
             if (ttl == null || ttl <= 0 || ttl >= targetTtlSeconds) {
-                return;
-            }
-            String raw = stringRedisTemplate.opsForValue().get(redisKey);
-            if (raw == null || raw.isBlank()) {
                 return;
             }
             stringRedisTemplate.expire(redisKey, targetTtlSeconds, TimeUnit.SECONDS);

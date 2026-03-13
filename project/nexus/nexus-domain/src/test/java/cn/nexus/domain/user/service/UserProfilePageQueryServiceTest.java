@@ -3,6 +3,8 @@ package cn.nexus.domain.user.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.nexus.domain.social.adapter.port.IRelationCachePort;
@@ -91,5 +93,40 @@ class UserProfilePageQueryServiceTest {
         assertEquals(true, res.getRelation().isFollow());
         assertNotNull(res.getRisk());
         assertEquals("NORMAL", res.getRisk().getStatus());
+    }
+
+    @Test
+    void query_selfProfile_shouldSkipBlockAndRelationLookup() {
+        IUserProfileRepository userProfileRepository = Mockito.mock(IUserProfileRepository.class);
+        IUserStatusRepository userStatusRepository = Mockito.mock(IUserStatusRepository.class);
+        IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
+        IRelationCachePort relationCachePort = Mockito.mock(IRelationCachePort.class);
+        IRelationPolicyPort relationPolicyPort = Mockito.mock(IRelationPolicyPort.class);
+        IRiskService riskService = Mockito.mock(IRiskService.class);
+
+        UserProfilePageQueryService svc = new UserProfilePageQueryService(
+                userProfileRepository,
+                userStatusRepository,
+                relationRepository,
+                relationCachePort,
+                relationPolicyPort,
+                riskService);
+
+        when(userProfileRepository.get(1L)).thenReturn(UserProfileVO.builder()
+                .userId(1L)
+                .username("u1")
+                .nickname("n1")
+                .avatarUrl("a1")
+                .build());
+        when(userStatusRepository.getStatus(1L)).thenReturn("ACTIVE");
+        when(relationCachePort.getFollowingCount(1L)).thenReturn(2L);
+        when(relationCachePort.getFollowerCount(1L)).thenReturn(3L);
+        when(riskService.userStatus(1L)).thenReturn(UserRiskStatusVO.builder().status("NORMAL").build());
+
+        UserProfilePageVO res = svc.query(1L, 1L);
+
+        assertEquals(false, res.getRelation().isFollow());
+        verify(relationPolicyPort, never()).isBlocked(Mockito.anyLong(), Mockito.anyLong());
+        verify(relationRepository, never()).findRelation(Mockito.anyLong(), Mockito.anyLong(), Mockito.anyInt());
     }
 }

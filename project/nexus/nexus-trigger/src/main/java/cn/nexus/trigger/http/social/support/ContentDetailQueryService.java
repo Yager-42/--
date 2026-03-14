@@ -32,6 +32,7 @@ import java.util.List;
  *
  * @author m0_52354773
  * @author codex
+ * @author {$authorName}
  * @since 2026-03-03
  */
 @Slf4j
@@ -55,8 +56,8 @@ public class ContentDetailQueryService {
     /**
      * 查询内容详情。
      *
-     * @param postId 帖子 ID，类型：{@link Long}
-     * @return 详情响应，类型：{@link ContentDetailResponseDTO}
+     * @param postId 帖子 ID，类型： {@link Long}
+     * @return 详情响应，类型： {@link ContentDetailResponseDTO}
      */
     public ContentDetailResponseDTO query(Long postId) {
         if (postId == null) {
@@ -104,7 +105,7 @@ public class ContentDetailQueryService {
     /**
      * 失效本地详情缓存。
      *
-     * @param postId 帖子 ID，类型：{@link Long}
+     * @param postId 帖子 ID，类型： {@link Long}
      */
     public void evictLocal(Long postId) {
         if (postId == null) {

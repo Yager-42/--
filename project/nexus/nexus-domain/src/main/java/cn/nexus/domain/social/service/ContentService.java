@@ -36,7 +36,12 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 内容领域服务实现。
+ * 内容生产与发布领域服务实现。
+ *
+ * <p>负责草稿、发布、定时发布、历史版本、回滚，以及风控结果回流后的状态推进。</p>
+ *
+ * @author {$authorName}
+ * @since 2025-12-26
  */
 @Service
 @RequiredArgsConstructor
@@ -79,6 +84,11 @@ public class ContentService implements IContentService {
 
     /**
      * 上传会话：对基础参数做轻量校验后，委托媒体存储端口生成预签名上传凭证。
+     *
+     * @param fileType 文件类型（MIME，可为空） {@link String}
+     * @param fileSize 文件大小（字节，可为空） {@link Long}
+     * @param crc32 内容 CRC32（可为空，当前不强校验） {@link String}
+     * @return 上传会话信息 {@link UploadSessionVO}
      */
     @Override
     public UploadSessionVO createUploadSession(String fileType, Long fileSize, String crc32) {
@@ -94,7 +104,14 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 草稿保存/覆盖更新：draftId 为空则创建新草稿，否则覆盖更新同一条草稿（draftId=postId）。
+     * 草稿保存/覆盖更新：draftId 为空则创建新草稿，否则覆盖更新同一条草稿（ {@code draftId = postId}）。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @param draftId 草稿 ID（可为空，空则创建） {@link Long}
+     * @param title 标题（可为空） {@link String}
+     * @param contentText 正文（可为空，但需与媒体至少一个非空） {@link String}
+     * @param mediaIds 媒体 ID 列表（可为空） {@link List}
+     * @return 草稿保存结果 {@link DraftVO}
      */
     @Override
     public DraftVO saveDraft(Long userId, Long draftId, String title, String contentText, List<String> mediaIds) {
@@ -122,10 +139,20 @@ public class ContentService implements IContentService {
 
     /**
      * 内容发布主流程（Attempt 化：失败/处理中不影响当前可见版本）：
-     * 1) 获取锁并校验作者权限；
-     * 2) 创建发布 Attempt（含幂等 token 与输入快照）；
-     * 3) 风控失败/转码未就绪：仅更新 Attempt，不更新 content_post，也不写 content_history；
-     * 4) 仅当成功发布：写入 content_history + 更新 content_post + 分发事件，同时 Attempt -> PUBLISHED。
+     * 1. 获取锁并校验作者权限；
+     * 2. 创建发布 Attempt（含幂等 token 与输入快照）；
+     * 3. 风控失败或转码未就绪：仅更新 Attempt，不更新 {@code content_post}，也不写 {@code content_history}；
+     * 4. 仅当成功发布：写入 {@code content_history} + 更新 {@code content_post} + 分发事件，同时 Attempt -&gt; PUBLISHED。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param userId 用户 ID {@link Long}
+     * @param title 标题（可为空，会做兜底） {@link String}
+     * @param text 正文（可为空，但需与媒体至少一个非空） {@link String}
+     * @param mediaInfo 媒体信息（可为空） {@link String}
+     * @param location 位置信息（可为空） {@link String}
+     * @param visibility 可见性（可为空） {@link String}
+     * @param postTypes 帖子类型列表（可为空） {@link List}
+     * @return 发布结果 {@link OperationResultVO}
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -403,6 +430,10 @@ public class ContentService implements IContentService {
 
     /**
      * 软删内容：使用与 publish 相同的 postId 锁，并用状态/版本条件更新，避免并发下“删了又活”。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @param postId 帖子 ID {@link Long}
+     * @return 删除结果 {@link OperationResultVO}
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -469,6 +500,12 @@ public class ContentService implements IContentService {
 
     /**
      * 定时发布创建：校验 userId，使用内容+时间生成幂等 token，若已有未执行任务直接返回；否则创建任务并处理并发主键冲突，返回任务状态。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @param postId 帖子 ID {@link Long}
+     * @param publishTime 计划发布时间（毫秒时间戳，可为空） {@link Long}
+     * @param timezone 时区（当前未使用，透传保留） {@link String}
+     * @return 定时发布任务创建结果 {@link OperationResultVO}
      */
     @Override
     public OperationResultVO schedule(Long userId, Long postId, Long publishTime, String timezone) {
@@ -537,6 +574,15 @@ public class ContentService implements IContentService {
 
     /**
      * 客户端草稿同步：仅允许 owner 覆盖更新；草稿不存在直接返回 NOT_FOUND（避免被撞库创建垃圾草稿）。
+     *
+     * @param draftId 草稿 ID {@link Long}
+     * @param userId 用户 ID {@link Long}
+     * @param title 标题（可为空） {@link String}
+     * @param diffContent 草稿内容（当前实现为整段覆盖，不是真 diff） {@link String}
+     * @param clientVersion 客户端版本号 {@link Long}
+     * @param deviceId 设备 ID（可为空） {@link String}
+     * @param mediaIds 媒体 ID 列表（可为空） {@link List}
+     * @return 同步结果 {@link DraftSyncVO}
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -570,6 +616,12 @@ public class ContentService implements IContentService {
 
     /**
      * 内容历史查询：校验访问权限，分页拉取版本快照，输出下一游标。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param userId 用户 ID {@link Long}
+     * @param limit 分页大小（可为空） {@link Integer}
+     * @param offset 分页偏移（可为空） {@link Integer}
+     * @return 历史版本查询结果 {@link ContentHistoryVO}
      */
     @Override
     public ContentHistoryVO history(Long postId, Long userId, Integer limit, Integer offset) {
@@ -605,11 +657,16 @@ public class ContentService implements IContentService {
         return ContentHistoryVO.builder().versions(versions).nextCursor(nextCursor).build();
     }
 
-    @Transactional(rollbackFor = Exception.class)
-    @Override
     /**
      * 内容回滚：在事务与行锁下校验权限，定位目标版本快照并生成新版本，更新帖子状态与历史记录。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param userId 用户 ID {@link Long}
+     * @param targetVersionId 目标版本号 {@link Long}
+     * @return 回滚结果 {@link OperationResultVO}
      */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
     public OperationResultVO rollback(Long postId, Long userId, Long targetVersionId) {
         assertTx("rollback");
         RLock lock = lockFor(postId);
@@ -680,21 +737,30 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 批量执行到期定时任务：按时间查询待处理任务，跳过已取消，逐条调用 publish 并按结果更新状态与重试计数，超过重试上限则标记失败报警。
+     * 批量执行到期定时任务：按时间查询待处理任务，跳过已取消，逐条调用 publish 并按结果更新状态与重试计数。
+     *
+     * <p>重试采用退避策略，避免短时间内重复失败打爆下游；超过重试上限后终止任务并打报警标记。</p>
+     *
+     * @param now 当前时间戳（毫秒，传空则使用系统时间） {@link Long}
+     * @param limit 本次拉取的最大任务数（传空则使用默认值） {@link Integer}
+     * @return 执行统计结果 {@link OperationResultVO}
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO processSchedules(Long now, Integer limit) {
+        // now 允许外部透传，便于“补偿/回放”场景；传空则使用系统当前时间。
         long ts = now == null ? socialIdPort.now() : now;
         List<ContentScheduleEntity> tasks = contentRepository.listPendingSchedules(ts, limit == null ? 50 : limit);
         int success = 0;
         for (ContentScheduleEntity task : tasks) {
+            // 幂等与并发保护：updateScheduleStatus 内部使用 expectedStatus 做 CAS 更新，避免重复消费时相互覆盖。
             if (task.getIsCanceled() != null && task.getIsCanceled() == 1) {
                 contentRepository.updateScheduleStatus(task.getTaskId(), SCHEDULE_STATUS_CANCELED, task.getRetryCount(), "已取消跳过", 0, null, SCHEDULE_STATUS_SCHEDULED);
                 continue;
             }
             ContentDraftEntity draft = contentRepository.findDraft(task.getPostId());
             if (draft == null) {
+                // 草稿缺失意味着用户已删除/清理草稿或数据异常：直接终止任务并打报警标记，避免无限重试。
                 contentRepository.updateScheduleStatus(task.getTaskId(),
                         SCHEDULE_STATUS_CANCELED,
                         task.getRetryCount(),
@@ -713,6 +779,7 @@ public class ContentService implements IContentService {
                 int currentRetry = task.getRetryCount() == null ? 0 : task.getRetryCount();
                 int nextRetry = currentRetry + 1;
                 boolean exceed = nextRetry >= MAX_RETRY;
+                // 退避重试：减少瞬时失败时的重复提交，给下游“恢复窗口”。
                 long delayMs = exceed ? 0L : calcNextDelayMs(nextRetry);
                 Long nextTime = exceed ? null : ts + delayMs;
                 Integer alarm = exceed ? 1 : 0;
@@ -737,7 +804,12 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 单个定时任务执行：校验状态/取消标记，调用 publish 产出，按结果更新重试/延迟或置成功/终止。
+     * 执行单个定时发布任务：校验状态与取消标记后调用 publish，并根据结果更新状态、重试次数与下一次执行时间。
+     *
+     * <p>当发布失败时采用退避重试；超过重试上限后终止任务并打报警标记。</p>
+     *
+     * @param taskId 定时任务 ID {@link Long}
+     * @return 执行结果 {@link OperationResultVO}
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -754,6 +826,7 @@ public class ContentService implements IContentService {
         }
         ContentDraftEntity draft = contentRepository.findDraft(task.getPostId());
         if (draft == null) {
+            // 草稿被删除/不可见：终止任务并打报警标记，避免重复消费导致的“空转”。
             contentRepository.updateScheduleStatus(taskId, SCHEDULE_STATUS_CANCELED, task.getRetryCount(), "draft_not_found", 1, null, SCHEDULE_STATUS_SCHEDULED);
             return OperationResultVO.builder().success(false).id(taskId).status("DRAFT_NOT_FOUND").message("草稿不存在，已终止定时任务").build();
         }
@@ -764,6 +837,7 @@ public class ContentService implements IContentService {
             int currentRetry = task.getRetryCount() == null ? 0 : task.getRetryCount();
             int nextRetry = currentRetry + 1;
             boolean exceed = nextRetry >= MAX_RETRY;
+            // 退避重试：避免短时间内重复失败打爆数据库/下游。
             long delayMs = exceed ? 0L : calcNextDelayMs(nextRetry);
             Long nextTime = exceed ? null : socialIdPort.now() + delayMs;
             Integer alarm = exceed ? 1 : 0;
@@ -776,7 +850,12 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 取消定时任务：校验归属与存在性，设置取消原因并返回操作结果。
+     * 取消定时发布任务：仅允许任务拥有者取消，取消后不再触发发布。
+     *
+     * @param taskId 定时任务 ID {@link Long}
+     * @param userId 操作用户 ID {@link Long}
+     * @param reason 取消原因（可为空） {@link String}
+     * @return 取消结果 {@link OperationResultVO}
      */
     @Override
     public OperationResultVO cancelSchedule(Long taskId, Long userId, String reason) {
@@ -797,7 +876,16 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 更新定时任务：校验归属/状态/取消标志，重算幂等 token 后更新时间与内容，返回更新是否成功。
+     * 更新定时发布任务：允许调整发布时间与备注；不允许修改任务绑定的内容快照。
+     *
+     * <p>不允许修改 contentData 的原因：定时发布与草稿编辑是两条链路。想改内容必须先取消任务再重新创建，避免发布旧内容造成误解。</p>
+     *
+     * @param taskId 定时任务 ID {@link Long}
+     * @param userId 操作用户 ID {@link Long}
+     * @param publishTime 新的计划发布时间（毫秒时间戳，可为空） {@link Long}
+     * @param contentData 任务内容快照（兼容字段，当前必须为空） {@link String}
+     * @param reason 变更原因/备注（可为空） {@link String}
+     * @return 更新结果 {@link OperationResultVO}
      */
     @Override
     public OperationResultVO updateSchedule(Long taskId, Long userId, Long publishTime, String contentData, String reason) {
@@ -830,7 +918,11 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 审计接口：返回指定任务详情，若非任务拥有者则返回空，供外部审批查看。
+     * 获取定时任务审计信息：仅允许任务拥有者查看。
+     *
+     * @param taskId 定时任务 ID {@link Long}
+     * @param userId 操作用户 ID {@link Long}
+     * @return 任务信息，不存在或无权限返回 null {@link ContentScheduleEntity}
      */
     @Override
     public ContentScheduleEntity getScheduleAudit(Long taskId, Long userId) {
@@ -844,6 +936,13 @@ public class ContentService implements IContentService {
         return task;
     }
 
+    /**
+     * 获取发布 Attempt 的审计信息：仅允许 Attempt 拥有者查看，避免泄露内容快照等敏感信息。
+     *
+     * @param attemptId 发布 Attempt ID {@link Long}
+     * @param userId 操作用户 ID {@link Long}
+     * @return Attempt 信息，不存在或无权限返回 null {@link ContentPublishAttemptEntity}
+     */
     @Override
     public ContentPublishAttemptEntity getPublishAttemptAudit(Long attemptId, Long userId) {
         if (attemptId == null) {
@@ -859,6 +958,19 @@ public class ContentService implements IContentService {
         return attempt;
     }
 
+    /**
+     * 风控审核结果回流：把处于 PENDING_REVIEW 的发布 Attempt 推进到最终状态（PASS/BLOCK），并同步推进帖子状态。
+     *
+     * <p>关键约束：</p>
+     * <p>1. 只处理 PENDING_REVIEW 的 Attempt，其它状态直接返回；</p>
+     * <p>2. 使用版本号/期望状态做 CAS 更新，避免旧 Attempt 覆盖新版本；</p>
+     * <p>3. 缓存失效与事件投递放到事务提交后执行，避免回滚导致外部可见不一致。</p>
+     *
+     * @param attemptId 发布 Attempt ID {@link Long}
+     * @param finalResult 最终结论（PASS/BLOCK） {@link String}
+     * @param reasonCode 原因码（可为空） {@link String}
+     * @return 推进后的结果 {@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO applyRiskReviewResult(Long attemptId, String finalResult, String reasonCode) {
@@ -869,6 +981,7 @@ public class ContentService implements IContentService {
         if (attempt == null) {
             return OperationResultVO.builder().success(false).status("NOT_FOUND").message("发布尝试不存在").build();
         }
+        // 幂等：只处理“等待审核”的 Attempt；其它状态直接按当前 Attempt 映射返回。
         if (attempt.getAttemptStatus() == null || attempt.getAttemptStatus() != ContentPublishAttemptStatusEnumVO.PENDING_REVIEW.getCode()) {
             return toPublishResultFromAttempt(attempt);
         }
@@ -884,6 +997,7 @@ public class ContentService implements IContentService {
 
         if ("PASS".equalsIgnoreCase(finalResult)) {
             Integer expectedVersion = attempt.getPublishedVersionNum();
+            // 先推进 post：用“期望版本号 + 期望状态”做 CAS 更新，避免旧审核结果覆盖新版本发布。
             boolean okPost = contentRepository.updatePostStatusAndPublishTimeIfMatchVersion(
                     postId,
                     STATUS_PUBLISHED,
@@ -891,10 +1005,12 @@ public class ContentService implements IContentService {
                     expectedVersion,
                     socialIdPort.now());
             if (!okPost) {
+                // 版本/状态不匹配时直接返回：大概率是用户又发了一次，当前审核结果已经“过期”。
                 log.warn("risk review apply skipped (post status/version not match), postId={}, expectedVersion={}, attemptId={}", postId, expectedVersion, attemptId);
                 ContentPublishAttemptEntity latest = contentPublishAttemptRepository.findByAttemptId(attemptId);
                 return toPublishResultFromAttempt(latest == null ? attempt : latest);
             }
+            // 再推进 Attempt：同样使用 expectedStatus 做 CAS 更新，保证并发回流下只会成功一次。
             boolean okAttempt = contentPublishAttemptRepository.updateAttemptStatus(
                     attemptId,
                     ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode(),
@@ -908,6 +1024,7 @@ public class ContentService implements IContentService {
             if (!okAttempt) {
                 throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attemptId);
             }
+            // 事务提交后再做缓存失效与 outbox 投递，确保“写库成功”先于“外部可见”。
             dispatchAfterCommit(postId, userId, attempt.getPublishedVersionNum());
             attempt.setAttemptStatus(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode());
             attempt.setRiskStatus(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode());
@@ -917,12 +1034,14 @@ public class ContentService implements IContentService {
 
         if ("BLOCK".equalsIgnoreCase(finalResult)) {
             Integer expectedVersion = attempt.getPublishedVersionNum();
+            // 被拦截：把 post 从“待审核”推进到“已拒绝”，同样做版本号匹配，避免覆盖新版本。
             boolean okPost = contentRepository.updatePostStatusIfMatchVersion(postId, STATUS_REJECTED, STATUS_PENDING_REVIEW, expectedVersion);
             if (!okPost) {
                 log.warn("risk review apply skipped (post status/version not match), postId={}, expectedVersion={}, attemptId={}", postId, expectedVersion, attemptId);
                 ContentPublishAttemptEntity latest = contentPublishAttemptRepository.findByAttemptId(attemptId);
                 return toPublishResultFromAttempt(latest == null ? attempt : latest);
             }
+            // Attempt 标记为风控拒绝：记录原因码，便于前端/运营侧展示与审计。
             boolean okAttempt = contentPublishAttemptRepository.updateAttemptStatus(
                     attemptId,
                     ContentPublishAttemptStatusEnumVO.RISK_REJECTED.getCode(),
@@ -942,6 +1061,7 @@ public class ContentService implements IContentService {
             attempt.setErrorMessage("风控拦截");
 
             long tsMs = socialIdPort.now();
+            // 触发一次“内容更新”事件：让下游刷新展示（例如从“审核中”变成“被拦截”）。
             contentEventOutboxPort.savePostUpdated(postId, userId, attempt.getPublishedVersionNum(), tsMs);
             if (!TransactionSynchronizationManager.isSynchronizationActive()) {
                 try {
@@ -955,6 +1075,7 @@ public class ContentService implements IContentService {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
+                    // 事务提交后再做缓存失效与事件投递，避免回滚导致外部可见不一致。
                     try {
                         contentCacheEvictPort.evictPost(postId);
                         contentEventOutboxPort.tryPublishPending();
@@ -970,7 +1091,10 @@ public class ContentService implements IContentService {
     }
 
     /**
-     * 存储重平衡：全量快照模式下无需重平衡，保留接口以兼容调用方。
+     * 触发存储重平衡：当前实现采用历史版本全量快照，因此无需搬迁/重平衡，接口仅用于兼容调用方。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @return 操作结果 {@link OperationResultVO}
      */
     @Override
     public OperationResultVO rebalanceStorage(Long postId) {
@@ -1109,6 +1233,7 @@ public class ContentService implements IContentService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {
+                // 提交：删除旧 contentUuid 对应的 KV；回滚：删除本次写入的新 KV，避免脏数据残留。
                 if (status == TransactionSynchronization.STATUS_COMMITTED) {
                     if (oldUuidFinal != null && !oldUuidFinal.isBlank() && !oldUuidFinal.equals(newContentUuid)) {
                         try {
@@ -1183,6 +1308,7 @@ public class ContentService implements IContentService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
+                // 事务提交后再做缓存失效与事件投递，避免回滚导致外部可见不一致。
                 try {
                     contentCacheEvictPort.evictPost(postId);
                     contentEventOutboxPort.tryPublishPending();
@@ -1213,6 +1339,7 @@ public class ContentService implements IContentService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
+                // 事务提交后再做缓存失效与事件投递，避免回滚导致外部可见不一致。
                 try {
                     contentCacheEvictPort.evictPost(postId);
                     contentEventOutboxPort.tryPublishPending();
@@ -1241,6 +1368,7 @@ public class ContentService implements IContentService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
+                // 事务提交后再做缓存失效与事件投递，避免回滚导致外部可见不一致。
                 try {
                     contentCacheEvictPort.evictPost(postId);
                     contentEventOutboxPort.tryPublishPending();

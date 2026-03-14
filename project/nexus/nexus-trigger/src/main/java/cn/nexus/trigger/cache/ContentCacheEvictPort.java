@@ -15,6 +15,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * 内容缓存失效端口实现：负责内容变更后的本地缓存、Redis 缓存失效，以及广播通知其它节点。
+ *
+ * <p>这里采用“双删”策略降低并发下的“旧值回填”概率：先立即删一次，再延迟删一次。</p>
+ *
+ * @author {$authorName}
+ * @since 2026-03-03
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -37,19 +45,28 @@ public class ContentCacheEvictPort implements IContentCacheEvictPort {
     private final ContentDetailQueryService contentDetailQueryService;
     private final FeedCardRepository feedCardRepository;
 
+    /**
+     * 失效指定帖子相关缓存。
+     *
+     * <p>这一步不做任何业务计算，只做“让旧展示尽快消失”的工作。</p>
+     *
+     * @param postId 帖子 ID {@link Long}
+     */
     @Override
     public void evictPost(Long postId) {
         if (postId == null) {
             return;
         }
 
+        // 1. 先清本地缓存：避免当前节点继续复用旧快照。
         deleteLocal(postId);
 
-        // redis double delete
+        // 2. Redis 双删：降低“并发回源写回旧值”的概率。
+        // 场景：A 删缓存 -> B 并发 miss 回源 -> B 写回 -> A 再删一次，把可能写回的旧值清掉。
         deleteRedis(postId);
         scheduleDelayDelete(postId);
 
-        // broadcast local evict
+        // 3. 广播本地失效：让其它节点也尽快把本地缓存清掉，避免“不同节点看到不同内容”。
         ContentCacheEvictEvent event = new ContentCacheEvictEvent(postId);
         reliableMqOutboxService.save(event.getEventId(), ContentCacheEvictConfig.EXCHANGE, "", event);
     }

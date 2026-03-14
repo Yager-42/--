@@ -7,13 +7,20 @@ import java.util.function.Supplier;
 
 /**
  * 进程内单飞控制：同一个 key 的并发 miss 只允许一个线程真正回源。
+ *
+ * @author {$authorName}
+ * @since 2026-03-10
  */
 public class SingleFlight {
 
     private final ConcurrentHashMap<String, CompletableFuture<Object>> inflight = new ConcurrentHashMap<>();
 
     /**
-     * 执行单飞逻辑。
+     * 执行单飞逻辑：同一 key 的并发调用只让“领头线程”执行 supplier，其它线程等待结果。
+     *
+     * @param key 单飞 key {@link String}
+     * @param supplier 回源执行器 {@link Supplier}
+     * @return supplier 执行结果 {@code T}
      */
     @SuppressWarnings("unchecked")
     public <T> T execute(String key, Supplier<T> supplier) {

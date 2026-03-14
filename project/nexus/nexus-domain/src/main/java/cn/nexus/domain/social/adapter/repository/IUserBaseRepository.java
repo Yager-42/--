@@ -10,6 +10,7 @@ import java.util.List;
  *
  * @author rr
  * @author codex
+ * @author {$authorName}
  * @since 2026-01-21
  */
 public interface IUserBaseRepository {
@@ -17,8 +18,8 @@ public interface IUserBaseRepository {
     /**
      * 批量按 `userId` 查询用户基础信息；不存在的用户直接忽略。
      *
-     * @param userIds 用户 ID 列表，类型：{@link List}&lt;{@link Long}&gt;
-     * @return 用户基础信息列表，类型：{@link List}&lt;{@link UserBriefVO}&gt;
+     * @param userIds 用户 ID 列表（元素为 {@link Long}） {@link List}
+     * @return 用户基础信息列表（元素为 {@link UserBriefVO}） {@link List}
      */
     List<UserBriefVO> listByUserIds(List<Long> userIds);
 
@@ -27,8 +28,8 @@ public interface IUserBaseRepository {
      *
      * <p>这个接口主要服务 `@username` 提及解析：由后端回表映射成真实 `userId`。</p>
      *
-     * @param usernames 用户名列表，类型：{@link List}&lt;{@link String}&gt;
-     * @return 用户基础信息列表，类型：{@link List}&lt;{@link UserBriefVO}&gt;
+     * @param usernames 用户名列表（元素为 {@link String}） {@link List}
+     * @return 用户基础信息列表（元素为 {@link UserBriefVO}） {@link List}
      */
     List<UserBriefVO> listByUsernames(List<String> usernames);
 }

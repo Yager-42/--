@@ -11,7 +11,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * 风控申诉实现：以 MySQL risk_feedback 为准，处罚撤销直接更新 risk_punishment。
+ * 风控申诉服务实现：受理申诉并驱动人工裁决后的处罚撤销。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Service
 @RequiredArgsConstructor
@@ -21,6 +25,15 @@ public class RiskAppealService implements IRiskAppealService {
     private final IRiskFeedbackRepository feedbackRepository;
     private final IRiskPunishmentRepository punishmentRepository;
 
+    /**
+     * 提交申诉。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param decisionId 关联决策 ID。类型：{@link Long}
+     * @param punishId 关联处罚 ID。类型：{@link Long}
+     * @param content 申诉内容。类型：{@link String}
+     * @return 提交结果。类型：{@link OperationResultVO}
+     */
     @Override
     public OperationResultVO submitAppeal(Long userId, Long decisionId, Long punishId, String content) {
         if (userId == null) {
@@ -34,6 +47,7 @@ public class RiskAppealService implements IRiskAppealService {
         }
         long now = socialIdPort.now();
         long id = socialIdPort.nextId();
+        // 申诉一旦受理，就先把事实落到 risk_feedback，后面人工处理都围绕这条记录推进。
         RiskFeedbackEntity entity = RiskFeedbackEntity.builder()
                 .feedbackId(id)
                 .userId(userId)
@@ -59,6 +73,14 @@ public class RiskAppealService implements IRiskAppealService {
                 .build();
     }
 
+    /**
+     * 裁决申诉。
+     *
+     * @param operatorId 处理人 ID。类型：{@link Long}
+     * @param appealId 申诉 ID。类型：{@link Long}
+     * @param result 裁决结果。类型：{@link String}
+     * @return 裁决结果。类型：{@link OperationResultVO}
+     */
     @Override
     public OperationResultVO decideAppeal(Long operatorId, Long appealId, String result) {
         if (operatorId == null) {
@@ -76,6 +98,7 @@ public class RiskAppealService implements IRiskAppealService {
         if (!updated) {
             return OperationResultVO.builder().success(false).id(appealId).status("DONE").message("更新失败").build();
         }
+        // 只有申诉通过并且绑定了处罚记录时，才把处罚事实同步撤销；拒绝申诉只更新申诉单状态。
         if ("ACCEPT".equalsIgnoreCase(r) && feedback.getPunishId() != null) {
             punishmentRepository.revoke(feedback.getPunishId(), operatorId);
         }

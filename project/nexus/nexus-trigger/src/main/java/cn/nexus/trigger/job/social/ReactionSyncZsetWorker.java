@@ -18,7 +18,9 @@ import org.springframework.stereotype.Component;
 /**
  * 点赞同步：Redis ZSET + Lua 延迟队列 worker（替换 RabbitMQ 固定 1s 重试）。
  *
- * <p>目标：指数退避重试 + 同一 job 同一时刻只允许一个 in-flight（由 processing zset 保证）。</p>
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-01
  */
 @Slf4j
 @Component
@@ -46,6 +48,10 @@ public class ReactionSyncZsetWorker {
     private final StringRedisTemplate stringRedisTemplate;
     private final IReactionLikeService reactionLikeService;
 
+    /**
+     * 执行 pollAndSync 逻辑。
+     *
+     */
     @Scheduled(fixedDelay = 200)
     public void pollAndSync() {
         List<?> out;

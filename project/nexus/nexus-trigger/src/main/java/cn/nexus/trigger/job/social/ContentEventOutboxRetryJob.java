@@ -10,7 +10,10 @@ import org.springframework.stereotype.Component;
 /**
  * 内容域 Outbox 重试/清理任务。
  *
- * @author {$authorName}
+ * @author rr
+ * @author rr
+ * @author codex
+ * @author codex
  * @since 2026-02-03
  */
 @Component

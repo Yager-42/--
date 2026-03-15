@@ -24,12 +24,7 @@ import org.springframework.stereotype.Component;
 /**
  * Feed fanout dispatcher：接收 PostPublishedEvent 并拆分为多个 {@link FeedFanoutTask} 切片任务。
  *
- * <p>为什么要拆？</p>
- * <ul>
- *     <li>单条发布事件可能对应超大粉丝量，直接在一次消费里跑完整 fanout 会导致耗时过长。</li>
- *     <li>切片后失败重试只重试某一片（offset+limit），避免整条 fanout 从 0 重新跑。</li>
- * </ul>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-12
  */

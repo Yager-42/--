@@ -38,9 +38,10 @@ import java.util.UUID;
 /**
  * 内容生产与发布领域服务实现。
  *
- * <p>负责草稿、发布、定时发布、历史版本、回滚，以及风控结果回流后的状态推进。</p>
- *
- * @author {$authorName}
+ * @author rr
+ * @author rr
+ * @author codex
+ * @author codex
  * @since 2025-12-26
  */
 @Service
@@ -1073,6 +1074,10 @@ public class ContentService implements IContentService {
                 return toPublishResultFromAttempt(attempt);
             }
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                /**
+                 * 执行 afterCommit 逻辑。
+                 *
+                 */
                 @Override
                 public void afterCommit() {
                     // 事务提交后再做缓存失效与事件投递，避免回滚导致外部可见不一致。
@@ -1231,6 +1236,11 @@ public class ContentService implements IContentService {
 
         String oldUuidFinal = oldUuid;
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCompletion 逻辑。
+             *
+             * @param status status 参数。类型：{@code int}
+             */
             @Override
             public void afterCompletion(int status) {
                 // 提交：删除旧 contentUuid 对应的 KV；回滚：删除本次写入的新 KV，避免脏数据残留。
@@ -1306,6 +1316,10 @@ public class ContentService implements IContentService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 // 事务提交后再做缓存失效与事件投递，避免回滚导致外部可见不一致。
@@ -1337,6 +1351,10 @@ public class ContentService implements IContentService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 // 事务提交后再做缓存失效与事件投递，避免回滚导致外部可见不一致。
@@ -1366,6 +1384,10 @@ public class ContentService implements IContentService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 // 事务提交后再做缓存失效与事件投递，避免回滚导致外部可见不一致。

@@ -18,9 +18,8 @@ import org.springframework.stereotype.Component;
 /**
  * 内容域事件 Outbox 端口实现：MySQL 落库 + RabbitMQ 投递。
  *
- * <p>写入方只负责落库；投递由后台批量扫描并重试，保证“先落库后发消息”。</p>
- *
- * @author {$authorName}
+ * @author m0_52354773
+ * @author codex
  * @since 2026-03-01
  */
 @Slf4j

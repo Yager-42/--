@@ -33,9 +33,8 @@ import java.util.Map;
 /**
  * 风控后台实现：规则版本、Prompt 版本、人审工单、处罚、审计查询。
  *
- * <p>面向运营/审核后台，负责版本发布与回滚、人工工单的分配与裁决，以及裁决结果回写业务侧（内容与评论）。</p>
- *
- * @author {$authorName}
+ * @author rr
+ * @author codex
  * @since 2026-01-29
  */
 @Slf4j

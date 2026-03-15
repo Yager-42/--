@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 /**
  * 通知统一事件发布端口实现：使用 RabbitMQ 直接投递。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-21
  */
@@ -21,6 +22,11 @@ public class InteractionNotifyEventPort implements IInteractionNotifyEventPort {
 
     private final ReliableMqOutboxService reliableMqOutboxService;
 
+    /**
+     * 发布事件。
+     *
+     * @param event 事件对象。类型：{@link InteractionNotifyEvent}
+     */
     @Override
     public void publish(InteractionNotifyEvent event) {
         reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_INTERACTION_NOTIFY, event);

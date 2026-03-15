@@ -6,8 +6,9 @@ import java.util.List;
 /**
  * 关系查询门面端口。
  *
- * <p>这里保留旧名字只是为了减少调用方改动，
- * 但语义已经收缩成“DB 真相源查询门面”，不再承担 Redis 邻接缓存、rebuild 或重建协议职责。</p>
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 public interface IRelationAdjacencyCachePort {
 

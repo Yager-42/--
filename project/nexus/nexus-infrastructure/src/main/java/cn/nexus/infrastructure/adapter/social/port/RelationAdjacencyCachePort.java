@@ -11,10 +11,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
- * 关系查询门面端口实现。
+ * 关系邻接查询门面实现。
  *
- * <p>本实现不再维护 Redis 邻接缓存，也不再承担 rebuild 协议职责，
- * 关系数据统一以 DB 为真相源。</p>
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Component
 @RequiredArgsConstructor
@@ -22,26 +23,61 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
 
     private final IRelationRepository relationRepository;
 
+    /**
+     * 执行 addFollow 逻辑。
+     *
+     * @param sourceId sourceId 参数。类型：{@link Long}
+     * @param targetId 目标 ID。类型：{@link Long}
+     * @param followTimeMs followTimeMs 参数。类型：{@link Long}
+     */
     @Override
     public void addFollow(Long sourceId, Long targetId, Long followTimeMs) {
         // 关系真相源已经落在 DB，这里不再维护邻接缓存。
     }
 
+    /**
+     * 执行 removeFollow 逻辑。
+     *
+     * @param sourceId sourceId 参数。类型：{@link Long}
+     * @param targetId 目标 ID。类型：{@link Long}
+     */
     @Override
     public void removeFollow(Long sourceId, Long targetId) {
         // 关系真相源已经落在 DB，这里不再维护邻接缓存。
     }
 
+    /**
+     * 执行 listFollowing 逻辑。
+     *
+     * @param sourceId sourceId 参数。类型：{@link Long}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> listFollowing(Long sourceId, int limit) {
         return pageFollowing(sourceId, null, limit).stream().map(RelationUserEdgeVO::getUserId).toList();
     }
 
+    /**
+     * 执行 listFollowers 逻辑。
+     *
+     * @param targetId 目标 ID。类型：{@link Long}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> listFollowers(Long targetId, int limit) {
         return pageFollowers(targetId, null, limit).stream().map(RelationUserEdgeVO::getUserId).toList();
     }
 
+    /**
+     * 执行 pageFollowing 逻辑。
+     *
+     * @param sourceId sourceId 参数。类型：{@link Long}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RelationUserEdgeVO> pageFollowing(Long sourceId, String cursor, int limit) {
         if (sourceId == null || limit <= 0) {
@@ -50,6 +86,14 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
         return pageFollowingFromDb(sourceId, cursor, limit);
     }
 
+    /**
+     * 执行 pageFollowers 逻辑。
+     *
+     * @param targetId 目标 ID。类型：{@link Long}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RelationUserEdgeVO> pageFollowers(Long targetId, String cursor, int limit) {
         if (targetId == null || limit <= 0) {
@@ -58,6 +102,11 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
         return pageFollowersFromDb(targetId, cursor, limit);
     }
 
+    /**
+     * 执行 evict 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     */
     @Override
     public void evict(Long userId) {
         // 当前没有关系邻接缓存需要清理，保留该入口只为减少调用方改动。

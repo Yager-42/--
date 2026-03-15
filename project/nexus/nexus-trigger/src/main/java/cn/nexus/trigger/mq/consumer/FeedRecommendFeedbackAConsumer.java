@@ -15,8 +15,7 @@ import org.springframework.stereotype.Component;
 /**
  * 推荐反馈 A 通道消费者：复用通知事件（LIKE_ADDED / COMMENT_CREATED）写入推荐系统。
  *
- * <p>best-effort：失败只打日志，不阻断主链路。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-26
  */
@@ -31,6 +30,11 @@ public class FeedRecommendFeedbackAConsumer {
     private final ReliableMqConsumerRecordService consumerRecordService;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 消费 A 通道反馈事件并写入推荐系统。
+     *
+     * @param event 互动通知事件。 {@link InteractionNotifyEvent}
+     */
     @RabbitListener(queues = FeedRecommendFeedbackAMqConfig.Q_FEED_RECOMMEND_FEEDBACK_A, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(InteractionNotifyEvent event) {
         if (event == null || event.getEventType() == null) {
@@ -49,6 +53,7 @@ public class FeedRecommendFeedbackAConsumer {
             return;
         }
 
+        // A 通道不是直接吃推荐反馈事件，而是复用点赞 / 评论通知事件，所以这里要先翻译成推荐端认识的反馈类型。
         Long userId = event.getFromUserId();
         Long postId = event.getPostId() == null ? event.getTargetId() : event.getPostId();
         Long tsMs = event.getTsMs();

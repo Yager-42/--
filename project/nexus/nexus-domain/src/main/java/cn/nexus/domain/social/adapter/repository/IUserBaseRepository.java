@@ -6,11 +6,8 @@ import java.util.List;
 /**
  * 用户基础信息仓储：给读接口批量补全 `nickname / avatarUrl`。
  *
- * <p>这里必须坚持批量接口，不能把 `N + 1` 单查放给调用方。</p>
- *
  * @author rr
  * @author codex
- * @author {$authorName}
  * @since 2026-01-21
  */
 public interface IUserBaseRepository {

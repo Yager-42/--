@@ -13,6 +13,10 @@ import java.util.List;
 
 /**
  * 风控反馈/申诉仓储 MyBatis 实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Repository
 @RequiredArgsConstructor
@@ -20,6 +24,12 @@ public class RiskFeedbackRepository implements IRiskFeedbackRepository {
 
     private final IRiskFeedbackDao feedbackDao;
 
+    /**
+     * 执行 insert 逻辑。
+     *
+     * @param entity entity 参数。类型：{@link RiskFeedbackEntity}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean insert(RiskFeedbackEntity entity) {
         if (entity == null || entity.getFeedbackId() == null || entity.getUserId() == null) {
@@ -28,6 +38,12 @@ public class RiskFeedbackRepository implements IRiskFeedbackRepository {
         return feedbackDao.insert(toPO(entity)) > 0;
     }
 
+    /**
+     * 执行 findById 逻辑。
+     *
+     * @param feedbackId feedbackId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link RiskFeedbackEntity}
+     */
     @Override
     public RiskFeedbackEntity findById(Long feedbackId) {
         if (feedbackId == null) {
@@ -36,6 +52,15 @@ public class RiskFeedbackRepository implements IRiskFeedbackRepository {
         return toEntity(feedbackDao.selectById(feedbackId));
     }
 
+    /**
+     * 执行 updateStatus 逻辑。
+     *
+     * @param feedbackId feedbackId 参数。类型：{@link Long}
+     * @param status status 参数。类型：{@link String}
+     * @param result result 参数。类型：{@link String}
+     * @param operatorId operatorId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean updateStatus(Long feedbackId, String status, String result, Long operatorId) {
         if (feedbackId == null || status == null || status.isBlank()) {
@@ -44,6 +69,14 @@ public class RiskFeedbackRepository implements IRiskFeedbackRepository {
         return feedbackDao.updateStatus(feedbackId, status, result, operatorId) > 0;
     }
 
+    /**
+     * 执行 listByUser 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param limit 分页大小。类型：{@link Integer}
+     * @param offset offset 参数。类型：{@link Integer}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskFeedbackEntity> listByUser(Long userId, Integer limit, Integer offset) {
         if (userId == null) {

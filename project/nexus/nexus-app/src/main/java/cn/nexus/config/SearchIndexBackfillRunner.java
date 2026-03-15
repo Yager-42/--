@@ -39,6 +39,13 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import cn.nexus.trigger.search.support.SearchDocumentAssembler;
 
+/**
+ * SearchIndexBackfillRunner 配置类。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-02-02
+ */
 @Slf4j
 @Component
 @Order(2)
@@ -71,6 +78,11 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 执行启动任务。
+     *
+     * @param args args 参数。类型：{@link ApplicationArguments}
+     */
     @Override
     public void run(ApplicationArguments args) {
         if (!enabled) {

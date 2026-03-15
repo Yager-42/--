@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 /**
  * 评论置顶仓储 MyBatis 实现（单帖单置顶）。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */
@@ -19,6 +20,12 @@ public class CommentPinRepository implements ICommentPinRepository {
 
     private final ICommentPinDao commentPinDao;
 
+    /**
+     * 执行 getPinnedCommentId 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@link Long}
+     */
     @Override
     public Long getPinnedCommentId(Long postId) {
         if (postId == null) {
@@ -28,6 +35,13 @@ public class CommentPinRepository implements ICommentPinRepository {
         return po == null ? null : po.getCommentId();
     }
 
+    /**
+     * 执行 pin 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     */
     @Override
     public void pin(Long postId, Long commentId, Long nowMs) {
         if (postId == null || commentId == null) {
@@ -42,6 +56,11 @@ public class CommentPinRepository implements ICommentPinRepository {
         commentPinDao.insertOrUpdate(po);
     }
 
+    /**
+     * 清空数据。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     */
     @Override
     public void clear(Long postId) {
         if (postId == null) {
@@ -50,6 +69,12 @@ public class CommentPinRepository implements ICommentPinRepository {
         commentPinDao.deleteByPostId(postId);
     }
 
+    /**
+     * 执行 clearIfPinned 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param commentId 评论 ID。类型：{@link Long}
+     */
     @Override
     public void clearIfPinned(Long postId, Long commentId) {
         if (postId == null || commentId == null) {

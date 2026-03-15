@@ -20,8 +20,6 @@ import org.springframework.stereotype.Service;
 /**
  * 关系读侧查询服务。
  *
- * <p>负责把关注/粉丝边和 `user_base` 读模型拼成用户列表，同时补出批量关系态。</p>
- *
  * @author m0_52354773
  * @author codex
  * @since 2026-03-08

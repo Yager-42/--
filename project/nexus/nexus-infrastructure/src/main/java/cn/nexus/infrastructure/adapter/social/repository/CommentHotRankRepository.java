@@ -11,8 +11,7 @@ import org.springframework.stereotype.Repository;
 /**
  * 评论热榜仓储 Redis 实现（ZSET）。
  *
- * <p>Key：comment:hot:{postId}</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */
@@ -24,6 +23,13 @@ public class CommentHotRankRepository implements ICommentHotRankRepository {
 
     private final StringRedisTemplate stringRedisTemplate;
 
+    /**
+     * 写入数据。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param rootCommentId rootCommentId 参数。类型：{@link Long}
+     * @param score score 参数。类型：{@code double}
+     */
     @Override
     public void upsert(Long postId, Long rootCommentId, double score) {
         if (postId == null || rootCommentId == null) {
@@ -32,6 +38,12 @@ public class CommentHotRankRepository implements ICommentHotRankRepository {
         stringRedisTemplate.opsForZSet().add(key(postId), rootCommentId.toString(), score);
     }
 
+    /**
+     * 移除数据。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param rootCommentId rootCommentId 参数。类型：{@link Long}
+     */
     @Override
     public void remove(Long postId, Long rootCommentId) {
         if (postId == null || rootCommentId == null) {
@@ -40,6 +52,13 @@ public class CommentHotRankRepository implements ICommentHotRankRepository {
         stringRedisTemplate.opsForZSet().remove(key(postId), rootCommentId.toString());
     }
 
+    /**
+     * 查询前列 ID。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> topIds(Long postId, int limit) {
         if (postId == null) {
@@ -64,6 +83,11 @@ public class CommentHotRankRepository implements ICommentHotRankRepository {
         return ids;
     }
 
+    /**
+     * 清空数据。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     */
     @Override
     public void clear(Long postId) {
         if (postId == null) {
@@ -72,6 +96,12 @@ public class CommentHotRankRepository implements ICommentHotRankRepository {
         stringRedisTemplate.delete(key(postId));
     }
 
+    /**
+     * 截断到前列。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param keepTop keepTop 参数。类型：{@code int}
+     */
     @Override
     public void trimToTop(Long postId, int keepTop) {
         if (postId == null || keepTop <= 0) {

@@ -45,8 +45,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /**
  * 点赞子域服务。
  *
- * <p>`POST` 点赞继续走缓存优先路径；`COMMENT` 点赞以数据库为真相，再把结果回刷到 `Redis`。</p>
- *
  * @author rr
  * @author codex
  * @since 2026-01-20
@@ -475,6 +473,10 @@ public class ReactionLikeService implements IReactionLikeService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 action.run();

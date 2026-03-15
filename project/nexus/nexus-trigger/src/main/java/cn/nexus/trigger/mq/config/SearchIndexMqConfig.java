@@ -21,8 +21,6 @@ import java.util.Map;
 /**
  * Search 索引更新 `MQ` 拓扑配置。
  *
- * <p>负责把 `social.feed` 上的内容事件和用户昵称事件绑定到独立队列，并统一挂上 `DLQ` 与消费重试策略。</p>
- *
  * @author rr
  * @author codex
  * @since 2026-02-02

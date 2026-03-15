@@ -32,7 +32,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 关系接口入口。
+ * 社交关系 HTTP 入口：统一接住关注、取关、拉黑和关系查询请求。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Slf4j
 @RestController
@@ -46,10 +50,17 @@ public class RelationController implements IRelationApi {
     @Resource
     private RelationQueryService relationQueryService;
 
+    /**
+     * 发起关注请求。
+     *
+     * @param requestDTO 关注请求体，类型：{@link FollowRequestDTO}
+     * @return 关注结果，类型：{@link Response}
+     */
     @PostMapping("/follow")
     @Override
     public Response<FollowResponseDTO> follow(@RequestBody FollowRequestDTO requestDTO) {
         try {
+            // sourceId 一律从登录态读取，避免前端伪造“替别人关注”。
             Long userId = UserContext.requireUserId();
             FollowResultVO vo = relationService.follow(userId, requestDTO.getTargetId());
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
@@ -65,10 +76,17 @@ public class RelationController implements IRelationApi {
         }
     }
 
+    /**
+     * 发起取关请求。
+     *
+     * @param requestDTO 取关请求体，类型：{@link FollowRequestDTO}
+     * @return 取关结果，类型：{@link Response}
+     */
     @PostMapping("/unfollow")
     @Override
     public Response<FollowResponseDTO> unfollow(@RequestBody FollowRequestDTO requestDTO) {
         try {
+            // 取关和关注一样，只认当前登录用户，不信请求体里的身份信息。
             Long userId = UserContext.requireUserId();
             FollowResultVO vo = relationService.unfollow(userId, requestDTO.getTargetId());
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
@@ -84,10 +102,17 @@ public class RelationController implements IRelationApi {
         }
     }
 
+    /**
+     * 发起拉黑请求。
+     *
+     * @param requestDTO 拉黑请求体，类型：{@link BlockRequestDTO}
+     * @return 拉黑结果，类型：{@link Response}
+     */
     @PostMapping("/block")
     @Override
     public Response<BlockResponseDTO> block(@RequestBody BlockRequestDTO requestDTO) {
         try {
+            // 拉黑也是强身份操作，必须绑定当前登录用户。
             Long userId = UserContext.requireUserId();
             OperationResultVO vo = relationService.block(userId, requestDTO.getTargetId());
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
@@ -103,6 +128,12 @@ public class RelationController implements IRelationApi {
         }
     }
 
+    /**
+     * 查询关注列表。
+     *
+     * @param requestDTO 列表查询参数，类型：{@link RelationListRequestDTO}
+     * @return 关注列表响应，类型：{@link Response}
+     */
     @GetMapping("/following")
     @Override
     public Response<RelationListResponseDTO> following(RelationListRequestDTO requestDTO) {
@@ -122,6 +153,12 @@ public class RelationController implements IRelationApi {
         }
     }
 
+    /**
+     * 查询粉丝列表。
+     *
+     * @param requestDTO 列表查询参数，类型：{@link RelationListRequestDTO}
+     * @return 粉丝列表响应，类型：{@link Response}
+     */
     @GetMapping("/followers")
     @Override
     public Response<RelationListResponseDTO> followers(RelationListRequestDTO requestDTO) {
@@ -141,6 +178,12 @@ public class RelationController implements IRelationApi {
         }
     }
 
+    /**
+     * 批量查询目标用户的关注态和拉黑态。
+     *
+     * @param requestDTO 批量查询请求体，类型：{@link RelationStateBatchRequestDTO}
+     * @return 批量关系状态响应，类型：{@link Response}
+     */
     @PostMapping("/state/batch")
     @Override
     public Response<RelationStateBatchResponseDTO> stateBatch(@RequestBody RelationStateBatchRequestDTO requestDTO) {

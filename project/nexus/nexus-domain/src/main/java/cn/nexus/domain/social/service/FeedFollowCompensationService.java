@@ -13,8 +13,7 @@ import java.util.List;
 /**
  * Feed follow 补偿服务实现：在线用户刚关注后，立刻把“新关注的人”的最近 K 条内容写入 inbox。
  *
- * <p>注意：这是体验补偿，不是强一致性要求；离线用户不补偿，回归后走 inbox rebuild。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */

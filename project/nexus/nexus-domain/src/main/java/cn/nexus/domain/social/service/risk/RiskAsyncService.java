@@ -24,9 +24,10 @@ import java.util.Map;
 /**
  * 风控异步回写服务：消费 LLM 与图片扫描结果后回写 decision_log，并生成后续处置所需信息。
  *
- * <p>原则：LLM 永不阻塞在线链路；异步链路要能把“隔离中的内容与评论”推进到最终状态。</p>
- *
- * @author {$authorName}
+ * @author rr
+ * @author rr
+ * @author codex
+ * @author codex
  * @since 2026-01-29
  */
 @Slf4j

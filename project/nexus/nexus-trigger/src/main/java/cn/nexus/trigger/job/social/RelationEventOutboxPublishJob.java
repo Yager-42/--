@@ -14,7 +14,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 关系事件 Outbox 发布/清理任务。
+ * 关系事件 Outbox 发布任务：把库里的待发事件稳定推到 MQ，并清理历史完成记录。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-08
  */
 @Component
 @RequiredArgsConstructor
@@ -25,8 +29,14 @@ public class RelationEventOutboxPublishJob {
     private final IRelationEventPort relationEventPort;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 执行 publishPending 逻辑。
+     *
+     */
     @Scheduled(fixedDelay = 60000)
     public void publishPending() {
+        // NEW 和 FAIL 分两轮扫，目的是让“首次发送”和“补偿重试”都走同一套发布逻辑，
+        // 但调度上又保持可观察、可限流。
         List<RelationEventOutboxVO> list = outboxRepository.fetchPending("NEW", new Date(), 100);
         for (RelationEventOutboxVO item : list) {
             try {
@@ -50,6 +60,10 @@ public class RelationEventOutboxPublishJob {
         }
     }
 
+    /**
+     * 执行 cleanDone 逻辑。
+     *
+     */
     @Scheduled(cron = "0 0 3 * * ?")
     public void cleanDone() {
         long sevenDays = System.currentTimeMillis() - 7L * 24 * 3600 * 1000;

@@ -4,6 +4,13 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionUserEdgeVO;
 import java.util.List;
 
+/**
+ * IReactionRepository 仓储实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-20
+ */
 public interface IReactionRepository {
 
     void batchUpsert(ReactionTargetVO target, List<Long> userIds);

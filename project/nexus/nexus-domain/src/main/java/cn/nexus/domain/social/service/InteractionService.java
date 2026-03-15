@@ -29,8 +29,6 @@ import java.util.Set;
 /**
  * 互动服务。
  *
- * <p>把点赞、评论、通知和轻量互动能力收口在一处，对外提供统一业务入口。</p>
- *
  * @author rr
  * @author codex
  * @since 2025-12-26

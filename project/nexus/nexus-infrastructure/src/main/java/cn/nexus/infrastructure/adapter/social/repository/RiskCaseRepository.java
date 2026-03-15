@@ -13,6 +13,10 @@ import java.util.List;
 
 /**
  * 风控工单仓储 MyBatis 实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Repository
 @RequiredArgsConstructor
@@ -20,6 +24,12 @@ public class RiskCaseRepository implements IRiskCaseRepository {
 
     private final IRiskCaseDao caseDao;
 
+    /**
+     * 幂等插入数据。
+     *
+     * @param entity entity 参数。类型：{@link RiskCaseEntity}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean insertIgnore(RiskCaseEntity entity) {
         if (entity == null || entity.getCaseId() == null || entity.getDecisionId() == null) {
@@ -28,6 +38,12 @@ public class RiskCaseRepository implements IRiskCaseRepository {
         return caseDao.insertIgnore(toPO(entity)) > 0;
     }
 
+    /**
+     * 执行 findByCaseId 逻辑。
+     *
+     * @param caseId caseId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link RiskCaseEntity}
+     */
     @Override
     public RiskCaseEntity findByCaseId(Long caseId) {
         if (caseId == null) {
@@ -36,6 +52,12 @@ public class RiskCaseRepository implements IRiskCaseRepository {
         return toEntity(caseDao.selectById(caseId));
     }
 
+    /**
+     * 执行 findByDecisionId 逻辑。
+     *
+     * @param decisionId decisionId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link RiskCaseEntity}
+     */
     @Override
     public RiskCaseEntity findByDecisionId(Long decisionId) {
         if (decisionId == null) {
@@ -44,6 +66,14 @@ public class RiskCaseRepository implements IRiskCaseRepository {
         return toEntity(caseDao.selectByDecisionId(decisionId));
     }
 
+    /**
+     * 执行 assign 逻辑。
+     *
+     * @param caseId caseId 参数。类型：{@link Long}
+     * @param assignee assignee 参数。类型：{@link Long}
+     * @param expectedStatus expectedStatus 参数。类型：{@link String}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean assign(Long caseId, Long assignee, String expectedStatus) {
         if (caseId == null || assignee == null || expectedStatus == null || expectedStatus.isBlank()) {
@@ -52,6 +82,15 @@ public class RiskCaseRepository implements IRiskCaseRepository {
         return caseDao.updateAssign(caseId, assignee, expectedStatus) > 0;
     }
 
+    /**
+     * 执行 finish 逻辑。
+     *
+     * @param caseId caseId 参数。类型：{@link Long}
+     * @param result result 参数。类型：{@link String}
+     * @param evidenceJson evidenceJson 参数。类型：{@link String}
+     * @param expectedStatus expectedStatus 参数。类型：{@link String}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean finish(Long caseId, String result, String evidenceJson, String expectedStatus) {
         if (caseId == null || expectedStatus == null || expectedStatus.isBlank()) {
@@ -60,6 +99,15 @@ public class RiskCaseRepository implements IRiskCaseRepository {
         return caseDao.updateFinish(caseId, result, evidenceJson, expectedStatus) > 0;
     }
 
+    /**
+     * 执行 list 逻辑。
+     *
+     * @param status status 参数。类型：{@link String}
+     * @param queue queue 参数。类型：{@link String}
+     * @param limit 分页大小。类型：{@link Integer}
+     * @param offset offset 参数。类型：{@link Integer}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskCaseEntity> list(String status, String queue, Integer limit, Integer offset) {
         Integer l = limit == null ? 20 : Math.max(1, Math.min(limit, 200));
@@ -78,6 +126,17 @@ public class RiskCaseRepository implements IRiskCaseRepository {
         return res;
     }
 
+    /**
+     * 执行 list 逻辑。
+     *
+     * @param status status 参数。类型：{@link String}
+     * @param queue queue 参数。类型：{@link String}
+     * @param beginTimeMs beginTimeMs 参数。类型：{@link Long}
+     * @param endTimeMs endTimeMs 参数。类型：{@link Long}
+     * @param limit 分页大小。类型：{@link Integer}
+     * @param offset offset 参数。类型：{@link Integer}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskCaseEntity> list(String status, String queue, Long beginTimeMs, Long endTimeMs, Integer limit, Integer offset) {
         Integer l = limit == null ? 20 : Math.max(1, Math.min(limit, 200));

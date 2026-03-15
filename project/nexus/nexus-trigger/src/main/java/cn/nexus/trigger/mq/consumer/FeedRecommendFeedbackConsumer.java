@@ -14,8 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * 推荐反馈消费者（C 通道）：RecommendFeedbackEvent -> insertFeedback。
  *
- * <p>best-effort：失败只打日志，不阻断主链路。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-26
  */
@@ -30,6 +29,11 @@ public class FeedRecommendFeedbackConsumer {
     private final ReliableMqConsumerRecordService consumerRecordService;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 消费推荐反馈事件并写入推荐系统。
+     *
+     * @param event 推荐反馈事件。 {@link RecommendFeedbackEvent}
+     */
     @RabbitListener(queues = FeedRecommendFeedbackMqConfig.QUEUE, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(RecommendFeedbackEvent event) {
         if (event == null) {

@@ -15,6 +15,10 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Outbox 重建服务实现：按“最近 N 天 + 最大条数”重建作者 Outbox。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-01
  */
 @Service
 @RequiredArgsConstructor
@@ -29,6 +33,11 @@ public class FeedOutboxRebuildService implements IFeedOutboxRebuildService {
     @Value("${feed.outbox.maxSize:1000}")
     private int outboxMaxSize;
 
+    /**
+     * 强制重建作者 Outbox。
+     *
+     * @param authorId 作者 ID。 {@link Long}
+     */
     @Override
     public void forceRebuild(Long authorId) {
         if (authorId == null) {
@@ -42,6 +51,7 @@ public class FeedOutboxRebuildService implements IFeedOutboxRebuildService {
         String cursor = null;
         List<FeedInboxEntryVO> entries = new ArrayList<>();
         while (true) {
+            // 逐页扫描作者内容，直到命中时间截止线或达到最大条数，避免一次性把历史全拉出来。
             ContentPostPageVO page = contentRepository.listUserPosts(authorId, cursor, 200);
             List<ContentPostEntity> posts = page.getPosts();
             if (posts == null || posts.isEmpty()) {

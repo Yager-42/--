@@ -19,8 +19,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /**
  * 用户域服务：收口 `Profile / Settings / Status` 这几条最小写链路。
  *
- * <p>这个服务故意不做“自动补建用户”之类的兜底，边界错误就让它暴露出来。</p>
- *
  * @author rr
  * @author codex
  * @since 2026-02-03
@@ -202,6 +200,10 @@ public class UserService {
             throw new IllegalStateException("transaction synchronization is not active");
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 action.run();

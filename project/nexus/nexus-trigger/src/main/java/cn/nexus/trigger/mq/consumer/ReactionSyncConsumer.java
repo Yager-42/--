@@ -21,6 +21,7 @@ import java.util.UUID;
 /**
  * 点赞同步延迟消息消费者：触发对某个 target 的“延迟落库”。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-20
  */
@@ -39,6 +40,11 @@ public class ReactionSyncConsumer {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 消费单条消息。
+     *
+     * @param rawMessage rawMessage 参数。类型：{@link String}
+     */
     @RabbitListener(queues = ReactionSyncDelayConfig.QUEUE)
     public void onMessage(String rawMessage) {
         if (rawMessage == null || rawMessage.isBlank()) {

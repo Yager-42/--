@@ -16,8 +16,7 @@ import java.util.Set;
 /**
  * 大 V 聚合池仓储 Redis 实现（ZSET）。
  *
- * <p>Key：feed:bigv:pool:{bucket}</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */
@@ -30,6 +29,13 @@ public class FeedBigVPoolRepository implements IFeedBigVPoolRepository {
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedBigVPoolProperties feedBigVPoolProperties;
 
+    /**
+     * 执行 addToPool 逻辑。
+     *
+     * @param authorId authorId 参数。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param publishTimeMs publishTimeMs 参数。类型：{@link Long}
+     */
     @Override
     public void addToPool(Long authorId, Long postId, Long publishTimeMs) {
         if (!feedBigVPoolProperties.isEnabled()) {
@@ -44,6 +50,12 @@ public class FeedBigVPoolRepository implements IFeedBigVPoolRepository {
         trimToMaxSize(key);
     }
 
+    /**
+     * 执行 removeFromPool 逻辑。
+     *
+     * @param authorId authorId 参数。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     */
     @Override
     public void removeFromPool(Long authorId, Long postId) {
         if (!feedBigVPoolProperties.isEnabled()) {
@@ -55,6 +67,15 @@ public class FeedBigVPoolRepository implements IFeedBigVPoolRepository {
         stringRedisTemplate.opsForZSet().remove(poolKey(bucketOf(authorId)), postId.toString());
     }
 
+    /**
+     * 执行 pagePool 逻辑。
+     *
+     * @param bucket bucket 参数。类型：{@code int}
+     * @param cursorTimeMs cursorTimeMs 参数。类型：{@link Long}
+     * @param cursorPostId cursorPostId 参数。类型：{@link Long}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<FeedInboxEntryVO> pagePool(int bucket, Long cursorTimeMs, Long cursorPostId, int limit) {
         if (!feedBigVPoolProperties.isEnabled()) {
@@ -70,6 +91,7 @@ public class FeedBigVPoolRepository implements IFeedBigVPoolRepository {
         long safeCursorPostId = cursorPostId == null ? Long.MAX_VALUE : cursorPostId;
         int fetchCount = normalizedLimit + 20;
 
+        // 先按时间分数粗拉一批，再用 (publishTimeMs, postId) 做二次游标过滤，补上同毫秒下的稳定翻页语义。
         Set<ZSetOperations.TypedTuple<String>> tuples = stringRedisTemplate.opsForZSet()
                 .reverseRangeByScoreWithScores(key, 0D, safeCursorTime, 0, fetchCount);
         if (tuples == null || tuples.isEmpty()) {

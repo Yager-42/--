@@ -9,7 +9,11 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * 基于 Redis Hash 的关系计数缓存。
+ * 基于 Redis Hash 的关系计数缓存实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Component
 @RequiredArgsConstructor
@@ -24,6 +28,12 @@ public class RelationCachePort implements IRelationCachePort {
     private final StringRedisTemplate redisTemplate;
     private final IRelationRepository relationRepository;
 
+    /**
+     * 执行 getFollowingCount 逻辑。
+     *
+     * @param sourceId sourceId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code long}
+     */
     @Override
     public long getFollowingCount(Long sourceId) {
         if (sourceId == null) {
@@ -40,6 +50,12 @@ public class RelationCachePort implements IRelationCachePort {
         return count;
     }
 
+    /**
+     * 执行 getFollowerCount 逻辑。
+     *
+     * @param targetId 目标 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@code long}
+     */
     @Override
     public long getFollowerCount(Long targetId) {
         if (targetId == null) {
@@ -56,16 +72,33 @@ public class RelationCachePort implements IRelationCachePort {
         return count;
     }
 
+    /**
+     * 执行 incrFollowing 逻辑。
+     *
+     * @param sourceId sourceId 参数。类型：{@link Long}
+     * @param delta delta 参数。类型：{@code long}
+     */
     @Override
     public void incrFollowing(Long sourceId, long delta) {
         adjust(sourceId, FIELD_FOLLOWING, delta);
     }
 
+    /**
+     * 执行 incrFollower 逻辑。
+     *
+     * @param targetId 目标 ID。类型：{@link Long}
+     * @param delta delta 参数。类型：{@code long}
+     */
     @Override
     public void incrFollower(Long targetId, long delta) {
         adjust(targetId, FIELD_FOLLOWER, delta);
     }
 
+    /**
+     * 执行 evict 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     */
     @Override
     public void evict(Long userId) {
         if (userId == null) {

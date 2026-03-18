@@ -1,13 +1,40 @@
 package cn.nexus.api.auth;
 
-import cn.nexus.api.auth.dto.AuthLoginRequestDTO;
-import cn.nexus.api.auth.dto.AuthLoginResponseDTO;
+import cn.nexus.api.auth.dto.AuthAdminListResponseDTO;
+import cn.nexus.api.auth.dto.AuthChangePasswordRequestDTO;
+import cn.nexus.api.auth.dto.AuthGrantAdminRequestDTO;
+import cn.nexus.api.auth.dto.AuthMeResponseDTO;
+import cn.nexus.api.auth.dto.AuthPasswordLoginRequestDTO;
+import cn.nexus.api.auth.dto.AuthRegisterRequestDTO;
+import cn.nexus.api.auth.dto.AuthRegisterResponseDTO;
+import cn.nexus.api.auth.dto.AuthSmsLoginRequestDTO;
+import cn.nexus.api.auth.dto.AuthSmsSendRequestDTO;
+import cn.nexus.api.auth.dto.AuthSmsSendResponseDTO;
+import cn.nexus.api.auth.dto.AuthTokenResponseDTO;
 import cn.nexus.api.response.Response;
 
 /**
- * Authentication API.
+ * 正式认证 API 契约。
  */
 public interface IAuthApi {
 
-    Response<AuthLoginResponseDTO> login(AuthLoginRequestDTO requestDTO);
+    Response<AuthSmsSendResponseDTO> sendSms(AuthSmsSendRequestDTO requestDTO);
+
+    Response<AuthRegisterResponseDTO> register(AuthRegisterRequestDTO requestDTO);
+
+    Response<AuthTokenResponseDTO> passwordLogin(AuthPasswordLoginRequestDTO requestDTO);
+
+    Response<AuthTokenResponseDTO> smsLogin(AuthSmsLoginRequestDTO requestDTO);
+
+    Response<Void> changePassword(AuthChangePasswordRequestDTO requestDTO);
+
+    Response<Void> grantAdmin(AuthGrantAdminRequestDTO requestDTO);
+
+    Response<Void> revokeAdmin(AuthGrantAdminRequestDTO requestDTO);
+
+    Response<AuthAdminListResponseDTO> listAdmins();
+
+    Response<Void> logout();
+
+    Response<AuthMeResponseDTO> me();
 }

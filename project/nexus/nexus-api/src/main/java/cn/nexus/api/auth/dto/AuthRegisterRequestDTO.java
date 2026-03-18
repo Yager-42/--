@@ -6,15 +6,16 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * Login response.
+ * 注册请求。
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class AuthLoginResponseDTO {
-    private Long userId;
-    private String tokenName;
-    private String tokenPrefix;
-    private String token;
+public class AuthRegisterRequestDTO {
+    private String phone;
+    private String smsCode;
+    private String password;
+    private String nickname;
+    private String avatarUrl;
 }

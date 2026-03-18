@@ -53,43 +53,10 @@ class UserContextInterceptorTest {
     }
 
     @Test
-    void preHandle_shouldFallbackToUserIdHeader() throws Exception {
+    void preHandle_shouldRejectForgedUserIdHeaderWithoutToken() throws Exception {
         UserContextInterceptor interceptor = new UserContextInterceptor(new ObjectMapper());
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("userId", "44");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
-            stpUtil.when(StpUtil::getLoginIdAsLong).thenThrow(new RuntimeException("no login"));
-
-            boolean allowed = interceptor.preHandle(request, response, new Object());
-
-            assertTrue(allowed);
-            assertEquals(44L, UserContext.requireUserId());
-        }
-    }
-
-    @Test
-    void preHandle_shouldFallbackToXUserIdHeader() throws Exception {
-        UserContextInterceptor interceptor = new UserContextInterceptor(new ObjectMapper());
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader(UserContext.HEADER_USER_ID, "55");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
-            stpUtil.when(StpUtil::getLoginIdAsLong).thenThrow(new RuntimeException("no login"));
-
-            boolean allowed = interceptor.preHandle(request, response, new Object());
-
-            assertTrue(allowed);
-            assertEquals(55L, UserContext.requireUserId());
-        }
-    }
-
-    @Test
-    void preHandle_shouldWriteIllegalParameterWhenHeaderMissing() throws Exception {
-        UserContextInterceptor interceptor = new UserContextInterceptor(new ObjectMapper());
-        MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
@@ -104,10 +71,27 @@ class UserContextInterceptorTest {
     }
 
     @Test
-    void preHandle_shouldWriteIllegalParameterWhenHeaderInvalid() throws Exception {
+    void preHandle_shouldRejectForgedXUserIdHeaderWithoutToken() throws Exception {
         UserContextInterceptor interceptor = new UserContextInterceptor(new ObjectMapper());
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("userId", "abc");
+        request.addHeader("X-User-Id", "55");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
+            stpUtil.when(StpUtil::getLoginIdAsLong).thenThrow(new RuntimeException("no login"));
+
+            boolean allowed = interceptor.preHandle(request, response, new Object());
+
+            assertFalse(allowed);
+            assertTrue(response.getContentAsString().contains("\"code\":\"0002\""));
+            assertNull(UserContext.getUserId());
+        }
+    }
+
+    @Test
+    void preHandle_shouldWriteIllegalParameterWhenTokenMissing() throws Exception {
+        UserContextInterceptor interceptor = new UserContextInterceptor(new ObjectMapper());
+        MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {

@@ -1,5 +1,6 @@
 package cn.nexus.trigger.http.social;
 
+import cn.dev33.satoken.annotation.SaCheckRole;
 import cn.nexus.api.response.Response;
 import cn.nexus.api.social.IRiskAdminApi;
 import cn.nexus.api.social.common.OperationResultDTO;
@@ -28,6 +29,7 @@ import java.util.List;
 @Slf4j
 @RestController
 @CrossOrigin("*")
+@SaCheckRole("ADMIN")
 @RequestMapping("/api/v1/risk/admin")
 public class RiskAdminController implements IRiskAdminApi {
 

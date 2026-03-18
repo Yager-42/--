@@ -6,8 +6,7 @@ import cn.nexus.types.exception.AppException;
 /**
  * 当前请求用户上下文。
  *
- * <p>约定：网关为每个 HTTP 请求注入 Header {@code X-User-Id}，服务端把它当真值使用，不再信任请求体里的
- * {@code userId}。</p>
+ * <p>约定：服务端只信任登录 Token 里解析出的 {@code userId}，不再接受 Header 直接注入身份。</p>
  *
  * <p>实现方式：通过 {@link ThreadLocal} 把当前请求的 {@code userId} 绑定到当前线程，供 Controller 和
  * Service 直接读取。</p>
@@ -20,11 +19,6 @@ import cn.nexus.types.exception.AppException;
  * @since 2026-01-15
  */
 public final class UserContext {
-
-    /**
-     * 网关注入的用户 ID Header 名称。
-     */
-    public static final String HEADER_USER_ID = "X-User-Id";
 
     private static final ThreadLocal<Long> CURRENT_USER_ID = new ThreadLocal<>();
 

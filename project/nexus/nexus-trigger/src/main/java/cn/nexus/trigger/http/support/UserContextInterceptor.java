@@ -13,10 +13,10 @@ import org.springframework.web.servlet.HandlerInterceptor;
 import java.nio.charset.StandardCharsets;
 
 /**
- * {@code userId} 注入拦截器：从 Token 或 HTTP Header 解析当前用户并写入 {@link UserContext}。
+ * 当前用户注入拦截器：只从 Token 解析当前用户并写入 {@link UserContext}。
  *
  * <p>这层的职责很单一：把“当前请求是谁”收口到一个地方。后面的 Controller 只从 {@link UserContext} 取值，
- * 不再自己到处解析 Header。</p>
+ * 不再自己到处解析 Token。</p>
  *
  * <p>注意：</p>
  * <p>1) 必须在 {@link #afterCompletion(HttpServletRequest, HttpServletResponse, Object, Exception)} 清理
@@ -53,26 +53,12 @@ public class UserContextInterceptor implements HandlerInterceptor {
         }
 
         Long tokenUserId = resolveUserIdFromToken();
-        if (tokenUserId != null) {
-            UserContext.setUserId(tokenUserId);
-            return true;
-        }
-
-        // Token 取不到时，再兼容多种 Header，保证历史调用方还能继续工作。
-        String raw = headerFirstNonBlank(request, "userId", UserContext.HEADER_USER_ID);
-        if (raw == null || raw.isBlank()) {
+        if (tokenUserId == null) {
             writeIllegalParameter(response);
             return false;
         }
-
-        try {
-            long userId = Long.parseLong(raw.trim());
-            UserContext.setUserId(userId);
-            return true;
-        } catch (NumberFormatException e) {
-            writeIllegalParameter(response);
-            return false;
-        }
+        UserContext.setUserId(tokenUserId);
+        return true;
     }
 
     /**
@@ -102,22 +88,6 @@ public class UserContextInterceptor implements HandlerInterceptor {
         } catch (Exception ignored) {
             return null;
         }
-    }
-
-    private String headerFirstNonBlank(HttpServletRequest request, String... headerNames) {
-        if (request == null || headerNames == null) {
-            return null;
-        }
-        for (String name : headerNames) {
-            if (name == null || name.isBlank()) {
-                continue;
-            }
-            String v = request.getHeader(name);
-            if (v != null && !v.isBlank()) {
-                return v;
-            }
-        }
-        return null;
     }
 }
 

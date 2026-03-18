@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.auth.IAuthUserRoleDao">
+
+    <select id="selectRoleCodesByUserId" resultType="java.lang.String">
+        SELECT r.role_code
+        FROM auth_user_role ur
+        INNER JOIN auth_role r ON r.role_id = ur.role_id
+        WHERE ur.user_id = #{userId}
+        ORDER BY ur.id ASC
+    </select>
+
+    <select id="selectUserIdsByRoleCode" resultType="java.lang.Long">
+        SELECT ur.user_id
+        FROM auth_user_role ur
+        INNER JOIN auth_role r ON r.role_id = ur.role_id
+        WHERE r.role_code = #{roleCode}
+        ORDER BY ur.id ASC
+    </select>
+
+    <insert id="insertIgnore"
+            parameterType="cn.nexus.infrastructure.dao.auth.po.AuthUserRolePO">
+        INSERT IGNORE INTO auth_user_role(id, user_id, role_id, create_time)
+        VALUES(#{id}, #{userId}, #{roleId}, NOW())
+    </insert>
+
+    <delete id="deleteByUserIdAndRoleCode">
+        DELETE ur
+        FROM auth_user_role ur
+        INNER JOIN auth_role r ON r.role_id = ur.role_id
+        WHERE ur.user_id = #{userId}
+          AND r.role_code = #{roleCode}
+    </delete>
+
+    <select id="countByUserIdAndRoleCode" resultType="int">
+        SELECT COUNT(1)
+        FROM auth_user_role ur
+        INNER JOIN auth_role r ON r.role_id = ur.role_id
+        WHERE ur.user_id = #{userId}
+          AND r.role_code = #{roleCode}
+    </select>
+
+</mapper>

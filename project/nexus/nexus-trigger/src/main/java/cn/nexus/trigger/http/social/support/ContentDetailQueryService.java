@@ -18,12 +18,14 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * 内容详情查询服务。
@@ -36,7 +38,6 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ContentDetailQueryService {
 
     private static final Duration LOCAL_TTL = Duration.ofHours(1);
@@ -44,6 +45,17 @@ public class ContentDetailQueryService {
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
     private final IReactionCachePort reactionCachePort;
+    private final Executor aggregationExecutor;
+
+    public ContentDetailQueryService(IContentRepository contentRepository,
+                                    IUserBaseRepository userBaseRepository,
+                                    IReactionCachePort reactionCachePort,
+                                    @Qualifier("aggregationExecutor") Executor aggregationExecutor) {
+        this.contentRepository = contentRepository;
+        this.userBaseRepository = userBaseRepository;
+        this.reactionCachePort = reactionCachePort;
+        this.aggregationExecutor = aggregationExecutor;
+    }
 
     private final Cache<Long, StableSnapshot> localCache = Caffeine.newBuilder()
             .maximumSize(100_000)
@@ -155,8 +167,15 @@ public class ContentDetailQueryService {
             throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
         }
         // 昵称、头像、点赞数都是动态字段，不跟稳定快照一起长时间缓存。
-        UserBriefVO author = loadAuthor(snapshot.getAuthorId());
-        Long likeCount = loadLikeCount(snapshot.getPostId());
+        CompletableFuture<UserBriefVO> authorFuture = CompletableFuture.supplyAsync(
+                () -> loadAuthor(snapshot.getAuthorId()),
+                aggregationExecutor);
+        CompletableFuture<Long> likeCountFuture = CompletableFuture.supplyAsync(
+                () -> loadLikeCount(snapshot.getPostId()),
+                aggregationExecutor);
+
+        UserBriefVO author = authorFuture.join();
+        Long likeCount = likeCountFuture.join();
         return ContentDetailResponseDTO.builder()
                 .postId(snapshot.getPostId())
                 .authorId(snapshot.getAuthorId())

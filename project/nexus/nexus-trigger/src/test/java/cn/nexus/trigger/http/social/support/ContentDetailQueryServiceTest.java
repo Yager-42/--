@@ -13,6 +13,7 @@ import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.List;
+import java.util.concurrent.Executor;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -23,10 +24,12 @@ class ContentDetailQueryServiceTest {
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
         IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
+        Executor aggregationExecutor = Runnable::run;
         ContentDetailQueryService service = new ContentDetailQueryService(
                 contentRepository,
                 userBaseRepository,
-                reactionCachePort
+                reactionCachePort,
+                aggregationExecutor
         );
 
         when(contentRepository.findPost(101L)).thenReturn(ContentPostEntity.builder()
@@ -48,5 +51,36 @@ class ContentDetailQueryServiceTest {
         assertEquals(9L, first.getLikeCount());
         assertEquals("body", second.getContent());
         verify(contentRepository, times(1)).findPost(101L);
+    }
+
+    @Test
+    void query_shouldNotFailWhenAuthorLoadFailed() {
+        IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
+        IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
+        IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
+        Executor aggregationExecutor = Runnable::run;
+        ContentDetailQueryService service = new ContentDetailQueryService(
+                contentRepository,
+                userBaseRepository,
+                reactionCachePort,
+                aggregationExecutor
+        );
+
+        when(contentRepository.findPost(101L)).thenReturn(ContentPostEntity.builder()
+                .postId(101L)
+                .userId(11L)
+                .title("t")
+                .contentText("body")
+                .summary("s")
+                .status(2)
+                .build());
+        when(userBaseRepository.listByUserIds(List.of(11L))).thenThrow(new RuntimeException("boom"));
+        when(reactionCachePort.getCount(any())).thenReturn(9L);
+
+        ContentDetailResponseDTO response = service.query(101L);
+
+        assertEquals("body", response.getContent());
+        assertEquals(9L, response.getLikeCount());
+        assertEquals("", response.getAuthorNickname());
     }
 }

@@ -171,23 +171,20 @@
 
 ### 4.1 Header 与身份（最重要）
 
-客户端 → Gateway：
+客户端 → 服务端：
 - `Authorization: Bearer <token>`
 
-Gateway → 下游所有服务：
-- `userId: <Long>`（注意：是普通 Header，不要 `X-User-Id`）
-
 下游服务必须遵守：
-- **禁止**信任客户端直接传 `userId`  
-- userId 只能来自 Gateway 注入  
+- **禁止**信任客户端直接传 `userId` / `X-User-Id`  
+- 受保护接口的 userId 只能来自 Bearer token  
 
 ### 4.2 下游服务的“用户上下文”实现（照手册做）
 
 你需要做 3 件事（建议做成一个可复用 starter）：
 
-1) Filter：读取 Header `userId` → 写入 ThreadLocal  
+1) Filter/Interceptor：读取 Bearer token → 解析 userId → 写入 ThreadLocal  
 2) finally 清理 ThreadLocal（防止线程复用串号）  
-3) Feign 拦截器：服务 A 调服务 B 时，自动把 `userId` 透传
+3) 服务 A 调服务 B 时，如果真要透传身份，也只能透传 token，不再透传裸 `userId`
 
 建议新增模块：
 - `nexus-xhs-framework-biz-context`（给所有 xhs 服务依赖）

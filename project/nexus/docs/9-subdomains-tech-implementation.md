@@ -8,19 +8,19 @@
 
 ## 0. 先看懂一件事：一次请求怎么走
 
-### 0.1 统一入口：`X-User-Id` 怎么变成 `userId`
+### 0.1 统一入口：Bearer token 怎么变成 `userId`
 
 代码：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/support/UserContextInterceptor.java`
 做法很简单：
 
-1. 网关给每个请求带 Header：`X-User-Id: 123`
-2. 后端拦截器读取这个 Header
+1. 客户端带 `Authorization: Bearer <token>`
+2. 后端拦截器从 token 里解析 `userId`
 3. 放进 `ThreadLocal`（相当于“这一次请求的临时口袋”）
 4. Controller 里用 `UserContext.requireUserId()` 直接拿到
 
 极端情况（代码里明确处理）：
-- 如果是 `OPTIONS` 预检请求：直接放行（不要求 `X-User-Id`）
-- 如果没有 `X-User-Id` 或不是数字：直接返回 `code=0002`（非法参数）
+- 如果是 `OPTIONS` 预检请求：直接放行（不要求 token）
+- 如果没有 token 或 token 解析不出用户：直接返回 `code=0002`（非法参数）
 - 请求结束一定清理 ThreadLocal：防止线程复用导致“串号”
 
 流程图：
@@ -29,7 +29,7 @@ flowchart TD
   A["客户端请求"] --> B["UserContextInterceptor.preHandle"]
   B --> C{HTTP 方法是 OPTIONS?}
   C -- 是 --> D["放行"] --> E["进入 Controller"]
-  C -- 否 --> F{Header X-User-Id 有值且可转数字?}
+  C -- 否 --> F{Bearer token 能解析出 userId?}
   F -- 否 --> G["直接返回 Response(code=0002)"]
   F -- 是 --> H["UserContext.setUserId"]
   H --> E
@@ -164,7 +164,7 @@ flowchart TD
 5. 拼成 DTO 返回
 
 极端情况：
-- 没有 `X-User-Id`：在拦截器阶段就返回 `0002`
+- 没有 Bearer token：在拦截器阶段就返回 `0002`
 - profile 不存在：返回 `0404`（不是 0000+null）
 - 其他异常：返回 `0001`（未知失败）
 

@@ -299,6 +299,104 @@ public class CommentRepository implements ICommentRepository {
         return pageReplyIdsFromDb(rootId, c, normalizedLimit, viewerId);
     }
 
+    @Override
+    public Map<Long, List<Long>> batchListReplyPreviewIds(List<Long> rootIds, int limit, Long viewerId) {
+        if (rootIds == null || rootIds.isEmpty()) {
+            return Map.of();
+        }
+
+        int normalizedLimit = Math.max(1, limit);
+        List<Long> deduped = new ArrayList<>(rootIds.size());
+        Set<Long> seen = new LinkedHashSet<>();
+        for (Long rootId : rootIds) {
+            if (rootId != null && seen.add(rootId)) {
+                deduped.add(rootId);
+            }
+        }
+        if (deduped.isEmpty()) {
+            return Map.of();
+        }
+
+        // 只对“匿名 + 小 limit”的预览做缓存；带 viewerId 的预览不能复用缓存，否则会有可见性风险。
+        boolean preview = viewerId == null && normalizedLimit <= 10;
+        Map<Long, List<Long>> result = new HashMap<>(deduped.size() * 2);
+
+        List<Long> unresolved = new ArrayList<>();
+        if (preview) {
+            List<Long> l1Miss = new ArrayList<>();
+            for (Long rootId : deduped) {
+                String l1Key = rootId + ":" + normalizedLimit;
+                List<Long> cached = replyPreviewIdsCache.getIfPresent(l1Key);
+                if (cached != null) {
+                    result.put(rootId, new ArrayList<>(cached));
+                    continue;
+                }
+                l1Miss.add(rootId);
+            }
+
+            if (!l1Miss.isEmpty()) {
+                List<String> keys = new ArrayList<>(l1Miss.size());
+                for (Long rootId : l1Miss) {
+                    keys.add(replyPreviewRedisKey(rootId, normalizedLimit));
+                }
+
+                List<String> values = null;
+                try {
+                    values = stringRedisTemplate.opsForValue().multiGet(keys);
+                } catch (Exception ignored) {
+                    // ignore and fall back to DB
+                }
+
+                for (int i = 0; i < l1Miss.size(); i++) {
+                    Long rootId = l1Miss.get(i);
+                    String redisKey = keys.get(i);
+                    String json = values == null || values.size() <= i ? null : values.get(i);
+                    if (json != null) {
+                        List<Long> ids = parseReplyPreviewIdsCache(json);
+                        if (ids != null) {
+                            replyPreviewIdsCache.put(rootId + ":" + normalizedLimit, ids);
+                            result.put(rootId, new ArrayList<>(ids));
+                            continue;
+                        }
+                        deleteRedisQuietly(redisKey);
+                    }
+                    unresolved.add(rootId);
+                }
+            }
+        } else {
+            unresolved.addAll(deduped);
+        }
+
+        if (!unresolved.isEmpty()) {
+            List<CommentPO> rows = commentDao.selectReplyPreviewIdsByRootIds(unresolved, viewerId, normalizedLimit);
+            Map<Long, List<Long>> idsByRoot = new HashMap<>(unresolved.size() * 2);
+            if (rows != null) {
+                for (CommentPO po : rows) {
+                    if (po == null || po.getRootId() == null || po.getCommentId() == null) {
+                        continue;
+                    }
+                    idsByRoot.computeIfAbsent(po.getRootId(), x -> new ArrayList<>()).add(po.getCommentId());
+                }
+            }
+
+            for (Long rootId : unresolved) {
+                List<Long> ids = cleanIds(idsByRoot.get(rootId), normalizedLimit);
+                if (preview) {
+                    String l1Key = rootId + ":" + normalizedLimit;
+                    replyPreviewIdsCache.put(l1Key, ids);
+                    writeReplyPreviewIdsCache(replyPreviewRedisKey(rootId, normalizedLimit), ids);
+                }
+                result.put(rootId, new ArrayList<>(ids));
+            }
+        }
+
+        // 保证每个 rootId 都有返回值，调用方可以直接 getOrDefault。
+        for (Long rootId : deduped) {
+            result.putIfAbsent(rootId, List.of());
+        }
+        return result;
+    }
+
     private List<Long> pageReplyIdsFromDb(Long rootId, Cursor c, int normalizedLimit, Long viewerId) {
         if (viewerId == null) {
             return commentDao.pageReplyIds(rootId,

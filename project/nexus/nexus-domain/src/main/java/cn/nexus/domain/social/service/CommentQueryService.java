@@ -15,6 +15,7 @@ import cn.nexus.types.exception.AppException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -57,10 +58,11 @@ public class CommentQueryService implements ICommentQueryService {
 
         // 置顶评论和普通评论走两条读取路径，避免置顶项被分页逻辑吞掉。
         Long pinnedId = commentPinRepository.getPinnedCommentId(postId);
-        RootCommentViewVO pinned = loadPinned(postId, pinnedId, preload, viewerId);
+        RootCommentViewVO pinned = loadPinned(postId, pinnedId);
 
         List<Long> rootIds = commentRepository.pageRootCommentIds(postId, pinnedId, cursor, normalizedLimit, viewerId);
-        List<RootCommentViewVO> items = loadRootsWithPreview(rootIds, preload, viewerId);
+        List<RootCommentViewVO> items = loadRoots(rootIds, viewerId);
+        enrichRepliesPreview(pinned, items, preload, viewerId);
 
         enrichUserProfile(pinned, items);
 
@@ -128,7 +130,7 @@ public class CommentQueryService implements ICommentQueryService {
         int preload = normalizePreload(preloadReplyLimit, 3, 10);
 
         Long pinnedId = commentPinRepository.getPinnedCommentId(postId);
-        RootCommentViewVO pinned = loadPinned(postId, pinnedId, preload, null);
+        RootCommentViewVO pinned = loadPinned(postId, pinnedId);
 
         int fetchCount = normalizedLimit + 1;
         List<Long> raw = commentHotRankRepository.topIds(postId, fetchCount);
@@ -149,13 +151,14 @@ public class CommentQueryService implements ICommentQueryService {
             hotIds = hotIds.subList(0, normalizedLimit);
         }
 
-        List<RootCommentViewVO> items = loadRootsWithPreview(hotIds, preload, null);
+        List<RootCommentViewVO> items = loadRoots(hotIds, null);
+        enrichRepliesPreview(pinned, items, preload, null);
         enrichUserProfile(pinned, items);
 
         return CommentHotVO.builder().pinned(pinned).items(items).build();
     }
 
-    private RootCommentViewVO loadPinned(Long postId, Long pinnedId, int preload, Long viewerId) {
+    private RootCommentViewVO loadPinned(Long postId, Long pinnedId) {
         if (postId == null || pinnedId == null) {
             return null;
         }
@@ -175,11 +178,10 @@ public class CommentQueryService implements ICommentQueryService {
             return null;
         }
 
-        List<CommentViewVO> preview = loadRepliesPreview(root.getCommentId(), preload, viewerId);
-        return RootCommentViewVO.builder().root(root).repliesPreview(preview).build();
+        return RootCommentViewVO.builder().root(root).repliesPreview(List.of()).build();
     }
 
-    private List<RootCommentViewVO> loadRootsWithPreview(List<Long> rootIds, int preload, Long viewerId) {
+    private List<RootCommentViewVO> loadRoots(List<Long> rootIds, Long viewerId) {
         if (rootIds == null || rootIds.isEmpty()) {
             return List.of();
         }
@@ -199,29 +201,98 @@ public class CommentQueryService implements ICommentQueryService {
             if (!visibleToViewer(root, viewerId)) {
                 continue;
             }
-            List<CommentViewVO> preview = loadRepliesPreview(root.getCommentId(), preload, viewerId);
-            res.add(RootCommentViewVO.builder().root(root).repliesPreview(preview).build());
+            res.add(RootCommentViewVO.builder().root(root).repliesPreview(List.of()).build());
         }
         return res;
     }
 
-    private List<CommentViewVO> loadRepliesPreview(Long rootCommentId, int preload, Long viewerId) {
-        if (rootCommentId == null || preload <= 0) {
-            return List.of();
+    private void enrichRepliesPreview(RootCommentViewVO pinned, List<RootCommentViewVO> roots, int preload, Long viewerId) {
+        if (preload <= 0) {
+            return;
         }
-        List<Long> replyIds = commentRepository.pageReplyCommentIds(rootCommentId, null, preload, viewerId);
-        List<CommentViewVO> list = loadComments(replyIds);
-        if (list.isEmpty()) {
-            return List.of();
+
+        List<Long> rootIds = new ArrayList<>();
+        collectRootIds(pinned, rootIds);
+        if (roots != null) {
+            for (RootCommentViewVO v : roots) {
+                collectRootIds(v, rootIds);
+            }
+        }
+        if (rootIds.isEmpty()) {
+            return;
+        }
+
+        Map<Long, List<Long>> previewIdsByRoot = commentRepository.batchListReplyPreviewIds(rootIds, preload, viewerId);
+        if (previewIdsByRoot == null || previewIdsByRoot.isEmpty()) {
+            return;
+        }
+
+        Set<Long> allReplyIds = new LinkedHashSet<>();
+        for (List<Long> ids : previewIdsByRoot.values()) {
+            if (ids == null) {
+                continue;
+            }
+            for (Long id : ids) {
+                if (id != null) {
+                    allReplyIds.add(id);
+                }
+            }
+        }
+        if (allReplyIds.isEmpty()) {
+            return;
+        }
+
+        Map<Long, CommentViewVO> replyMap = new HashMap<>(allReplyIds.size() * 2);
+        for (CommentViewVO v : loadComments(new ArrayList<>(allReplyIds))) {
+            if (v != null && v.getCommentId() != null) {
+                replyMap.put(v.getCommentId(), v);
+            }
+        }
+
+        applyRepliesPreview(pinned, previewIdsByRoot, replyMap, viewerId);
+        if (roots != null) {
+            for (RootCommentViewVO v : roots) {
+                applyRepliesPreview(v, previewIdsByRoot, replyMap, viewerId);
+            }
+        }
+    }
+
+    private void collectRootIds(RootCommentViewVO v, List<Long> rootIds) {
+        if (v == null || rootIds == null) {
+            return;
+        }
+        CommentViewVO root = v.getRoot();
+        if (root == null || root.getCommentId() == null) {
+            return;
+        }
+        rootIds.add(root.getCommentId());
+    }
+
+    private void applyRepliesPreview(RootCommentViewVO rootView,
+                                    Map<Long, List<Long>> previewIdsByRoot,
+                                    Map<Long, CommentViewVO> replyMap,
+                                    Long viewerId) {
+        if (rootView == null || previewIdsByRoot == null || replyMap == null) {
+            return;
+        }
+        CommentViewVO root = rootView.getRoot();
+        if (root == null || root.getCommentId() == null) {
+            return;
+        }
+        List<Long> ids = previewIdsByRoot.get(root.getCommentId());
+        if (ids == null || ids.isEmpty()) {
+            rootView.setRepliesPreview(List.of());
+            return;
         }
         // 防止“预览缓存 key 不区分 viewerId”导致待审核(status=0)回复被其他人看见：这里统一做可见性过滤。
-        List<CommentViewVO> visible = new ArrayList<>(list.size());
-        for (CommentViewVO v : list) {
-            if (visibleToViewer(v, viewerId)) {
+        List<CommentViewVO> visible = new ArrayList<>(ids.size());
+        for (Long id : ids) {
+            CommentViewVO v = replyMap.get(id);
+            if (v != null && visibleToViewer(v, viewerId)) {
                 visible.add(v);
             }
         }
-        return visible;
+        rootView.setRepliesPreview(visible);
     }
 
     private List<CommentViewVO> loadComments(List<Long> ids) {

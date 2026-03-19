@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 class AuthApiContractTest {
 
     @Test
-    void authApi_shouldExposeSmsSendRegisterPasswordLoginSmsLoginChangePasswordLogoutAndMe() {
+    void authApi_shouldExposeExpectedEndpoints() {
         List<String> methodNames = Arrays.stream(IAuthApi.class.getDeclaredMethods())
                 .map(Method::getName)
                 .sorted()
@@ -21,10 +21,13 @@ class AuthApiContractTest {
 
         assertEquals(List.of(
                 "changePassword",
+                "grantAdmin",
+                "listAdmins",
                 "logout",
                 "me",
                 "passwordLogin",
                 "register",
+                "revokeAdmin",
                 "sendSms",
                 "smsLogin"
         ), methodNames);
@@ -34,6 +37,9 @@ class AuthApiContractTest {
         assertTrue(methodNames.contains("passwordLogin"));
         assertTrue(methodNames.contains("smsLogin"));
         assertTrue(methodNames.contains("changePassword"));
+        assertTrue(methodNames.contains("grantAdmin"));
+        assertTrue(methodNames.contains("revokeAdmin"));
+        assertTrue(methodNames.contains("listAdmins"));
         assertTrue(methodNames.contains("logout"));
         assertTrue(methodNames.contains("me"));
     }

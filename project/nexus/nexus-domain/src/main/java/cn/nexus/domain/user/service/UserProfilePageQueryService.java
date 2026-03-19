@@ -13,8 +13,12 @@ import cn.nexus.domain.user.model.valobj.UserProfileVO;
 import cn.nexus.domain.user.model.valobj.UserRelationStatsVO;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 
 /**
  * 个人主页聚合 `Query Service`：把用户域、关系域和风控域的只读数据编排到一起。
@@ -24,7 +28,6 @@ import org.springframework.stereotype.Service;
  * @since 2026-02-03
  */
 @Service
-@RequiredArgsConstructor
 public class UserProfilePageQueryService {
 
     /**
@@ -38,6 +41,23 @@ public class UserProfilePageQueryService {
     private final IRelationCachePort relationCachePort;
     private final IRelationPolicyPort relationPolicyPort;
     private final IRiskService riskService;
+    private final Executor aggregationExecutor;
+
+    public UserProfilePageQueryService(IUserProfileRepository userProfileRepository,
+                                      IUserStatusRepository userStatusRepository,
+                                      IRelationRepository relationRepository,
+                                      IRelationCachePort relationCachePort,
+                                      IRelationPolicyPort relationPolicyPort,
+                                      IRiskService riskService,
+                                      @Qualifier("aggregationExecutor") Executor aggregationExecutor) {
+        this.userProfileRepository = userProfileRepository;
+        this.userStatusRepository = userStatusRepository;
+        this.relationRepository = relationRepository;
+        this.relationCachePort = relationCachePort;
+        this.relationPolicyPort = relationPolicyPort;
+        this.riskService = riskService;
+        this.aggregationExecutor = aggregationExecutor;
+    }
 
     /**
      * 查询个人主页聚合视图。
@@ -63,18 +83,38 @@ public class UserProfilePageQueryService {
             throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
         }
 
-        String status = userStatusRepository.getStatus(targetUserId);
-        long followCount = relationCachePort.getFollowingCount(targetUserId);
-        long followerCount = relationCachePort.getFollowerCount(targetUserId);
+        CompletableFuture<String> statusFuture = CompletableFuture.supplyAsync(
+                () -> userStatusRepository.getStatus(targetUserId),
+                aggregationExecutor);
+        CompletableFuture<Long> followCountFuture = CompletableFuture.supplyAsync(
+                () -> relationCachePort.getFollowingCount(targetUserId),
+                aggregationExecutor);
+        CompletableFuture<Long> followerCountFuture = CompletableFuture.supplyAsync(
+                () -> relationCachePort.getFollowerCount(targetUserId),
+                aggregationExecutor);
+        CompletableFuture<Boolean> isFollowFuture = viewerId.equals(targetUserId)
+                ? CompletableFuture.completedFuture(false)
+                : CompletableFuture.supplyAsync(() -> {
+                    // `isFollow` 只在“看别人主页”时才有意义，看自己主页不用去关系表多查一次
+                    RelationEntity followEdge = relationRepository.findRelation(viewerId, targetUserId, RELATION_FOLLOW);
+                    return followEdge != null && Integer.valueOf(1).equals(followEdge.getStatus());
+                }, aggregationExecutor);
+        CompletableFuture<UserRiskStatusVO> riskFuture = CompletableFuture.supplyAsync(
+                () -> riskService.userStatus(targetUserId),
+                aggregationExecutor);
 
-        boolean isFollow = false;
-        if (!viewerId.equals(targetUserId)) {
-            // `isFollow` 只在“看别人主页”时才有意义，看自己主页不用去关系表多查一次
-            RelationEntity followEdge = relationRepository.findRelation(viewerId, targetUserId, RELATION_FOLLOW);
-            isFollow = followEdge != null && Integer.valueOf(1).equals(followEdge.getStatus());
+        try {
+            CompletableFuture.allOf(statusFuture, followCountFuture, followerCountFuture, isFollowFuture, riskFuture)
+                    .join();
+        } catch (CompletionException e) {
+            throw unwrapCompletionException(e);
         }
 
-        UserRiskStatusVO risk = riskService.userStatus(targetUserId);
+        String status = statusFuture.join();
+        long followCount = followCountFuture.join();
+        long followerCount = followerCountFuture.join();
+        boolean isFollow = isFollowFuture.join();
+        UserRiskStatusVO risk = riskFuture.join();
         UserRelationStatsVO relation = UserRelationStatsVO.builder()
                 .followCount(followCount)
                 .followerCount(followerCount)
@@ -86,5 +126,16 @@ public class UserProfilePageQueryService {
                 .relation(relation)
                 .risk(risk)
                 .build();
+    }
+
+    private static RuntimeException unwrapCompletionException(CompletionException e) {
+        Throwable cause = e.getCause();
+        if (cause instanceof RuntimeException runtime) {
+            return runtime;
+        }
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        return new RuntimeException(cause);
     }
 }

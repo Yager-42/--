@@ -24,6 +24,10 @@ import org.springframework.web.bind.annotation.*;
 
 /**
  * 风控接口入口。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Slf4j
 @RestController
@@ -37,6 +41,12 @@ public class RiskController implements IRiskApi {
     @Resource
     private IRiskAppealService riskAppealService;
 
+    /**
+     * 执行风控决策。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskDecisionRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/decision")
     @Override
     public Response<RiskDecisionResponseDTO> decision(@RequestBody RiskDecisionRequestDTO requestDTO) {
@@ -69,6 +79,12 @@ public class RiskController implements IRiskApi {
         }
     }
 
+    /**
+     * 执行文本扫描。
+     *
+     * @param requestDTO 请求参数。类型：{@link TextScanRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/scan/text")
     @Override
     public Response<TextScanResponseDTO> textScan(@RequestBody TextScanRequestDTO requestDTO) {
@@ -88,6 +104,12 @@ public class RiskController implements IRiskApi {
         }
     }
 
+    /**
+     * 执行图片扫描。
+     *
+     * @param requestDTO 请求参数。类型：{@link ImageScanRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/scan/image")
     @Override
     public Response<ImageScanResponseDTO> imageScan(@RequestBody ImageScanRequestDTO requestDTO) {
@@ -107,6 +129,12 @@ public class RiskController implements IRiskApi {
         }
     }
 
+    /**
+     * 查询用户风险状态。
+     *
+     * @param requestDTO 请求参数。类型：{@link UserRiskStatusRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/user/status")
     @Override
     public Response<UserRiskStatusResponseDTO> userStatus(UserRiskStatusRequestDTO requestDTO) {
@@ -129,6 +157,12 @@ public class RiskController implements IRiskApi {
         }
     }
 
+    /**
+     * 提交申诉。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskAppealRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/appeals")
     @Override
     public Response<RiskAppealResponseDTO> appeal(@RequestBody RiskAppealRequestDTO requestDTO) {

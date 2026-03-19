@@ -15,6 +15,10 @@ import java.util.List;
 
 /**
  * Post-like cache: Bloom (bitmap) + recent likes ZSet.
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-03
  */
 @Slf4j
 @Component
@@ -50,6 +54,14 @@ public class PostLikeCachePort implements IPostLikeCachePort {
     @Value("${like.pending.ttl-sec:600}")
     private int pendingTtlSec;
 
+    /**
+     * 尝试点赞缓存。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@code long}
+     * @return 处理结果。类型：{@link PostLikeApplyResultVO}
+     */
     @Override
     public PostLikeApplyResultVO tryLike(Long userId, Long postId, long nowMs) {
         if (userId == null || postId == null) {
@@ -69,6 +81,14 @@ public class PostLikeCachePort implements IPostLikeCachePort {
         return toApplyResult(res);
     }
 
+    /**
+     * 强制写入点赞缓存。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@code long}
+     * @return 处理结果。类型：{@link PostLikeApplyResultVO}
+     */
     @Override
     public PostLikeApplyResultVO forceLike(Long userId, Long postId, long nowMs) {
         if (userId == null || postId == null) {
@@ -88,6 +108,14 @@ public class PostLikeCachePort implements IPostLikeCachePort {
         return toApplyResult(res);
     }
 
+    /**
+     * 尝试取消点赞缓存。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@code long}
+     * @return 处理结果。类型：{@link PostLikeApplyResultVO}
+     */
     @Override
     public PostLikeApplyResultVO tryUnlike(Long userId, Long postId, long nowMs) {
         if (userId == null || postId == null) {
@@ -104,6 +132,14 @@ public class PostLikeCachePort implements IPostLikeCachePort {
         return toApplyResult(res);
     }
 
+    /**
+     * 强制写入取消点赞缓存。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@code long}
+     * @return 处理结果。类型：{@link PostLikeApplyResultVO}
+     */
     @Override
     public PostLikeApplyResultVO forceUnlike(Long userId, Long postId, long nowMs) {
         if (userId == null || postId == null) {
@@ -120,6 +156,13 @@ public class PostLikeCachePort implements IPostLikeCachePort {
         return toApplyResult(res);
     }
 
+    /**
+     * 缓存互动状态。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@link PostLikeCacheStateVO}
+     */
     @Override
     public PostLikeCacheStateVO cacheState(Long userId, Long postId) {
         if (userId == null || postId == null) {
@@ -148,6 +191,13 @@ public class PostLikeCachePort implements IPostLikeCachePort {
         return PostLikeCacheStateVO.builder().liked(null).currentCount(getCnt(postId)).build();
     }
 
+    /**
+     * 累计作者获赞增量。
+     *
+     * @param creatorId creatorId 参数。类型：{@link Long}
+     * @param delta delta 参数。类型：{@code int}
+     * @return 处理结果。类型：{@code long}
+     */
     @Override
     public long applyCreatorLikeDelta(Long creatorId, int delta) {
         if (creatorId == null) {

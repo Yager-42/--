@@ -45,7 +45,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * 鍐呭/濯掍綋浠撳偍 MyBatis 瀹炵幇銆?
+ * 内容/媒体仓储 MyBatis 实现。
+ *
+ * <p>该仓储同时负责内容主表、草稿、历史版本、定时任务的落库，以及读路径的缓存与回填。</p>
+ *
+ * @author {$authorName}
+ * @since 2026-01-05
  */
 @Slf4j
 @Repository
@@ -80,21 +85,33 @@ public class ContentRepository implements IContentRepository {
     private final SingleFlight singleFlight = new SingleFlight();
 
     /**
-     * Feed 鍥炶〃鐑偣浼樺寲锛氬彧缂撳瓨鐑偣 postId锛岀煭 TTL銆?
+     * Feed 回表热点优化：只缓存热点 postId，短 TTL。
      *
-     * <p>娉ㄦ剰锛氱紦瀛樺璞″繀椤诲仛蹇収锛屼笖瀵瑰杩斿洖鏃跺繀椤?copy锛岄伩鍏嶈皟鐢ㄦ柟淇敼姹℃煋缂撳瓨銆?/p>
+     * <p>注意：缓存对象必须做快照，且对外返回时必须 copy，避免调用方修改污染缓存。</p>
      */
     private final Cache<Long, ContentPostEntity> postCache = Caffeine.newBuilder()
             .maximumSize(L1_MAX_SIZE)
             .expireAfterWrite(L1_TTL)
             .build();
 
+    /**
+     * 保存草稿（upsert）。
+     *
+     * @param draft 草稿实体 {@link ContentDraftEntity}
+     * @return 保存后的草稿实体 {@link ContentDraftEntity}
+     */
     @Override
     public ContentDraftEntity saveDraft(ContentDraftEntity draft) {
         contentDraftDao.insertOrUpdate(toDraftPO(draft));
         return draft;
     }
 
+    /**
+     * 查询草稿。
+     *
+     * @param draftId 草稿 ID {@link Long}
+     * @return 草稿实体（不存在则返回 {@code null}） {@link ContentDraftEntity}
+     */
     @Override
     @Transactional(readOnly = true)
     public ContentDraftEntity findDraft(Long draftId) {
@@ -102,6 +119,12 @@ public class ContentRepository implements IContentRepository {
         return toDraftEntity(po);
     }
 
+    /**
+     * 查询草稿并加行锁（用于同步草稿时的并发控制）。
+     *
+     * @param draftId 草稿 ID {@link Long}
+     * @return 草稿实体（不存在则返回 {@code null}） {@link ContentDraftEntity}
+     */
     @Override
     @Transactional(readOnly = false)
     public ContentDraftEntity findDraftForUpdate(Long draftId) {
@@ -109,6 +132,14 @@ public class ContentRepository implements IContentRepository {
         return toDraftEntity(po);
     }
 
+    /**
+     * 保存内容主表记录（仅主表字段）。
+     *
+     * <p>保存后会失效缓存，避免读到旧值。</p>
+     *
+     * @param post 内容主表实体 {@link ContentPostEntity}
+     * @return 保存后的内容主表实体 {@link ContentPostEntity}
+     */
     @Transactional
     @Override
     public ContentPostEntity savePost(ContentPostEntity post) {
@@ -117,6 +148,12 @@ public class ContentRepository implements IContentRepository {
         return post;
     }
 
+    /**
+     * 替换帖子类型列表（先删后插）。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param postTypes 类型列表（可为空） {@link List}
+     */
     @Override
     public void replacePostTypes(Long postId, List<String> postTypes) {
         if (postId == null) {
@@ -130,6 +167,14 @@ public class ContentRepository implements IContentRepository {
         contentPostTypeDao.insertBatch(postId, postTypes);
     }
 
+    /**
+     * 查询帖子完整信息（主表 + 类型 + 正文）。
+     *
+     * <p>读取策略：L1 Caffeine + Redis + SingleFlight 回源，带空值缓存与热点续命。</p>
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @return 帖子实体（不存在则返回 {@code null}） {@link ContentPostEntity}
+     */
     @Override
     @Transactional(readOnly = true)
     public ContentPostEntity findPost(Long postId) {
@@ -225,6 +270,12 @@ public class ContentRepository implements IContentRepository {
         return post == null ? null : copyPost(post);
     }
 
+    /**
+     * 查询帖子并加行锁（用于发布/回滚等写链路）。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @return 帖子实体（不存在则返回 {@code null}） {@link ContentPostEntity}
+     */
     @Override
     @Transactional(readOnly = false)
     public ContentPostEntity findPostForUpdate(Long postId) {
@@ -234,6 +285,12 @@ public class ContentRepository implements IContentRepository {
         return post;
     }
 
+    /**
+     * 查询帖子元信息（不回填正文 KV）。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @return 帖子实体（不含正文，可能为 {@code null}） {@link ContentPostEntity}
+     */
     @Override
     @Transactional(readOnly = true)
     public ContentPostEntity findPostMeta(Long postId) {
@@ -245,6 +302,12 @@ public class ContentRepository implements IContentRepository {
         return post;
     }
 
+    /**
+     * 批量按 ID 查询帖子。
+     *
+     * @param postIds 帖子 ID 列表 {@link List}
+     * @return 帖子列表（元素为 {@link ContentPostEntity}） {@link List}
+     */
     @Override
     @Transactional(readOnly = true)
     public List<ContentPostEntity> listPostsByIds(List<Long> postIds) {
@@ -334,6 +397,14 @@ public class ContentRepository implements IContentRepository {
         return ordered;
     }
 
+    /**
+     * 分页查询用户已发布帖子列表。
+     *
+     * @param userId 用户 ID {@link Long}
+     * @param cursor 游标（可为空） {@link String}
+     * @param limit 分页大小 {@code int}
+     * @return 分页结果 {@link ContentPostPageVO}
+     */
     @Override
     @Transactional(readOnly = true)
     public ContentPostPageVO listUserPosts(Long userId, String cursor, int limit) {
@@ -356,6 +427,16 @@ public class ContentRepository implements IContentRepository {
         return ContentPostPageVO.builder().posts(posts).nextCursor(nextCursor).build();
     }
 
+    /**
+     * 更新帖子状态（带期望状态条件）。
+     *
+     * <p>更新成功会主动失效缓存，避免读到旧状态。</p>
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param status 目标状态 {@link Integer}
+     * @param expectedStatus 期望当前状态（CAS 条件） {@link Integer}
+     * @return 是否更新成功 {@code boolean}
+     */
     @Override
     public boolean updatePostStatus(Long postId, Integer status, Integer expectedStatus) {
         if (postId == null || status == null || expectedStatus == null) {
@@ -369,6 +450,15 @@ public class ContentRepository implements IContentRepository {
         return updated;
     }
 
+    /**
+     * 更新帖子状态（带期望状态与期望版本号条件）。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param status 目标状态 {@link Integer}
+     * @param expectedStatus 期望当前状态（CAS 条件） {@link Integer}
+     * @param expectedVersion 期望当前版本号（CAS 条件） {@link Integer}
+     * @return 是否更新成功 {@code boolean}
+     */
     @Override
     public boolean updatePostStatusIfMatchVersion(Long postId, Integer status, Integer expectedStatus, Integer expectedVersion) {
         if (postId == null || status == null || expectedStatus == null || expectedVersion == null) {
@@ -382,6 +472,16 @@ public class ContentRepository implements IContentRepository {
         return updated;
     }
 
+    /**
+     * 更新帖子状态与发布时间（带期望状态与期望版本号条件）。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param status 目标状态 {@link Integer}
+     * @param expectedStatus 期望当前状态（CAS 条件） {@link Integer}
+     * @param expectedVersion 期望当前版本号（CAS 条件） {@link Integer}
+     * @param publishTime 发布时间（毫秒时间戳） {@link Long}
+     * @return 是否更新成功 {@code boolean}
+     */
     @Override
     public boolean updatePostStatusAndPublishTimeIfMatchVersion(Long postId, Integer status, Integer expectedStatus, Integer expectedVersion, Long publishTime) {
         if (postId == null || status == null || expectedStatus == null || expectedVersion == null || publishTime == null) {
@@ -400,6 +500,14 @@ public class ContentRepository implements IContentRepository {
         return updated;
     }
 
+    /**
+     * 更新帖子摘要与摘要状态。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param summary 摘要内容（可为空） {@link String}
+     * @param summaryStatus 摘要状态 {@link Integer}
+     * @return 是否更新成功 {@code boolean}
+     */
     @Override
     public boolean updatePostSummary(Long postId, String summary, Integer summaryStatus) {
         if (postId == null || summaryStatus == null) {
@@ -413,6 +521,23 @@ public class ContentRepository implements IContentRepository {
         return updated;
     }
 
+    /**
+     * 更新帖子内容与版本号（带 expectedVersion 条件，防止并发乱序覆盖）。
+     *
+     * <p>该方法会把 {@code expectedVersion = versionNum - 1} 作为更新条件，确保版本号单调递增。</p>
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param status 目标状态 {@link Integer}
+     * @param versionNum 目标版本号 {@link Integer}
+     * @param edited 是否编辑过（可为空） {@link Boolean}
+     * @param title 标题（可为空） {@link String}
+     * @param publishTime 发布时间（毫秒时间戳，可为空） {@link Long}
+     * @param contentUuid 正文 KV UUID（可为空） {@link String}
+     * @param mediaInfo 媒体信息（可为空） {@link String}
+     * @param locationInfo 位置信息（可为空） {@link String}
+     * @param visibility 可见性（可为空） {@link Integer}
+     * @return 是否更新成功 {@code boolean}
+     */
     @Override
     public boolean updatePostStatusAndContent(Long postId, Integer status, Integer versionNum, Boolean edited,
                                               String title, Long publishTime, String contentUuid, String mediaInfo,
@@ -437,11 +562,24 @@ public class ContentRepository implements IContentRepository {
         return updated;
     }
 
+    /**
+     * 保存历史版本快照。
+     *
+     * @param history 历史版本实体 {@link ContentHistoryEntity}
+     */
     @Override
     public void saveHistory(ContentHistoryEntity history) {
         contentHistoryDao.insert(toHistoryPO(history));
     }
 
+    /**
+     * 查询历史版本列表。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param limit 分页大小（可为空） {@link Integer}
+     * @param offset 分页偏移（可为空） {@link Integer}
+     * @return 历史版本列表（元素为 {@link ContentHistoryEntity}） {@link List}
+     */
     @Override
     @Transactional(readOnly = true)
     public List<ContentHistoryEntity> listHistory(Long postId, Integer limit, Integer offset) {
@@ -450,12 +588,26 @@ public class ContentRepository implements IContentRepository {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * 查询指定版本号的历史快照。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param versionNum 版本号 {@link Integer}
+     * @return 历史版本实体（不存在则返回 {@code null}） {@link ContentHistoryEntity}
+     */
     @Override
     @Transactional(readOnly = true)
     public ContentHistoryEntity findHistoryVersion(Long postId, Integer versionNum) {
         return toHistoryEntity(contentHistoryDao.selectOne(postId, versionNum));
     }
 
+    /**
+     * 软删除帖子（按 userId 校验归属）。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param userId 用户 ID {@link Long}
+     * @return 是否删除成功 {@code boolean}
+     */
     @Override
     public boolean softDelete(Long postId, Long userId) {
         if (userId == null) {
@@ -468,6 +620,15 @@ public class ContentRepository implements IContentRepository {
         return deleted;
     }
 
+    /**
+     * 软删除帖子（带期望状态与期望版本号条件）。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @param expectedStatus 期望当前状态（CAS 条件） {@link Integer}
+     * @param expectedVersion 期望当前版本号（CAS 条件） {@link Integer}
+     * @param deleteTimeMs 删除时间（毫秒时间戳，可为空） {@link Long}
+     * @return 是否删除成功 {@code boolean}
+     */
     @Override
     public boolean softDeleteIfMatchStatusAndVersion(Long postId, Integer expectedStatus, Integer expectedVersion, Long deleteTimeMs) {
         if (postId == null || expectedStatus == null || expectedVersion == null) {
@@ -481,6 +642,15 @@ public class ContentRepository implements IContentRepository {
         return deleted;
     }
 
+    /**
+     * 物理删除软删超过截止时间的帖子（批量）。
+     *
+     * <p>该清理只删除主表与类型映射，历史表保留用于审计。</p>
+     *
+     * @param cutoff 截止时间 {@link Date}
+     * @param limit 单次清理上限 {@code int}
+     * @return 删除行数 {@code int}
+     */
     @Override
     public int deleteSoftDeletedBefore(Date cutoff, int limit) {
         if (cutoff == null || limit <= 0) {
@@ -494,25 +664,50 @@ public class ContentRepository implements IContentRepository {
             if (postId == null) {
                 continue;
             }
-            // 鍏堟竻鐞嗗叧鑱旀槧灏勶紝閬垮厤浜х敓鑴忔暟鎹€?
+            // 先清理关联映射，避免产生脏数据。
             contentPostTypeDao.deleteByPostId(postId);
             invalidatePostCache(postId);
         }
         return contentPostDao.deleteSoftDeletedByIds(postIds, cutoff);
     }
 
+    /**
+     * 创建一条定时发布任务。
+     *
+     * @param schedule 定时任务实体 {@link ContentScheduleEntity}
+     * @return 创建后的定时任务实体 {@link ContentScheduleEntity}
+     */
     @Override
     public ContentScheduleEntity createSchedule(ContentScheduleEntity schedule) {
         contentScheduleDao.insert(toSchedulePO(schedule));
         return schedule;
     }
 
+    /**
+     * 更新定时任务状态（带 expectedStatus 条件）。
+     *
+     * @param taskId 任务 ID {@link Long}
+     * @param status 目标状态 {@link Integer}
+     * @param retryCount 重试次数（可为空） {@link Integer}
+     * @param lastError 最近一次错误（可为空） {@link String}
+     * @param alarmSent 是否已发送告警（可为空） {@link Integer}
+     * @param nextScheduleTime 下一次调度时间（毫秒时间戳，可为空） {@link Long}
+     * @param expectedStatus 期望当前状态（CAS 条件） {@link Integer}
+     * @return 是否更新成功 {@code boolean}
+     */
     @Override
     public boolean updateScheduleStatus(Long taskId, Integer status, Integer retryCount, String lastError, Integer alarmSent, Long nextScheduleTime, Integer expectedStatus) {
         return contentScheduleDao.updateStatus(taskId, status, retryCount, lastError, alarmSent,
                 nextScheduleTime == null ? null : new Date(nextScheduleTime), expectedStatus) > 0;
     }
 
+    /**
+     * 查询待执行的定时任务列表。
+     *
+     * @param beforeTime 截止时间（毫秒时间戳，可为空） {@link Long}
+     * @param limit 查询上限（可为空） {@link Integer}
+     * @return 定时任务列表（元素为 {@link ContentScheduleEntity}） {@link List}
+     */
     @Override
     public List<ContentScheduleEntity> listPendingSchedules(Long beforeTime, Integer limit) {
         List<ContentSchedulePO> list = contentScheduleDao.selectPending(beforeTime == null ? null : new Date(beforeTime), limit);
@@ -522,12 +717,26 @@ public class ContentRepository implements IContentRepository {
         return list.stream().map(this::toScheduleEntity).collect(Collectors.toList());
     }
 
+    /**
+     * 查询定时任务。
+     *
+     * @param taskId 任务 ID {@link Long}
+     * @return 定时任务实体（不存在则返回 {@code null}） {@link ContentScheduleEntity}
+     */
     @Override
     @Transactional(readOnly = true)
     public ContentScheduleEntity findSchedule(Long taskId) {
         return toScheduleEntity(contentScheduleDao.selectById(taskId));
     }
 
+    /**
+     * 取消定时任务（仅允许取消“待发布”状态的任务）。
+     *
+     * @param taskId 任务 ID {@link Long}
+     * @param userId 用户 ID {@link Long}
+     * @param reason 取消原因（可为空） {@link String}
+     * @return 是否取消成功 {@code boolean}
+     */
     @Override
     public boolean cancelSchedule(Long taskId, Long userId, String reason) {
         ContentSchedulePO po = contentScheduleDao.selectById(taskId);
@@ -540,17 +749,40 @@ public class ContentRepository implements IContentRepository {
         return contentScheduleDao.cancel(taskId, userId, reason) > 0;
     }
 
+    /**
+     * 按幂等 Token 查询定时任务。
+     *
+     * @param token 幂等 Token {@link String}
+     * @return 定时任务实体（不存在则返回 {@code null}） {@link ContentScheduleEntity}
+     */
     @Override
     @Transactional(readOnly = true)
     public ContentScheduleEntity findScheduleByToken(String token) {
         return toScheduleEntity(contentScheduleDao.selectByToken(token));
     }
 
+    /**
+     * 更新定时任务（目前允许更新时间与内容快照）。
+     *
+     * @param taskId 任务 ID {@link Long}
+     * @param userId 用户 ID {@link Long}
+     * @param scheduleTime 新的调度时间（毫秒时间戳，可为空） {@link Long}
+     * @param contentData 内容快照（可为空） {@link String}
+     * @param idempotentToken 幂等 Token（可为空） {@link String}
+     * @param reason 更新原因（可为空） {@link String}
+     * @return 是否更新成功 {@code boolean}
+     */
     @Override
     public boolean updateSchedule(Long taskId, Long userId, Long scheduleTime, String contentData, String idempotentToken, String reason) {
         return contentScheduleDao.updateSchedule(taskId, userId, scheduleTime == null ? null : new Date(scheduleTime), contentData, idempotentToken, reason) > 0;
     }
 
+    /**
+     * 查询某帖子当前激活中的定时任务（若存在）。
+     *
+     * @param postId 帖子 ID {@link Long}
+     * @return 激活中的定时任务（不存在则返回 {@code null}） {@link ContentScheduleEntity}
+     */
     @Override
     @Transactional(readOnly = true)
     public ContentScheduleEntity findActiveScheduleByPostId(Long postId) {
@@ -571,7 +803,9 @@ public class ContentRepository implements IContentRepository {
     }
 
     /**
-     * Evict local L1 only (for MQ broadcast).
+     * 仅失效本地 L1 缓存（用于 MQ 广播后的本地清理）。
+     *
+     * @param postId 帖子 ID {@link Long}
      */
     public void evictLocalPostCache(Long postId) {
         if (postId == null) {

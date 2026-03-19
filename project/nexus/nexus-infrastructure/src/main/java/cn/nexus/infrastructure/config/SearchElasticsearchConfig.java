@@ -16,7 +16,9 @@ import java.util.List;
 /**
  * 搜索域 Elasticsearch 客户端配置（官方 ES 8 Java Client）。
  *
- * <p>本次不讨论鉴权细节：网关/基础设施负责。</p>
+ * @author rr
+ * @author codex
+ * @since 2026-02-02
  */
 @Configuration
 public class SearchElasticsearchConfig {
@@ -24,16 +26,33 @@ public class SearchElasticsearchConfig {
     @Value("${search.es.endpoints:http://127.0.0.1:9200}")
     private String endpoints;
 
+    /**
+     * 执行 searchRestClient 逻辑。
+     *
+     * @return 处理结果。类型：{@link RestClient}
+     */
     @Bean(destroyMethod = "close")
     public RestClient searchRestClient() {
         return RestClient.builder(parseHosts(endpoints)).build();
     }
 
+    /**
+     * 执行 searchElasticsearchTransport 逻辑。
+     *
+     * @param searchRestClient searchRestClient 参数。类型：{@link RestClient}
+     * @return 处理结果。类型：{@link ElasticsearchTransport}
+     */
     @Bean
     public ElasticsearchTransport searchElasticsearchTransport(RestClient searchRestClient) {
         return new RestClientTransport(searchRestClient, new JacksonJsonpMapper());
     }
 
+    /**
+     * 执行 searchElasticsearchClient 逻辑。
+     *
+     * @param searchElasticsearchTransport searchElasticsearchTransport 参数。类型：{@link ElasticsearchTransport}
+     * @return 处理结果。类型：{@link ElasticsearchClient}
+     */
     @Bean
     public ElasticsearchClient searchElasticsearchClient(ElasticsearchTransport searchElasticsearchTransport) {
         return new ElasticsearchClient(searchElasticsearchTransport);

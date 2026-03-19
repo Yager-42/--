@@ -35,7 +35,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * 风控 LLM 扫描消费者：文本/图片任务统一走该队列（以 contentType 区分）。
  *
- * <p>设计要点：去重缓存 + inflight 锁 + 分钟预算器；LLM 永不阻塞在线链路。</p>
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Slf4j
 @Component
@@ -66,6 +68,11 @@ public class RiskLlmScanConsumer {
     @Value("${risk.llm.inflightLockSeconds:30}")
     private long inflightLockSeconds;
 
+    /**
+     * 消费单条消息。
+     *
+     * @param event 事件对象。类型：{@link LlmScanRequestedEvent}
+     */
     @RabbitListener(queues = RiskMqConfig.Q_LLM_SCAN, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(LlmScanRequestedEvent event) {
         if (event == null || event.getDecisionId() == null || event.getEventId() == null || event.getEventId().isBlank()) {

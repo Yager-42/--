@@ -26,16 +26,31 @@ public class CommentEventPort implements ICommentEventPort {
 
     private final ReliableMqOutboxService reliableMqOutboxService;
 
+    /**
+     * 发布评论创建事件。
+     *
+     * @param event 评论创建事件。类型：{@link CommentCreatedEvent}
+     */
     @Override
     public void publish(CommentCreatedEvent event) {
         reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_COMMENT_CREATED, event);
     }
 
+    /**
+     * 发布回复数变更事件。
+     *
+     * @param event 回复数变更事件。类型：{@link RootReplyCountChangedEvent}
+     */
     @Override
     public void publish(RootReplyCountChangedEvent event) {
         reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_REPLY_COUNT_CHANGED, event);
     }
 
+    /**
+     * 发布评论点赞数变更事件。
+     *
+     * @param event 评论点赞数变更事件。类型：{@link CommentLikeChangedEvent}
+     */
     @Override
     public void publish(CommentLikeChangedEvent event) {
         reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_COMMENT_LIKE_CHANGED, event);

@@ -15,6 +15,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * 定时发布死信告警消费者（占位：当前只记录日志，可接入告警系统）。
+ *
+ * @author {$authorName}
+ * @since 2026-01-05
  */
 @Slf4j
 @Component
@@ -25,8 +28,14 @@ public class ContentScheduleDLQConsumer {
     private final ReliableMqDlqRecorder reliableMqDlqRecorder;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 处理一条定时发布死信消息：记录 DLQ 信息，并输出辅助排查日志。
+     *
+     * @param message 死信消息 {@link Message}
+     */
     @RabbitListener(queues = ContentScheduleDelayConfig.DLX_QUEUE)
     public void onDLQ(Message message) {
+        // 1. 统一记录 DLQ：保留 message 元信息与解析失败原因，便于后续人工回放。
         reliableMqDlqRecorder.record(
                 message,
                 "ContentScheduleConsumer",
@@ -37,6 +46,7 @@ public class ContentScheduleDLQConsumer {
                 null,
                 "content schedule dead-lettered"
         );
+        // 2. 尝试从 payload 中解析 taskId，打印更友好的告警上下文。
         Long taskId = null;
         try {
             JsonNode root = objectMapper.readTree(message.getBody());
@@ -47,6 +57,7 @@ public class ContentScheduleDLQConsumer {
         } catch (Exception ignored) {
         }
         log.error("content schedule task dead-lettered, taskId={}", taskId);
+        // 3. 尝试补充任务审计信息（失败也不影响主流程）。
         try {
             ContentScheduleEntity task = contentService.getScheduleAudit(taskId, null);
             if (task != null) {

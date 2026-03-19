@@ -13,6 +13,13 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
+/**
+ * SearchIndexInitializer 配置类。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-09
+ */
 @Slf4j
 @Component
 @Order(1)
@@ -25,6 +32,11 @@ public class SearchIndexInitializer implements ApplicationRunner {
     private final RestClient searchRestClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 执行启动任务。
+     *
+     * @param args args 参数。类型：{@link ApplicationArguments}
+     */
     @Override
     public void run(ApplicationArguments args) {
         try {

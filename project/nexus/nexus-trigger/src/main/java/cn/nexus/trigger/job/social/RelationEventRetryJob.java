@@ -14,7 +14,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 关系事件收件箱重放/清理任务。
+ * 关系事件收件箱重试任务：重放失败消费记录，并定时清理已完成数据。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Component
 @RequiredArgsConstructor
@@ -25,6 +29,10 @@ public class RelationEventRetryJob {
     private final IRelationEventPort eventPort;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 执行 retryFailed 逻辑。
+     *
+     */
     @Scheduled(fixedDelay = 60000)
     public void retryFailed() {
         List<RelationEventInboxVO> list = inboxPort.fetchRetry(100);
@@ -39,6 +47,10 @@ public class RelationEventRetryJob {
         }
     }
 
+    /**
+     * 执行 cleanDone 逻辑。
+     *
+     */
     @Scheduled(cron = "0 0 3 * * ?")
     public void cleanDone() {
         long sevenDays = System.currentTimeMillis() - 7L * 24 * 3600 * 1000;

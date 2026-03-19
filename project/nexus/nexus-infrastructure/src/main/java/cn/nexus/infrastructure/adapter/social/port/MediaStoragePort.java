@@ -16,7 +16,12 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Media storage router.
+ * 媒体存储路由端口：根据配置选择具体对象存储策略（默认 MinIO）。
+ *
+ * <p>领域层只依赖 {@link IMediaStoragePort}；具体存储实现通过 {@link MediaStorageStrategy} 插件化接入。</p>
+ *
+ * @author {$authorName}
+ * @since 2026-01-06
  */
 @Slf4j
 @Component
@@ -34,23 +39,52 @@ public class MediaStoragePort implements IMediaStoragePort {
     private final AtomicReference<MediaStorageStrategy> current = new AtomicReference<>();
     private final AtomicReference<String> currentType = new AtomicReference<>(DEFAULT_TYPE);
 
+    /**
+     * 初始化当前存储策略。
+     *
+     * <p>启动时按配置切换一次；运行期配置变更可通过刷新触发再次切换。</p>
+     */
     @jakarta.annotation.PostConstruct
     public void init() {
         switchTo(normalizeType(storageType));
     }
 
+    /**
+     * 生成上传会话信息，供客户端直传对象存储。
+     *
+     * @param sessionId 会话 ID {@link String}
+     * @param fileType 文件类型（MIME） {@link String}
+     * @param fileSize 文件大小（字节，可为空） {@link Long}
+     * @param crc32 内容校验值（可为空） {@link String}
+     * @return 上传会话信息 {@link UploadSessionVO}
+     */
     @Override
     public UploadSessionVO generateUploadSession(String sessionId, String fileType, Long fileSize, String crc32) {
         MediaStorageStrategy s = requireCurrent();
         return s.generateUploadSession(sessionId, fileType, fileSize, crc32);
     }
 
+    /**
+     * 生成读取 URL（通常是预签名 URL）。
+     *
+     * @param sessionId 会话 ID {@link String}
+     * @return 可读取的 URL（生成失败时返回 {@code null}） {@link String}
+     */
     @Override
     public String generateReadUrl(String sessionId) {
         MediaStorageStrategy s = requireCurrent();
         return s.generateReadUrl(sessionId);
     }
 
+    /**
+     * 通过服务端中转方式上传文件（一般用于后端任务/补偿，不建议走在线大流量）。
+     *
+     * @param originalFilename 原始文件名（可为空） {@link String}
+     * @param fileType 文件类型（MIME，可为空） {@link String}
+     * @param fileSize 文件大小（字节，可为空） {@link Long}
+     * @param inputStream 文件输入流 {@link InputStream}
+     * @return 读取 URL（上传成功后返回） {@link String}
+     */
     @Override
     public String uploadFile(String originalFilename, String fileType, Long fileSize, InputStream inputStream) {
         MediaStorageStrategy s = requireCurrent();

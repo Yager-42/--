@@ -25,8 +25,6 @@ import org.springframework.stereotype.Component;
 /**
  * Elasticsearch 搜索引擎端口实现。
  *
- * <p>这个类只做三件事：组装请求、调用 ES、把结果转回领域对象，不在这里掺业务兜底。</p>
- *
  * @author rr
  * @author codex
  * @since 2026-02-02

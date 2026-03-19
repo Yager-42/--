@@ -20,6 +20,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * SearchController 实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
+ */
 @Slf4j
 @RestController
 @CrossOrigin("*")
@@ -29,6 +36,15 @@ public class SearchController implements ISearchApi {
     @Resource
     private ISearchService searchService;
 
+    /**
+     * 执行搜索。
+     *
+     * @param q 搜索关键词。类型：{@link String}
+     * @param size 单页大小。类型：{@link Integer}
+     * @param tags 标签过滤串。类型：{@link String}
+     * @param after 分页游标。类型：{@link String}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping
     @Override
     public Response<SearchResponseDTO> search(@RequestParam("q") String q,
@@ -36,6 +52,7 @@ public class SearchController implements ISearchApi {
                                               @RequestParam(value = "tags", required = false) String tags,
                                               @RequestParam(value = "after", required = false) String after) {
         try {
+            // 搜索接口允许匿名访问，所以这里只拿“可能存在”的用户 ID，用它补齐点赞态，不强制登录。
             Long userId = UserContext.getUserId();
             SearchResultVO vo = searchService.search(userId, q, size, tags, after);
             List<SearchItemDTO> items = vo.getItems() == null ? List.of() : vo.getItems().stream()
@@ -72,6 +89,13 @@ public class SearchController implements ISearchApi {
         }
     }
 
+    /**
+     * 查询联想词。
+     *
+     * @param prefix 联想前缀。类型：{@link String}
+     * @param size 返回数量。类型：{@link Integer}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/suggest")
     @Override
     public Response<SuggestResponseDTO> suggest(@RequestParam("prefix") String prefix,

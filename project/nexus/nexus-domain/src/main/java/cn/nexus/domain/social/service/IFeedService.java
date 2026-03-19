@@ -4,6 +4,10 @@ import cn.nexus.domain.social.model.valobj.FeedTimelineVO;
 
 /**
  * 分发/Feed 服务。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 public interface IFeedService {
 

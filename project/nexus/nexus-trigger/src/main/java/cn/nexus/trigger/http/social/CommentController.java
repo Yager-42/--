@@ -35,6 +35,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 评论读/删接口入口。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-21
  */
 @Slf4j
 @RestController
@@ -48,6 +52,12 @@ public class CommentController implements ICommentApi {
     @Resource
     private IInteractionService interactionService;
 
+    /**
+     * 执行 list 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link CommentListRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/comment/list")
     @Override
     public Response<CommentListResponseDTO> list(CommentListRequestDTO requestDTO) {
@@ -71,6 +81,12 @@ public class CommentController implements ICommentApi {
         }
     }
 
+    /**
+     * 执行 replyList 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link CommentReplyListRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/comment/reply/list")
     @Override
     public Response<CommentReplyListResponseDTO> replyList(CommentReplyListRequestDTO requestDTO) {
@@ -89,6 +105,12 @@ public class CommentController implements ICommentApi {
         }
     }
 
+    /**
+     * 执行 hot 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link CommentHotRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/comment/hot")
     @Override
     public Response<CommentHotResponseDTO> hot(CommentHotRequestDTO requestDTO) {
@@ -106,6 +128,12 @@ public class CommentController implements ICommentApi {
         }
     }
 
+    /**
+     * 执行 delete 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@link Response}
+     */
     @DeleteMapping("/comment/{commentId}")
     @Override
     public Response<OperationResultDTO> delete(@PathVariable("commentId") Long commentId) {

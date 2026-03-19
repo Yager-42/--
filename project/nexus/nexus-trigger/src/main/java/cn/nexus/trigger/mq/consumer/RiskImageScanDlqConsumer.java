@@ -7,12 +7,24 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
+/**
+ * RiskImageScanDlqConsumer 消费器。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-03-11
+ */
 @Component
 @RequiredArgsConstructor
 public class RiskImageScanDlqConsumer {
 
     private final ReliableMqDlqRecorder reliableMqDlqRecorder;
 
+    /**
+     * 消费单条消息。
+     *
+     * @param message 消息体。类型：{@link Message}
+     */
     @RabbitListener(queues = RiskMqConfig.DLQ_IMAGE_SCAN)
     public void onMessage(Message message) {
         reliableMqDlqRecorder.record(

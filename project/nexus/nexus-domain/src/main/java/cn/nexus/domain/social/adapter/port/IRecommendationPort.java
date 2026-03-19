@@ -4,6 +4,10 @@ import java.util.List;
 
 /**
  * 推荐系统端口。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-26
  */
 public interface IRecommendationPort {
 

@@ -22,6 +22,13 @@ import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+/**
+ * SearchService 服务实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
+ */
 @Service
 @RequiredArgsConstructor
 public class SearchService implements ISearchService {
@@ -30,12 +37,24 @@ public class SearchService implements ISearchService {
     private final IFeedCardStatRepository feedCardStatRepository;
     private final IReactionRepository reactionRepository;
 
+    /**
+     * 执行搜索。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param keyword keyword 参数。类型：{@link String}
+     * @param size size 参数。类型：{@link Integer}
+     * @param tags tags 参数。类型：{@link String}
+     * @param after after 参数。类型：{@link String}
+     * @return 处理结果。类型：{@link SearchResultVO}
+     */
     @Override
     public SearchResultVO search(Long userId, String keyword, Integer size, String tags, String after) {
+        // 第一步先把输入收口，避免把空白关键词、非法 size 直接透传到 ES。
         String normalizedKeyword = normalizeRequiredText(keyword, "q 不能为空");
         int limit = normalizeSize(size, 20);
         List<String> tagList = parseTags(tags);
 
+        // 第二步只把“搜索表达”交给搜索引擎端口，领域服务不直接拼底层 ES 细节。
         SearchEngineResultVO engine = searchEnginePort.search(SearchEngineQueryVO.builder()
                 .keyword(normalizedKeyword)
                 .limit(limit)
@@ -52,6 +71,7 @@ public class SearchService implements ISearchService {
             }
         }
 
+        // 第三步用缓存计数 + 批量点赞态把“索引快照”补成更接近实时的展示结果。
         Map<Long, FeedCardStatVO> statMap = loadLikeStats(contentIds);
         Set<Long> likedSet = Set.of();
         if (userId != null && !contentIds.isEmpty()) {
@@ -95,6 +115,13 @@ public class SearchService implements ISearchService {
                 .build();
     }
 
+    /**
+     * 查询联想词。
+     *
+     * @param prefix prefix 参数。类型：{@link String}
+     * @param size size 参数。类型：{@link Integer}
+     * @return 处理结果。类型：{@link SearchSuggestVO}
+     */
     @Override
     public SearchSuggestVO suggest(String prefix, Integer size) {
         String normalizedPrefix = normalizeRequiredText(prefix, "prefix 不能为空");
@@ -143,6 +170,7 @@ public class SearchService implements ISearchService {
             if (contentId == null || statMap.containsKey(contentId)) {
                 continue;
             }
+            // 这里只有缓存 miss 才回真相源，避免每次搜索命中都把互动库打成热点。
             long count = reactionRepository.getCount(ReactionTargetVO.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(contentId)

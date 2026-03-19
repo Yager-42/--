@@ -12,6 +12,10 @@ import java.util.List;
 
 /**
  * ConsumerGroup B: aggregate (1000/1s) and send count snapshots to DB topic.
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-03
  */
 @Slf4j
 @Component
@@ -20,6 +24,11 @@ public class PostLikeCountAggregateConsumer {
 
     private final PostLikeCountAggregateStrategy strategy;
 
+    /**
+     * 批量消费消息。
+     *
+     * @param messages 消息列表。类型：{@link List}
+     */
     @RabbitListener(queues = LikeUnlikeMqConfig.QUEUE_COUNT, containerFactory = "likeUnlikeBatchListenerContainerFactory")
     public void onMessages(List<Message> messages) {
         strategy.handle(messages);

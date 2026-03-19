@@ -11,8 +11,7 @@ import org.springframework.stereotype.Service;
 /**
  * 评论热榜重建服务：从 MySQL 扫描一级评论，清空并重建 Redis ZSET。
  *
- * <p>用途：热榜冷启动 / Redis key 丢失后的恢复；不要在读路径做复杂 fallback。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-22
  */

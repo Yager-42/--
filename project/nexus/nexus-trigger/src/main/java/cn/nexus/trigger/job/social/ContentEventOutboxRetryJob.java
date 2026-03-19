@@ -9,6 +9,12 @@ import org.springframework.stereotype.Component;
 
 /**
  * 内容域 Outbox 重试/清理任务。
+ *
+ * @author rr
+ * @author rr
+ * @author codex
+ * @author codex
+ * @since 2026-02-03
  */
 @Component
 @RequiredArgsConstructor
@@ -39,4 +45,3 @@ public class ContentEventOutboxRetryJob {
         log.info("event=content.outbox.clean_done rows={}", deleted);
     }
 }
-

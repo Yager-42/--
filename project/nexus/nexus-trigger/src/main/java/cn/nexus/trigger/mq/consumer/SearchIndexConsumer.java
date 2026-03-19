@@ -28,8 +28,6 @@ import cn.nexus.trigger.search.support.SearchDocumentAssembler;
 /**
  * Search 索引事件消费者。
  *
- * <p>职责很单一：从 `MQ` 取事件，回主库拿真值，再把文档写入或删出搜索索引。</p>
- *
  * @author rr
  * @author codex
  * @since 2026-02-02

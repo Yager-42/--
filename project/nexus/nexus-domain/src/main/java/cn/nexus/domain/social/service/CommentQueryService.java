@@ -25,8 +25,6 @@ import org.springframework.stereotype.Service;
 /**
  * 评论读侧查询服务。
  *
- * <p>负责把评论主干、回复预览、热榜和用户昵称头像拼成前端可以直接消费的结果。</p>
- *
  * @author rr
  * @author codex
  * @since 2026-01-21

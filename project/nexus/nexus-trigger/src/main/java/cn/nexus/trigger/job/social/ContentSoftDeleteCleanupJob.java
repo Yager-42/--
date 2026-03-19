@@ -12,6 +12,9 @@ import org.springframework.stereotype.Component;
  * 软删内容定时物理清理任务。
  *
  * <p>规则：软删超过 N 天（默认 7）后，物理删除 content_post，并同步清理 content_post_type；content_history 保留审计。</p>
+ *
+ * @author {$authorName}
+ * @since 2026-03-01
  */
 @Component
 @RequiredArgsConstructor
@@ -40,4 +43,3 @@ public class ContentSoftDeleteCleanupJob {
         log.info("event=content.post.soft_delete_cleanup retentionDays={} limit={} rows={}", days, DEFAULT_LIMIT, deleted);
     }
 }
-

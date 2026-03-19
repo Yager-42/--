@@ -27,8 +27,6 @@ import org.springframework.stereotype.Service;
 /**
  * Feed 卡片组装服务。
  *
- * <p>把候选 `postId` 列表补齐成前端可直接渲染的卡片，资料、点赞数和关注态都在这里统一拼装。</p>
- *
  * @author m0_52354773
  * @author codex
  * @since 2026-03-08

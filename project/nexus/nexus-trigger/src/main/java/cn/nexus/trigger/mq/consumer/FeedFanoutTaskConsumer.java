@@ -14,8 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * Feed fanout worker：消费 {@link FeedFanoutTask} 并执行某一片 fanout。
  *
- * <p>该 consumer 只负责“执行一片”，不负责拆片；拆片由 {@link FeedFanoutDispatcherConsumer} 完成。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */

@@ -6,6 +6,10 @@ import java.util.List;
 
 /**
  * 关系事件 Outbox 仓储。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-08
  */
 public interface IRelationEventOutboxRepository {
 

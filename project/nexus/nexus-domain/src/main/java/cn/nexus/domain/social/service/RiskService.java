@@ -55,6 +55,10 @@ import java.util.Locale;
 
 /**
  * 风控服务实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Slf4j
 @Service
@@ -161,6 +165,12 @@ public class RiskService implements IRiskService {
             + "]"
             + "}";
 
+    /**
+     * 执行风控决策。
+     *
+     * @param event 事件对象。类型：{@link RiskEventVO}
+     * @return 处理结果。类型：{@link RiskDecisionVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public RiskDecisionVO decision(RiskEventVO event) {
@@ -174,6 +184,14 @@ public class RiskService implements IRiskService {
         return persist(e, requestHash, decision);
     }
 
+    /**
+     * 执行文本扫描。
+     *
+     * @param content 文本内容。类型：{@link String}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param scenario scenario 参数。类型：{@link String}
+     * @return 处理结果。类型：{@link TextScanResultVO}
+     */
     @Override
     public TextScanResultVO textScan(String content, Long userId, String scenario) {
         RiskEventVO event = RiskEventVO.builder()
@@ -194,6 +212,13 @@ public class RiskService implements IRiskService {
         return TextScanResultVO.builder().result(result).tags(tags).build();
     }
 
+    /**
+     * 执行图片扫描。
+     *
+     * @param imageUrl imageUrl 参数。类型：{@link String}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@link ImageScanResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ImageScanResultVO imageScan(String imageUrl, Long userId) {
@@ -220,6 +245,12 @@ public class RiskService implements IRiskService {
         return ImageScanResultVO.builder().taskId(taskId).build();
     }
 
+    /**
+     * 查询用户风险状态。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@link UserRiskStatusVO}
+     */
     @Override
     public UserRiskStatusVO userStatus(Long userId) {
         List<RiskPunishmentEntity> list = punishmentRepository.listActiveByUser(userId, socialIdPort.now());
@@ -501,6 +532,10 @@ public class RiskService implements IRiskService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 dispatchTasksBestEffort(event, decision, createdCase);

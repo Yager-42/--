@@ -17,7 +17,11 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
 /**
- * 关系事件监听，消费 MQ 并触达 Feed/通知/风控。
+ * 关系事件监听器：消费 MQ 后把关注、取关、拉黑副作用推进到 Feed、通知和风控读侧。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Component
 @Slf4j
@@ -31,6 +35,12 @@ public class RelationEventListener {
     private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 消费关注事件。
+     *
+     * @param event 关注事件消息，类型：{@link RelationFollowEvent}
+     * @return 无返回值，类型：{@code void}
+     */
     @RabbitListener(queues = "relation.follow.queue")
     public void consumeFollow(RelationFollowEvent event) {
         try {
@@ -41,6 +51,12 @@ public class RelationEventListener {
         }
     }
 
+    /**
+     * 消费拉黑事件。
+     *
+     * @param event 拉黑事件消息，类型：{@link RelationBlockEvent}
+     * @return 无返回值，类型：{@code void}
+     */
     @RabbitListener(queues = "relation.block.queue")
     public void consumeBlock(RelationBlockEvent event) {
         try {
@@ -58,6 +74,7 @@ public class RelationEventListener {
             log.debug("Skip duplicate follow event {}", fingerprint);
             return;
         }
+        // 先做 inbox 去重，再推进副作用，这样 MQ 至少一次投递也不会把补偿逻辑重复执行。
         if ("ACTIVE".equalsIgnoreCase(event.status())) {
             feedFollowCompensationService.onFollow(event.sourceId(), event.targetId());
             feedAuthorCategoryStateMachine.onFollowerCountChanged(event.targetId());
@@ -65,6 +82,7 @@ public class RelationEventListener {
             feedFollowCompensationService.onUnfollow(event.sourceId(), event.targetId());
             feedAuthorCategoryStateMachine.onFollowerCountChanged(event.targetId());
         }
+        // 通知与用户状态这里属于“读一次触发旁路”的轻量副作用，不反向改变关系真相。
         NotificationListVO list = interactionService.notifications(event.targetId(), null);
         riskService.userStatus(event.sourceId());
         relationEventInboxPort.markDone(fingerprint);
@@ -78,6 +96,7 @@ public class RelationEventListener {
             log.debug("Skip duplicate block event {}", fingerprint);
             return;
         }
+        // block 会影响双方的“是否还是大 V 候选”，所以这里刷新两侧作者分类状态。
         OperationResultVO result = riskService.userStatus(event.targetId()) != null
                 ? OperationResultVO.builder().success(true).status("BLOCK_REFRESHED").build()
                 : OperationResultVO.builder().success(false).status("BLOCK_REFRESH_FAILED").build();

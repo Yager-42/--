@@ -19,8 +19,7 @@ import java.util.List;
 /**
  * 推荐 Item 写入消费者：PostPublishedEvent -> upsertItem。
  *
- * <p>旁路链路：写入失败不影响发布成功，但消费异常会进入 DLQ 方便排障与重放。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-26
  */

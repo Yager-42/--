@@ -16,6 +16,7 @@ import java.util.List;
 /**
  * 通知收件箱仓储 MyBatis 实现。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-21
  */
@@ -26,6 +27,14 @@ public class InteractionNotificationRepository implements IInteractionNotificati
     private final IInteractionNotificationDao notificationDao;
     private final ISocialIdPort socialIdPort;
 
+    /**
+     * 按用户分页查询。
+     *
+     * @param toUserId toUserId 参数。类型：{@link Long}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<NotificationVO> pageByUser(Long toUserId, String cursor, int limit) {
         if (toUserId == null) {
@@ -51,6 +60,11 @@ public class InteractionNotificationRepository implements IInteractionNotificati
         return res;
     }
 
+    /**
+     * 聚合增量写入。
+     *
+     * @param cmd cmd 参数。类型：{@link InteractionNotificationUpsertCmd}
+     */
     @Override
     public void upsertIncrement(InteractionNotificationUpsertCmd cmd) {
         if (cmd == null
@@ -80,6 +94,12 @@ public class InteractionNotificationRepository implements IInteractionNotificati
                 delta);
     }
 
+    /**
+     * 标记已读。
+     *
+     * @param toUserId toUserId 参数。类型：{@link Long}
+     * @param notificationId notificationId 参数。类型：{@link Long}
+     */
     @Override
     public void markRead(Long toUserId, Long notificationId) {
         if (toUserId == null || notificationId == null) {
@@ -88,6 +108,11 @@ public class InteractionNotificationRepository implements IInteractionNotificati
         notificationDao.markRead(toUserId, notificationId);
     }
 
+    /**
+     * 标记全部已读。
+     *
+     * @param toUserId toUserId 参数。类型：{@link Long}
+     */
     @Override
     public void markReadAll(Long toUserId) {
         if (toUserId == null) {

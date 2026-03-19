@@ -21,6 +21,11 @@ public class RecommendFeedbackEventPort implements IRecommendFeedbackEventPort {
 
     private final ReliableMqOutboxService reliableMqOutboxService;
 
+    /**
+     * 发布推荐反馈事件。
+     *
+     * @param event 推荐反馈事件。类型：{@link RecommendFeedbackEvent}
+     */
     @Override
     public void publish(RecommendFeedbackEvent event) {
         reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_RECOMMEND_FEEDBACK, event);

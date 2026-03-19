@@ -21,8 +21,7 @@ import java.util.Set;
 /**
  * Feed InboxTimeline 仓储 Redis 实现（ZSET）。
  *
- * <p>Key：feed:inbox:{userId}</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-12
  */
@@ -44,6 +43,13 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
     @Value("${feed.rebuild.lockSeconds:30}")
     private int rebuildLockSeconds;
 
+    /**
+     * 执行 addToInbox 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param publishTimeMs publishTimeMs 参数。类型：{@link Long}
+     */
     @Override
     public void addToInbox(Long userId, Long postId, Long publishTimeMs) {
         if (userId == null || postId == null || publishTimeMs == null) {
@@ -55,6 +61,12 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
         trimToMaxSize(key);
     }
 
+    /**
+     * 执行 inboxExists 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean inboxExists(Long userId) {
         if (userId == null) {
@@ -64,6 +76,12 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
         return Boolean.TRUE.equals(exists);
     }
 
+    /**
+     * 执行 filterOnlineUsers 逻辑。
+     *
+     * @param userIds userIds 参数。类型：{@link List}
+     * @return 处理结果。类型：{@link Set}
+     */
     @Override
     public Set<Long> filterOnlineUsers(List<Long> userIds) {
         if (userIds == null || userIds.isEmpty()) {
@@ -106,6 +124,12 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
         return online.isEmpty() ? Set.of() : online;
     }
 
+    /**
+     * 执行 replaceInbox 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param entries entries 参数。类型：{@link List}
+     */
     @Override
     public void replaceInbox(Long userId, List<FeedInboxEntryVO> entries) {
         if (userId == null) {
@@ -130,11 +154,20 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
         stringRedisTemplate.expire(tmpKey, ttl());
         trimToMaxSize(tmpKey);
 
+        // 先写临时 key，再原子 rename，避免重建过程中读到半成品 Inbox。
         String inboxKey = inboxKey(userId);
         stringRedisTemplate.rename(tmpKey, inboxKey);
         stringRedisTemplate.expire(inboxKey, ttl());
     }
 
+    /**
+     * 执行 pageInbox 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link FeedIdPageVO}
+     */
     @Override
     public FeedIdPageVO pageInbox(Long userId, String cursor, int limit) {
         if (userId == null) {
@@ -165,6 +198,15 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
                 .build();
     }
 
+    /**
+     * 执行 pageInboxEntries 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param cursorTimeMs cursorTimeMs 参数。类型：{@link Long}
+     * @param cursorPostId cursorPostId 参数。类型：{@link Long}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<FeedInboxEntryVO> pageInboxEntries(Long userId, Long cursorTimeMs, Long cursorPostId, int limit) {
         if (userId == null) {
@@ -178,6 +220,7 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
         long safeCursorPostId = cursorPostId == null ? Long.MAX_VALUE : cursorPostId;
         int fetchCount = normalizedLimit + 20;
 
+        // Redis ZSET 只能按 score 做粗分页，所以这里多抓一点，再用 (publishTimeMs, postId) 做二次裁剪，保证同毫秒下翻页稳定。
         Set<ZSetOperations.TypedTuple<String>> tuples = stringRedisTemplate.opsForZSet()
                 .reverseRangeByScoreWithScores(key, 0D, safeCursorTime, 0, fetchCount);
         if (tuples == null || tuples.isEmpty()) {
@@ -208,6 +251,12 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
         return result;
     }
 
+    /**
+     * 执行 removeFromInbox 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     */
     @Override
     public void removeFromInbox(Long userId, Long postId) {
         if (userId == null || postId == null) {

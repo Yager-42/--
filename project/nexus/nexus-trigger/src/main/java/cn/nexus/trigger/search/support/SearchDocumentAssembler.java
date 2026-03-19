@@ -7,12 +7,35 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+/**
+ * SearchDocumentAssembler 实现。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-09
+ */
 @Component
 @RequiredArgsConstructor
 public class SearchDocumentAssembler {
 
     private final IMediaStoragePort mediaStoragePort;
 
+    /**
+     * 执行 assemble 逻辑。
+     *
+     * @param contentId contentId 参数。类型：{@link Long}
+     * @param authorId authorId 参数。类型：{@link Long}
+     * @param title title 参数。类型：{@link String}
+     * @param description description 参数。类型：{@link String}
+     * @param body body 参数。类型：{@link String}
+     * @param tags tags 参数。类型：{@link List}
+     * @param authorAvatar authorAvatar 参数。类型：{@link String}
+     * @param authorNickname authorNickname 参数。类型：{@link String}
+     * @param publishTime publishTime 参数。类型：{@link Long}
+     * @param likeCount likeCount 参数。类型：{@link Long}
+     * @param mediaInfo mediaInfo 参数。类型：{@link String}
+     * @return 处理结果。类型：{@link SearchDocumentVO}
+     */
     public SearchDocumentVO assemble(Long contentId,
                                      Long authorId,
                                      String title,

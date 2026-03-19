@@ -18,8 +18,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Feed 分发服务实现：处理内容发布后的写扩散（fanout）。
  *
- * <p>Phase 2 规则：作者自己无条件写入；粉丝仅对 inbox key 存在的用户写入（在线推）。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-12
  */

@@ -25,9 +25,6 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 用户隐私设置接口入口。
  *
- * <p>控制器只负责两件事：确认当前请求归属哪个用户，以及把 HTTP DTO 转成领域服务能直接消费的参数。
- * 隐私真值仍然只放在 {@code user_privacy_setting}。</p>
- *
  * @author rr
  * @author codex
  * @since 2026-02-03

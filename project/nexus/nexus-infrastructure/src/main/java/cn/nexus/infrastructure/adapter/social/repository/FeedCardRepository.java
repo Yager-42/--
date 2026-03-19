@@ -21,6 +21,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
+/**
+ * Feed 卡片仓储：负责维护 Redis + Caffeine 两级缓存里的卡片基础信息。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-08
+ */
 @Repository
 @RequiredArgsConstructor
 @Slf4j
@@ -41,6 +48,12 @@ public class FeedCardRepository implements IFeedCardRepository {
             .build();
     private final SingleFlight singleFlight = new SingleFlight();
 
+    /**
+     * 批量读取卡片缓存。
+     *
+     * @param postIds 帖子 ID 列表。 {@link List}
+     * @return 命中的卡片映射。 {@link Map}
+     */
     @Override
     public Map<Long, FeedCardBaseVO> getBatch(List<Long> postIds) {
         if (postIds == null || postIds.isEmpty()) {
@@ -77,6 +90,13 @@ public class FeedCardRepository implements IFeedCardRepository {
         return result;
     }
 
+    /**
+     * 执行 getOrLoadBatch 逻辑。
+     *
+     * @param postIds postIds 参数。类型：{@link List}
+     * @param loader loader 参数。类型：{@link Function}
+     * @return 处理结果。类型：{@link Map}
+     */
     @Override
     public Map<Long, FeedCardBaseVO> getOrLoadBatch(List<Long> postIds,
                                                     Function<List<Long>, Map<Long, FeedCardBaseVO>> loader) {
@@ -85,6 +105,7 @@ public class FeedCardRepository implements IFeedCardRepository {
         if (missIds.isEmpty()) {
             return result;
         }
+        // 多个线程同时回源同一批 miss ID 时，只放行一次真实加载，避免缓存击穿把 DB 打穿。
         Map<Long, FeedCardBaseVO> rebuilt = singleFlight.execute(
                 normalizeInflightKey(missIds),
                 () -> loadAndCacheMisses(missIds, loader)
@@ -95,6 +116,11 @@ public class FeedCardRepository implements IFeedCardRepository {
         return result;
     }
 
+    /**
+     * 执行 saveBatch 逻辑。
+     *
+     * @param cards cards 参数。类型：{@link List}
+     */
     @Override
     public void saveBatch(List<FeedCardBaseVO> cards) {
         if (cards == null || cards.isEmpty()) {
@@ -136,6 +162,11 @@ public class FeedCardRepository implements IFeedCardRepository {
         return result;
     }
 
+    /**
+     * 执行 evictLocal 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     */
     public void evictLocal(Long postId) {
         if (postId == null) {
             return;
@@ -143,6 +174,11 @@ public class FeedCardRepository implements IFeedCardRepository {
         l1.invalidate(postId);
     }
 
+    /**
+     * 执行 evictRedis 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     */
     public void evictRedis(Long postId) {
         if (postId == null) {
             return;

@@ -14,9 +14,9 @@ import java.util.Map;
 /**
  * Feed 作者类别状态机仓储 Redis 实现（HASH）。
  *
- * <p>Key：feed:author:category</p>
- * <p>field：userId</p>
- * <p>value：0(NORMAL) / 1(BIGV)</p>
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-01
  */
 @Repository
 @RequiredArgsConstructor
@@ -27,6 +27,12 @@ public class FeedAuthorCategoryRepository implements IFeedAuthorCategoryReposito
 
     private final StringRedisTemplate stringRedisTemplate;
 
+    /**
+     * 读取指定作者当前的类别。
+     *
+     * @param userId 作者 ID。 {@link Long}
+     * @return 作者类别编码。 {@link Integer}
+     */
     @Override
     public Integer getCategory(Long userId) {
         if (userId == null) {
@@ -36,6 +42,12 @@ public class FeedAuthorCategoryRepository implements IFeedAuthorCategoryReposito
         return parseInt(value);
     }
 
+    /**
+     * 批量读取作者类别。
+     *
+     * @param userIds 作者 ID 列表。 {@link List}
+     * @return 作者类别映射。 {@link Map}
+     */
     @Override
     public Map<Long, Integer> batchGetCategory(List<Long> userIds) {
         if (userIds == null || userIds.isEmpty()) {
@@ -83,6 +95,12 @@ public class FeedAuthorCategoryRepository implements IFeedAuthorCategoryReposito
         return result;
     }
 
+    /**
+     * 写入作者类别。
+     *
+     * @param userId 作者 ID。 {@link Long}
+     * @param category 类别编码。 {@link Integer}
+     */
     @Override
     public void setCategory(Long userId, Integer category) {
         if (userId == null || category == null) {

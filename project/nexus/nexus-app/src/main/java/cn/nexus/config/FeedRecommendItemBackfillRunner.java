@@ -21,8 +21,7 @@ import java.util.Map;
 /**
  * 推荐冷启动回灌启动器：分页扫描已发布内容并 upsertItem。
  *
- * <p>默认不执行，避免线上误伤；仅在显式开启 {@code feed.recommend.backfill.enabled=true} 时运行一次。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-26
  */
@@ -41,6 +40,13 @@ public class FeedRecommendItemBackfillRunner implements ApplicationRunner {
     private final IContentPostTypeDao contentPostTypeDao;
     private final IRecommendationPort recommendationPort;
 
+    /**
+     * 创建推荐冷启动回灌启动器。
+     *
+     * @param contentPostDao 内容主表 DAO。 {@link IContentPostDao}
+     * @param contentPostTypeDao 内容类型 DAO。 {@link IContentPostTypeDao}
+     * @param recommendationPort 推荐系统端口。 {@link IRecommendationPort}
+     */
     public FeedRecommendItemBackfillRunner(IContentPostDao contentPostDao,
                                           IContentPostTypeDao contentPostTypeDao,
                                           IRecommendationPort recommendationPort) {
@@ -49,6 +55,11 @@ public class FeedRecommendItemBackfillRunner implements ApplicationRunner {
         this.recommendationPort = recommendationPort;
     }
 
+    /**
+     * 应用启动后按开关执行推荐冷启动回灌。
+     *
+     * @param args 启动参数。 {@link ApplicationArguments}
+     */
     @Override
     public void run(ApplicationArguments args) {
         if (!enabled) {
@@ -80,6 +91,7 @@ public class FeedRecommendItemBackfillRunner implements ApplicationRunner {
                 break;
             }
 
+            // 先批量取标签，再逐条 upsert，避免每条内容都单独查一次类型表。
             Map<Long, List<String>> typesByPostId = loadPostTypes(postIds);
             for (ContentPostPO po : page) {
                 if (po == null || po.getPostId() == null) {

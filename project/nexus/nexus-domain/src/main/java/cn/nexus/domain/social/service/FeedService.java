@@ -38,6 +38,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * 分发与 Feed 服务实现：提供 timeline/profile 等读侧能力。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-12
  */

@@ -17,6 +17,7 @@ import java.util.List;
 /**
  * Feed Inbox 重建服务实现：离线拉（inbox miss）时，按关注列表回填最近一段时间的内容。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-13
  */
@@ -65,6 +66,11 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
         return true;
     }
 
+    /**
+     * 强制重建指定用户的 Inbox。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     */
     @Override
     public void forceRebuild(Long userId) {
         if (userId == null) {

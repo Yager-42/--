@@ -33,6 +33,7 @@ import org.springframework.stereotype.Repository;
 /**
  * 鐠囧嫯顔戞禒鎾冲亶 MyBatis 鐎圭偟骞囬妴?
  *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */
@@ -62,6 +63,12 @@ public class CommentRepository implements ICommentRepository {
 
     private final SingleFlight singleFlight = new SingleFlight();
 
+    /**
+     * 执行 getBrief 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@link CommentBriefVO}
+     */
     @Override
     public CommentBriefVO getBrief(Long commentId) {
         if (commentId == null) {
@@ -82,6 +89,12 @@ public class CommentRepository implements ICommentRepository {
                 .build();
     }
 
+    /**
+     * 执行 listByIds 逻辑。
+     *
+     * @param commentIds commentIds 参数。类型：{@link List}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<CommentViewVO> listByIds(List<Long> commentIds) {
         if (commentIds == null || commentIds.isEmpty()) {
@@ -118,6 +131,19 @@ public class CommentRepository implements ICommentRepository {
         return orderCommentViews(commentIds, resultById);
     }
 
+    /**
+     * 执行 insert 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param rootId rootId 参数。类型：{@link Long}
+     * @param parentId 父评论 ID。类型：{@link Long}
+     * @param replyToId replyToId 参数。类型：{@link Long}
+     * @param content 文本内容。类型：{@link String}
+     * @param status status 参数。类型：{@link Integer}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     */
     @Override
     public void insert(Long commentId, Long postId, Long userId, Long rootId, Long parentId, Long replyToId, String content, Integer status, Long nowMs) {
         Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
@@ -152,6 +178,13 @@ public class CommentRepository implements ICommentRepository {
         }
     }
 
+    /**
+     * 执行 approvePending 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean approvePending(Long commentId, Long nowMs) {
         if (commentId == null) {
@@ -169,6 +202,13 @@ public class CommentRepository implements ICommentRepository {
         return updated;
     }
 
+    /**
+     * 执行 rejectPending 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean rejectPending(Long commentId, Long nowMs) {
         if (commentId == null) {
@@ -186,6 +226,13 @@ public class CommentRepository implements ICommentRepository {
         return updated;
     }
 
+    /**
+     * 执行 softDelete 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean softDelete(Long commentId, Long nowMs) {
         if (commentId == null) {
@@ -203,6 +250,13 @@ public class CommentRepository implements ICommentRepository {
         return affected > 0;
     }
 
+    /**
+     * 执行 softDeleteByRootId 逻辑。
+     *
+     * @param rootId rootId 参数。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean softDeleteByRootId(Long rootId, Long nowMs) {
         if (rootId == null) {
@@ -217,6 +271,13 @@ public class CommentRepository implements ICommentRepository {
         return affected > 0;
     }
 
+    /**
+     * 执行 deleteSoftDeletedBefore 逻辑。
+     *
+     * @param cutoff cutoff 参数。类型：{@link Date}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@code int}
+     */
     @Override
     public int deleteSoftDeletedBefore(Date cutoff, int limit) {
         if (cutoff == null) {
@@ -226,6 +287,12 @@ public class CommentRepository implements ICommentRepository {
         return commentDao.deleteSoftDeletedBefore(cutoff, normalizedLimit);
     }
 
+    /**
+     * 执行 addReplyCount 逻辑。
+     *
+     * @param rootCommentId rootCommentId 参数。类型：{@link Long}
+     * @param delta delta 参数。类型：{@link Long}
+     */
     @Override
     public void addReplyCount(Long rootCommentId, Long delta) {
         if (rootCommentId == null || delta == null || delta == 0) {
@@ -237,6 +304,12 @@ public class CommentRepository implements ICommentRepository {
         evictReplyPreviews(rootCommentId);
     }
 
+    /**
+     * 执行 addLikeCount 逻辑。
+     *
+     * @param rootCommentId rootCommentId 参数。类型：{@link Long}
+     * @param delta delta 参数。类型：{@link Long}
+     */
     @Override
     public void addLikeCount(Long rootCommentId, Long delta) {
         if (rootCommentId == null || delta == null || delta == 0) {
@@ -246,6 +319,16 @@ public class CommentRepository implements ICommentRepository {
         evictCommentView(rootCommentId);
     }
 
+    /**
+     * 执行 pageRootCommentIds 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param pinnedId pinnedId 参数。类型：{@link Long}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @param viewerId viewerId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> pageRootCommentIds(Long postId, Long pinnedId, String cursor, int limit, Long viewerId) {
         Cursor c = Cursor.parse(cursor);
@@ -265,6 +348,15 @@ public class CommentRepository implements ICommentRepository {
                 normalizedLimit);
     }
 
+    /**
+     * 执行 pageReplyCommentIds 逻辑。
+     *
+     * @param rootId rootId 参数。类型：{@link Long}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @param viewerId viewerId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit, Long viewerId) {
         Cursor c = Cursor.parse(cursor);
@@ -823,6 +915,13 @@ public class CommentRepository implements ICommentRepository {
         }
     }
 
+    /**
+     * 执行 listRecentRootBriefs 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<CommentBriefVO> listRecentRootBriefs(Long postId, int limit) {
         if (postId == null) {

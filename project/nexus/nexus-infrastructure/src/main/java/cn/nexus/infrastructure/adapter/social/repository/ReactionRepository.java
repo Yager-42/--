@@ -18,6 +18,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * ReactionRepository 仓储实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-20
+ */
 @Repository
 @RequiredArgsConstructor
 @Transactional(rollbackFor = Exception.class, propagation = org.springframework.transaction.annotation.Propagation.REQUIRED)
@@ -29,6 +36,12 @@ public class ReactionRepository implements IReactionRepository {
     private final IInteractionReactionCountDao reactionCountDao;
     private final IInteractionReactionCountDeltaInboxDao reactionCountDeltaInboxDao;
 
+    /**
+     * 批量写入真相数据。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param userIds userIds 参数。类型：{@link List}
+     */
     @Override
     public void batchUpsert(ReactionTargetVO target, List<Long> userIds) {
         if (target == null || userIds == null || userIds.isEmpty()) {
@@ -58,6 +71,12 @@ public class ReactionRepository implements IReactionRepository {
         }
     }
 
+    /**
+     * 批量删除真相数据。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param userIds userIds 参数。类型：{@link List}
+     */
     @Override
     public void batchDelete(ReactionTargetVO target, List<Long> userIds) {
         if (target == null || userIds == null || userIds.isEmpty()) {
@@ -81,6 +100,12 @@ public class ReactionRepository implements IReactionRepository {
         }
     }
 
+    /**
+     * 覆盖写入计数。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param count count 参数。类型：{@code long}
+     */
     @Override
     public void upsertCount(ReactionTargetVO target, long count) {
         if (target == null) {
@@ -94,6 +119,12 @@ public class ReactionRepository implements IReactionRepository {
         reactionCountDao.insertOrUpdate(po);
     }
 
+    /**
+     * 增量更新计数。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param delta delta 参数。类型：{@code long}
+     */
     @Override
     public void incrCount(ReactionTargetVO target, long delta) {
         if (target == null || delta == 0) {
@@ -102,6 +133,14 @@ public class ReactionRepository implements IReactionRepository {
         reactionCountDao.incrCount(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode(), delta);
     }
 
+    /**
+     * 按幂等键应用计数增量。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param eventId eventId 参数。类型：{@link String}
+     * @param delta delta 参数。类型：{@code long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean applyCountDeltaOnce(ReactionTargetVO target, String eventId, long delta) {
         if (target == null || eventId == null || eventId.isBlank() || delta == 0) {
@@ -117,6 +156,13 @@ public class ReactionRepository implements IReactionRepository {
         return true;
     }
 
+    /**
+     * 判断数据是否存在。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean exists(ReactionTargetVO target, Long userId) {
         if (target == null || userId == null) {
@@ -126,6 +172,13 @@ public class ReactionRepository implements IReactionRepository {
         return flag != null && flag == 1;
     }
 
+    /**
+     * 幂等插入数据。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@code int}
+     */
     @Override
     public int insertIgnore(ReactionTargetVO target, Long userId) {
         if (target == null || userId == null) {
@@ -134,6 +187,13 @@ public class ReactionRepository implements IReactionRepository {
         return reactionDao.insertIgnore(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode(), userId);
     }
 
+    /**
+     * 删除单条数据。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@code int}
+     */
     @Override
     public int deleteOne(ReactionTargetVO target, Long userId) {
         if (target == null || userId == null) {
@@ -142,6 +202,12 @@ public class ReactionRepository implements IReactionRepository {
         return reactionDao.deleteOne(target.getTargetType().getCode(), target.getTargetId(), target.getReactionType().getCode(), userId);
     }
 
+    /**
+     * 读取计数。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @return 处理结果。类型：{@code long}
+     */
     @Override
     public long getCount(ReactionTargetVO target) {
         if (target == null) {
@@ -151,6 +217,14 @@ public class ReactionRepository implements IReactionRepository {
         return count == null ? 0L : Math.max(0L, count);
     }
 
+    /**
+     * 分页查询用户边。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<ReactionUserEdgeVO> pageUserEdgesByTarget(ReactionTargetVO target, String cursor, int limit) {
         if (target == null || limit <= 0) {
@@ -174,6 +248,14 @@ public class ReactionRepository implements IReactionRepository {
         return result;
     }
 
+    /**
+     * 批量判断状态。
+     *
+     * @param targetTemplate targetTemplate 参数。类型：{@link ReactionTargetVO}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param targetIds targetIds 参数。类型：{@link List}
+     * @return 处理结果。类型：{@link Set}
+     */
     @Override
     public Set<Long> batchExists(ReactionTargetVO targetTemplate, Long userId, List<Long> targetIds) {
         if (targetTemplate == null || userId == null || targetIds == null || targetIds.isEmpty()) {

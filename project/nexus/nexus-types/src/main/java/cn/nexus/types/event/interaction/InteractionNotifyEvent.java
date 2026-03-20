@@ -5,10 +5,11 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 /**
- * 通知统一事件：LIKE/COMMENT/@mention 都收敛为一种结构，通知消费者按规则落库聚合。
+ * 通知统一事件：`LIKE / COMMENT / @mention` 都收敛成这一种消息结构。
  *
- * <p>字段设计刻意保持“蠢”：消费者只做幂等 + 目标归属解析 + 一条 UPSERT。</p>
+ * <p>字段设计刻意保持“笨”：消费者只做幂等、目标归属解析和一条 `UPSERT`。</p>
  *
+ * @author rr
  * @author codex
  * @since 2026-01-21
  */
@@ -45,4 +46,3 @@ public class InteractionNotifyEvent extends BaseEvent {
     /** 点赞链路请求号（可选，但 LIKE_ADDED 会补齐并用作 eventId） */
     private String requestId;
 }
-

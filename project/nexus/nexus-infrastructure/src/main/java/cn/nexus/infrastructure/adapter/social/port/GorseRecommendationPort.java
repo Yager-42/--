@@ -24,6 +24,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * Gorse 推荐端口实现：通过 REST API 调用推荐系统。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-26
  */
 @Slf4j
 @Component
@@ -39,6 +43,10 @@ public class GorseRecommendationPort implements IRecommendationPort {
 
     private volatile HttpClient httpClient;
 
+    /**
+     * 执行 init 逻辑。
+     *
+     */
     @PostConstruct
     public void init() {
         int connectTimeoutMs = Math.max(1, feedRecommendProperties.getConnectTimeoutMs());
@@ -47,6 +55,13 @@ public class GorseRecommendationPort implements IRecommendationPort {
                 .build();
     }
 
+    /**
+     * 执行 recommend 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param n n 参数。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> recommend(Long userId, int n) {
         if (userId == null || n <= 0) {
@@ -66,6 +81,15 @@ public class GorseRecommendationPort implements IRecommendationPort {
         }
     }
 
+    /**
+     * 执行 nonPersonalized 逻辑。
+     *
+     * @param name name 参数。类型：{@link String}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param n n 参数。类型：{@code int}
+     * @param offset offset 参数。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> nonPersonalized(String name, Long userId, int n, int offset) {
         if (name == null || name.isBlank() || n <= 0 || offset < 0) {
@@ -88,6 +112,14 @@ public class GorseRecommendationPort implements IRecommendationPort {
         }
     }
 
+    /**
+     * 执行 sessionRecommend 逻辑。
+     *
+     * @param sessionId sessionId 参数。类型：{@link String}
+     * @param currentItemIds currentItemIds 参数。类型：{@link List}
+     * @param n n 参数。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> sessionRecommend(String sessionId, List<Long> currentItemIds, int n) {
         if (sessionId == null || sessionId.isBlank() || n <= 0) {
@@ -118,6 +150,14 @@ public class GorseRecommendationPort implements IRecommendationPort {
         }
     }
 
+    /**
+     * 执行 itemToItem 逻辑。
+     *
+     * @param name name 参数。类型：{@link String}
+     * @param itemId itemId 参数。类型：{@link Long}
+     * @param n n 参数。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> itemToItem(String name, Long itemId, int n) {
         if (name == null || name.isBlank() || itemId == null || n <= 0) {
@@ -138,6 +178,13 @@ public class GorseRecommendationPort implements IRecommendationPort {
         }
     }
 
+    /**
+     * 执行 upsertItem 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param labels labels 参数。类型：{@link List}
+     * @param timestampMs timestampMs 参数。类型：{@link Long}
+     */
     @Override
     public void upsertItem(Long postId, List<String> labels, Long timestampMs) {
         if (postId == null) {
@@ -158,6 +205,14 @@ public class GorseRecommendationPort implements IRecommendationPort {
         }
     }
 
+    /**
+     * 执行 insertFeedback 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param feedbackType feedbackType 参数。类型：{@link String}
+     * @param timestampMs timestampMs 参数。类型：{@link Long}
+     */
     @Override
     public void insertFeedback(Long userId, Long postId, String feedbackType, Long timestampMs) {
         if (userId == null || postId == null || feedbackType == null || feedbackType.isBlank()) {
@@ -178,6 +233,11 @@ public class GorseRecommendationPort implements IRecommendationPort {
         }
     }
 
+    /**
+     * 执行 deleteItem 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     */
     @Override
     public void deleteItem(Long postId) {
         if (postId == null) {

@@ -6,3 +6,5 @@
 
 # Local tooling (do not commit binaries)
 .codex/tools/
+
+project/nexus-frontend/node_modules

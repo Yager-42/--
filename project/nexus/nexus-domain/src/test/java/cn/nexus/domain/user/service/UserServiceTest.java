@@ -155,6 +155,46 @@ class UserServiceTest {
     }
 
     @Test
+    void updateMyProfile_blankNickname_shouldThrowIllegalParameter() {
+        Long userId = 1L;
+        when(userStatusRepository.getStatus(userId)).thenReturn(UserService.STATUS_ACTIVE);
+        when(userProfileRepository.get(userId)).thenReturn(UserProfileVO.builder()
+                .userId(userId)
+                .username("u1")
+                .nickname("old")
+                .avatarUrl("a1")
+                .build());
+
+        AppException ex = assertThrows(AppException.class,
+                () -> userService.updateMyProfile(userId, UserProfilePatchVO.builder().nickname(" ").build()));
+        assertEquals(ResponseCode.ILLEGAL_PARAMETER.getCode(), ex.getCode());
+        verify(userProfileRepository, never()).updatePatch(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void updateMyPrivacy_shouldUpsertWhenActiveAndProfileExists() {
+        Long userId = 2L;
+        when(userStatusRepository.getStatus(userId)).thenReturn(UserService.STATUS_ACTIVE);
+        when(userProfileRepository.get(userId)).thenReturn(UserProfileVO.builder()
+                .userId(userId)
+                .username("u2")
+                .nickname("n2")
+                .avatarUrl("a2")
+                .build());
+
+        userService.updateMyPrivacy(userId, true);
+
+        verify(userPrivacyRepository).upsertNeedApproval(userId, true);
+    }
+
+    @Test
+    void updateMyPrivacy_missingArgument_shouldThrowIllegalParameter() {
+        AppException ex = assertThrows(AppException.class, () -> userService.updateMyPrivacy(1L, null));
+        assertEquals(ResponseCode.ILLEGAL_PARAMETER.getCode(), ex.getCode());
+        verify(userPrivacyRepository, never()).upsertNeedApproval(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void internalUpsert_notFound_shouldThrow() {
         Long userId = 1L;
         when(userProfileRepository.get(userId)).thenReturn(null);
@@ -214,6 +254,44 @@ class UserServiceTest {
         verify(userEventOutboxPort).tryPublishPending();
         verify(userPrivacyRepository, never()).upsertNeedApproval(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         verify(userStatusRepository, never()).upsertStatus(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void internalUpsert_shouldUpsertPrivacyAndStatusWithoutPublishingWhenNicknameSame() {
+        Long userId = 3L;
+        when(userProfileRepository.get(userId)).thenReturn(UserProfileVO.builder()
+                .userId(userId)
+                .username("u3")
+                .nickname("same")
+                .avatarUrl("a0")
+                .build());
+        when(userProfileRepository.updatePatch(userId, "same", "a3")).thenReturn(true);
+
+        userService.internalUpsert(UserInternalUpsertRequestVO.builder()
+                .userId(userId)
+                .username("u3")
+                .nickname("same")
+                .avatarUrl("a3")
+                .needApproval(true)
+                .status(UserService.STATUS_ACTIVE)
+                .build());
+
+        verify(userProfileRepository).updatePatch(userId, "same", "a3");
+        verify(userPrivacyRepository).upsertNeedApproval(userId, true);
+        verify(userStatusRepository).upsertStatus(org.mockito.ArgumentMatchers.eq(userId),
+                org.mockito.ArgumentMatchers.eq(UserService.STATUS_ACTIVE),
+                org.mockito.ArgumentMatchers.isNull());
+        verify(userEventOutboxPort, never()).saveNicknameChanged(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void internalUpsert_invalidStatus_shouldThrowIllegalParameter() {
+        AppException ex = assertThrows(AppException.class, () -> userService.internalUpsert(UserInternalUpsertRequestVO.builder()
+                .userId(1L)
+                .username("u1")
+                .status("FROZEN")
+                .build()));
+        assertEquals(ResponseCode.ILLEGAL_PARAMETER.getCode(), ex.getCode());
     }
 
     @Test

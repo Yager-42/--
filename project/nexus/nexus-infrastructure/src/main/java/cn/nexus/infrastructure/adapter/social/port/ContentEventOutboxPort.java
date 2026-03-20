@@ -17,6 +17,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * 内容域事件 Outbox 端口实现：MySQL 落库 + RabbitMQ 投递。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-01
  */
 @Slf4j
 @Component
@@ -43,6 +47,14 @@ public class ContentEventOutboxPort implements IContentEventOutboxPort {
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 保存“内容已发布”事件到 Outbox。
+     *
+     * @param postId 内容 ID {@link Long}
+     * @param userId 作者 ID {@link Long}
+     * @param versionNum 内容版本号（可为空） {@link Integer}
+     * @param tsMs 事件时间戳（毫秒） {@link Long}
+     */
     @Override
     public void savePostPublished(Long postId, Long userId, Integer versionNum, Long tsMs) {
         if (postId == null || userId == null || tsMs == null) {
@@ -56,6 +68,14 @@ public class ContentEventOutboxPort implements IContentEventOutboxPort {
         saveEvent(EVENT_TYPE_PUBLISHED, eventId(EVENT_TYPE_PUBLISHED, postId, versionNum), toPayload(event), tsMs);
     }
 
+    /**
+     * 保存“内容已更新”事件到 Outbox。
+     *
+     * @param postId 内容 ID {@link Long}
+     * @param operatorId 操作人 ID {@link Long}
+     * @param versionNum 内容版本号（可为空） {@link Integer}
+     * @param tsMs 事件时间戳（毫秒） {@link Long}
+     */
     @Override
     public void savePostUpdated(Long postId, Long operatorId, Integer versionNum, Long tsMs) {
         if (postId == null || operatorId == null || tsMs == null) {
@@ -69,6 +89,14 @@ public class ContentEventOutboxPort implements IContentEventOutboxPort {
         saveEvent(EVENT_TYPE_UPDATED, eventId(EVENT_TYPE_UPDATED, postId, versionNum), toPayload(event), tsMs);
     }
 
+    /**
+     * 保存“内容已删除”事件到 Outbox。
+     *
+     * @param postId 内容 ID {@link Long}
+     * @param operatorId 操作人 ID {@link Long}
+     * @param versionNum 内容版本号（可为空） {@link Integer}
+     * @param tsMs 事件时间戳（毫秒） {@link Long}
+     */
     @Override
     public void savePostDeleted(Long postId, Long operatorId, Integer versionNum, Long tsMs) {
         if (postId == null || operatorId == null || tsMs == null) {
@@ -82,6 +110,14 @@ public class ContentEventOutboxPort implements IContentEventOutboxPort {
         saveEvent(EVENT_TYPE_DELETED, eventId(EVENT_TYPE_DELETED, postId, versionNum), toPayload(event), tsMs);
     }
 
+    /**
+     * 保存“内容摘要生成”事件到 Outbox。
+     *
+     * @param postId 内容 ID {@link Long}
+     * @param operatorId 操作人 ID（可为空） {@link Long}
+     * @param versionNum 内容版本号（可为空） {@link Integer}
+     * @param tsMs 事件时间戳（毫秒） {@link Long}
+     */
     @Override
     public void savePostSummaryGenerate(Long postId, Long operatorId, Integer versionNum, Long tsMs) {
         if (postId == null || tsMs == null) {
@@ -95,12 +131,21 @@ public class ContentEventOutboxPort implements IContentEventOutboxPort {
         saveEvent(EVENT_TYPE_SUMMARY_GENERATE, eventId(EVENT_TYPE_SUMMARY_GENERATE, postId, versionNum), toPayload(event), tsMs);
     }
 
+    /**
+     * 触发一次投递尝试：扫描 NEW/FAIL 的记录并尝试投递到 MQ。
+     */
     @Override
     public void tryPublishPending() {
         publishByStatus(STATUS_NEW, 100);
         publishByStatus(STATUS_FAIL, 100);
     }
 
+    /**
+     * 清理指定时间之前的已发送记录。
+     *
+     * @param beforeTime 截止时间（含义：早于该时间的 SENT 可被删除） {@link Date}
+     * @return 删除行数 {@code int}
+     */
     @Override
     public int cleanDoneBefore(Date beforeTime) {
         if (beforeTime == null) {

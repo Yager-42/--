@@ -16,7 +16,11 @@ import org.springframework.web.bind.annotation.*;
 import java.util.stream.Collectors;
 
 /**
- * Feed 接口入口。
+ * Feed 接口入口：负责把 HTTP 请求转换成 Feed 读侧服务调用。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Slf4j
 @RestController
@@ -27,10 +31,17 @@ public class FeedController implements IFeedApi {
     @Resource
     private IFeedService feedService;
 
+    /**
+     * 查询首页时间线。
+     *
+     * @param requestDTO 时间线请求参数。 {@link FeedTimelineRequestDTO}
+     * @return 首页时间线响应。 {@link Response}
+     */
     @GetMapping("/timeline")
     @Override
     public Response<FeedTimelineResponseDTO> timeline(FeedTimelineRequestDTO requestDTO) {
         try {
+            // 控制层永远只信登录态里的用户 ID，不接受前端伪造的 userId。
             Long userId = UserContext.requireUserId();
             FeedTimelineVO vo = feedService.timeline(userId, requestDTO.getCursor(), requestDTO.getLimit(), requestDTO.getFeedType());
             FeedTimelineResponseDTO dto = toTimelineDTO(vo);
@@ -46,10 +57,18 @@ public class FeedController implements IFeedApi {
         }
     }
 
+    /**
+     * 查询指定作者的主页时间线。
+     *
+     * @param targetId 被访问作者 ID。 {@link Long}
+     * @param requestDTO 主页时间线请求参数。 {@link ProfileFeedRequestDTO}
+     * @return 主页时间线响应。 {@link Response}
+     */
     @GetMapping("/profile/{targetId}")
     @Override
     public Response<FeedTimelineResponseDTO> profile(@PathVariable("targetId") Long targetId, ProfileFeedRequestDTO requestDTO) {
         try {
+            // visitorId 同样只从上下文拿，保证主页关系态和拉黑判断基于真实访问者。
             Long visitorId = UserContext.requireUserId();
             FeedTimelineVO vo = feedService.profile(targetId, visitorId, requestDTO.getCursor(), requestDTO.getLimit());
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), toTimelineDTO(vo));

@@ -33,6 +33,10 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * 图片扫描消费者：图片扫描通常较慢且昂贵，因此只走异步队列。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Slf4j
 @Component
@@ -62,6 +66,11 @@ public class RiskImageScanConsumer {
     @Value("${risk.llm.inflightLockSeconds:30}")
     private long inflightLockSeconds;
 
+    /**
+     * 消费单条消息。
+     *
+     * @param event 事件对象。类型：{@link ImageScanRequestedEvent}
+     */
     @RabbitListener(queues = RiskMqConfig.Q_IMAGE_SCAN, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(ImageScanRequestedEvent event) {
         if (event == null || event.getDecisionId() == null || event.getEventId() == null || event.getEventId().isBlank()) {

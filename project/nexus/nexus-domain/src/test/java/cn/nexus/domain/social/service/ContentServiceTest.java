@@ -1,5 +1,8 @@
 package cn.nexus.domain.social.service;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -18,12 +21,17 @@ import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.service.IContentService;
 import cn.nexus.domain.social.adapter.repository.IContentPublishAttemptRepository;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
+import cn.nexus.domain.social.model.entity.ContentDraftEntity;
 import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPublishAttemptEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
+import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
+import cn.nexus.domain.social.model.valobj.ContentHistoryVO;
 import cn.nexus.domain.social.model.valobj.ContentPublishAttemptRiskStatusEnumVO;
 import cn.nexus.domain.social.model.valobj.ContentPublishAttemptStatusEnumVO;
 import cn.nexus.domain.social.model.valobj.ContentPublishAttemptTranscodeStatusEnumVO;
+import cn.nexus.domain.social.model.valobj.UploadSessionVO;
+import cn.nexus.types.exception.AppException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -158,6 +166,8 @@ class ContentServiceTest {
     @org.springframework.beans.factory.annotation.Autowired
     private IContentPublishAttemptRepository contentPublishAttemptRepository;
     @org.springframework.beans.factory.annotation.Autowired
+    private IMediaStoragePort mediaStoragePort;
+    @org.springframework.beans.factory.annotation.Autowired
     private IContentEventOutboxPort contentEventOutboxPort;
     @org.springframework.beans.factory.annotation.Autowired
     private IContentCacheEvictPort contentCacheEvictPort;
@@ -171,10 +181,66 @@ class ContentServiceTest {
                 contentRepository,
                 postContentKvPort,
                 contentPublishAttemptRepository,
+                mediaStoragePort,
                 contentEventOutboxPort,
                 contentCacheEvictPort,
                 redissonClient
         );
+    }
+
+    @Test
+    void createUploadSession_shouldFallbackUnknownFileTypeToOctetStream() {
+        UploadSessionVO expected = UploadSessionVO.builder()
+                .sessionId("session-77")
+                .token("token")
+                .uploadUrl("url")
+                .build();
+        when(socialIdPort.nextId()).thenReturn(77L);
+        when(mediaStoragePort.generateUploadSession("session-77", "application/octet-stream", 1024L, "crc"))
+                .thenReturn(expected);
+
+        UploadSessionVO result = contentService.createUploadSession("text/plain", 1024L, "crc");
+
+        assertSame(expected, result);
+        verify(mediaStoragePort).generateUploadSession("session-77", "application/octet-stream", 1024L, "crc");
+    }
+
+    @Test
+    void saveDraft_shouldThrowWhenContentAndMediaAreEmpty() {
+        AppException exception =
+                assertThrows(AppException.class, () -> contentService.saveDraft(11L, null, "title", "   ", null));
+
+        assertEquals("content 不能为空", exception.getInfo());
+    }
+
+    @Test
+    void saveDraft_shouldRejectWhenDraftOwnedByAnotherUser() {
+        when(contentRepository.findDraft(99L)).thenReturn(ContentDraftEntity.builder().draftId(99L).userId(22L).build());
+
+        AppException exception =
+                assertThrows(AppException.class, () -> contentService.saveDraft(11L, 99L, "title", "body", null));
+
+        assertEquals("NO_PERMISSION", exception.getInfo());
+    }
+
+    @Test
+    void publish_shouldReuseActiveAttemptWithoutCreatingNewOne() {
+        RLock lock = Mockito.mock(RLock.class);
+        ContentPublishAttemptEntity activeAttempt = ContentPublishAttemptEntity.builder()
+                .attemptId(77L)
+                .postId(101L)
+                .userId(11L)
+                .attemptStatus(ContentPublishAttemptStatusEnumVO.PENDING_REVIEW.getCode())
+                .riskStatus(ContentPublishAttemptRiskStatusEnumVO.REVIEW_REQUIRED.getCode())
+                .build();
+        when(redissonClient.getLock(anyString())).thenReturn(lock);
+        when(contentPublishAttemptRepository.findLatestActiveAttempt(101L, 11L)).thenReturn(activeAttempt);
+
+        cn.nexus.domain.social.model.valobj.OperationResultVO result =
+                contentService.publish(101L, 11L, "title", "body", null, null, "PUBLIC", null);
+
+        assertEquals(77L, result.getAttemptId());
+        verify(contentPublishAttemptRepository, never()).create(any());
     }
 
     @Test
@@ -239,5 +305,91 @@ class ContentServiceTest {
         verify(contentEventOutboxPort).savePostUpdated(eq(101L), eq(11L), eq(6), eq(1000L));
         verify(contentEventOutboxPort).savePostSummaryGenerate(eq(101L), eq(11L), eq(6), eq(1000L));
         verify(contentCacheEvictPort).evictPost(101L);
+    }
+
+    @Test
+    void syncDraft_shouldRejectStaleClientVersion() {
+        when(contentRepository.findDraftForUpdate(101L)).thenReturn(ContentDraftEntity.builder()
+                .draftId(101L)
+                .userId(11L)
+                .clientVersion(5L)
+                .build());
+
+        assertThrows(AppException.class, () -> contentService.syncDraft(101L, 11L, "t", "body", 4L, "device", null));
+    }
+
+    @Test
+    void schedule_shouldReturnDuplicateWhenTokenExists() {
+        when(contentRepository.findDraft(101L)).thenReturn(ContentDraftEntity.builder()
+                .draftId(101L)
+                .userId(11L)
+                .title("title")
+                .draftContent("body")
+                .build());
+        when(contentRepository.findScheduleByToken(anyString())).thenReturn(ContentScheduleEntity.builder()
+                .taskId(301L)
+                .status(0)
+                .build());
+
+        assertEquals("SCHEDULED_DUPLICATE", contentService.schedule(11L, 101L, 2000L, null).getStatus());
+    }
+
+    @Test
+    void history_shouldReturnNoPermissionForOtherUser() {
+        when(contentRepository.findPost(101L)).thenReturn(ContentPostEntity.builder().postId(101L).userId(12L).build());
+
+        ContentHistoryVO result = contentService.history(101L, 11L, 20, 0);
+
+        assertEquals("NO_PERMISSION", result.getStatus());
+        assertEquals(0, result.getVersions().size());
+    }
+
+    @Test
+    void delete_shouldSoftDeleteAndDispatchDeleteAfterCommit() {
+        RLock lock = Mockito.mock(RLock.class);
+        when(redissonClient.getLock(anyString())).thenReturn(lock);
+        when(contentRepository.findPostForUpdate(101L)).thenReturn(ContentPostEntity.builder()
+                .postId(101L)
+                .userId(11L)
+                .status(1)
+                .versionNum(3)
+                .contentUuid("uuid-1")
+                .build());
+        when(socialIdPort.now()).thenReturn(1000L);
+        when(contentRepository.softDeleteIfMatchStatusAndVersion(101L, 1, 3, 1000L)).thenReturn(true);
+
+        cn.nexus.domain.social.model.valobj.OperationResultVO result = contentService.delete(11L, 101L);
+
+        assertEquals("DELETED", result.getStatus());
+        verify(postContentKvPort).delete("uuid-1");
+        verify(contentEventOutboxPort).savePostDeleted(101L, 11L, 3, 1000L);
+        verify(contentCacheEvictPort).evictPost(101L);
+    }
+
+    @Test
+    void executeSchedule_shouldCancelTaskWhenDraftMissing() {
+        when(contentRepository.findSchedule(301L)).thenReturn(ContentScheduleEntity.builder()
+                .taskId(301L)
+                .userId(11L)
+                .postId(101L)
+                .status(0)
+                .retryCount(1)
+                .build());
+        when(contentRepository.findDraft(101L)).thenReturn(null);
+
+        cn.nexus.domain.social.model.valobj.OperationResultVO result = contentService.executeSchedule(301L);
+
+        assertEquals("DRAFT_NOT_FOUND", result.getStatus());
+        verify(contentRepository).updateScheduleStatus(301L, 3, 1, "draft_not_found", 1, null, 0);
+    }
+
+    @Test
+    void getPublishAttemptAudit_shouldHideOtherUsersAttempt() {
+        when(contentPublishAttemptRepository.findByAttemptId(88L)).thenReturn(ContentPublishAttemptEntity.builder()
+                .attemptId(88L)
+                .userId(12L)
+                .build());
+
+        assertEquals(null, contentService.getPublishAttemptAudit(88L, 11L));
     }
 }

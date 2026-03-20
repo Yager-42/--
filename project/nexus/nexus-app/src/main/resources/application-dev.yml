@@ -183,6 +183,19 @@ sa-token:
   token-prefix: Bearer
   is-log: false
 
+auth:
+  admin:
+    bootstrap-phones: []
+  sms:
+    phone-send-limit-1m: 1
+    phone-send-limit-1h: 5
+    phone-send-limit-1d: 10
+    ip-send-limit-1m: 5
+    ip-send-limit-1d: 50
+  login:
+    fail-threshold: 5
+    lock-seconds: 900
+
 # Like/Unlike MQ consumers (batch ~= BufferTrigger 1000/1s)
 mq:
   like-unlike:

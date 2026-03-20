@@ -20,14 +20,12 @@
 
 ---
 
-## 1. 鉴权 + userId 透传 + UserContext(ThreadLocal)
+## 1. 鉴权 + UserContext(ThreadLocal)
 
-关键语义：请求进入应用后，必须能拿到当前 userId；优先从 `Authorization: Bearer <token>` 解析，其次兼容历史 Header。
+关键语义：请求进入应用后，受保护接口只能从 `Authorization: Bearer <token>` 解析当前 userId，不再兼容 `userId` / `X-User-Id` header 直接注入身份。
 
 - Header 约定
-  - `Authorization: Bearer <token>`（优先）
-  - `userId: <number>`（兼容 playbook）
-  - `X-User-Id: <number>`（兼容历史实现）
+  - `Authorization: Bearer <token>`（唯一可信身份来源）
 - 关键类
   - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/support/UserContext.java`
   - `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/support/UserContextInterceptor.java`

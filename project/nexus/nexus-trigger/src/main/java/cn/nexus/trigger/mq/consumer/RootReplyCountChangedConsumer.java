@@ -17,6 +17,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /**
  * 回复数变更事件消费者：更新一级评论 reply_count + 刷新热榜分数。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */
@@ -31,6 +32,11 @@ public class RootReplyCountChangedConsumer {
     private final ICommentRepository commentRepository;
     private final ICommentHotRankRepository hotRankRepository;
 
+    /**
+     * 消费单条消息。
+     *
+     * @param event 事件对象。类型：{@link RootReplyCountChangedEvent}
+     */
     @RabbitListener(queues = InteractionCommentMqConfig.Q_REPLY_COUNT_CHANGED)
     @Transactional(rollbackFor = Exception.class)
     public void onMessage(RootReplyCountChangedEvent event) {
@@ -59,6 +65,10 @@ public class RootReplyCountChangedConsumer {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 refreshHotRankBestEffort(postId, rootCommentId, root);

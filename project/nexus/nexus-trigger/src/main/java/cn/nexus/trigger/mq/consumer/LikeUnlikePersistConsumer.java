@@ -21,6 +21,10 @@ import java.util.Map;
 
 /**
  * ConsumerGroup A: persist post-like relation to DB.
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-03
  */
 @Slf4j
 @Component
@@ -38,6 +42,11 @@ public class LikeUnlikePersistConsumer {
         this.limiter = new SimpleRateLimiter(permitsPerSecond);
     }
 
+    /**
+     * 批量消费消息。
+     *
+     * @param messages 消息列表。类型：{@link List}
+     */
     @RabbitListener(queues = LikeUnlikeMqConfig.QUEUE_PERSIST, containerFactory = "likeUnlikeBatchListenerContainerFactory")
     public void onMessages(List<Message> messages) {
         if (messages == null || messages.isEmpty()) {

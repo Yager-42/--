@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 /**
  * 通知统一事件消费者：幂等去重 + 目标归属解析 + 聚合 UPSERT。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-21
  */
@@ -34,6 +35,11 @@ public class InteractionNotifyConsumer {
     private final ICommentRepository commentRepository;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 消费单条消息。
+     *
+     * @param event 事件对象。类型：{@link InteractionNotifyEvent}
+     */
     @RabbitListener(queues = InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(InteractionNotifyEvent event) {
         if (event == null || event.getEventId() == null || event.getEventId().isBlank()) {

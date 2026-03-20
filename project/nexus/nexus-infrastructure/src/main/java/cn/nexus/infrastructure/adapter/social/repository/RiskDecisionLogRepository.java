@@ -13,6 +13,10 @@ import java.util.List;
 
 /**
  * 风控决策日志仓储 MyBatis 实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Repository
 @RequiredArgsConstructor
@@ -20,6 +24,12 @@ public class RiskDecisionLogRepository implements IRiskDecisionLogRepository {
 
     private final IRiskDecisionLogDao decisionLogDao;
 
+    /**
+     * 执行 insert 逻辑。
+     *
+     * @param entity entity 参数。类型：{@link RiskDecisionLogEntity}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean insert(RiskDecisionLogEntity entity) {
         if (entity == null || entity.getDecisionId() == null || entity.getUserId() == null || entity.getEventId() == null) {
@@ -28,6 +38,12 @@ public class RiskDecisionLogRepository implements IRiskDecisionLogRepository {
         return decisionLogDao.insert(toPO(entity)) > 0;
     }
 
+    /**
+     * 执行 findByDecisionId 逻辑。
+     *
+     * @param decisionId decisionId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link RiskDecisionLogEntity}
+     */
     @Override
     public RiskDecisionLogEntity findByDecisionId(Long decisionId) {
         if (decisionId == null) {
@@ -36,6 +52,13 @@ public class RiskDecisionLogRepository implements IRiskDecisionLogRepository {
         return toEntity(decisionLogDao.selectByDecisionId(decisionId));
     }
 
+    /**
+     * 执行 findByUserEvent 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param eventId eventId 参数。类型：{@link String}
+     * @return 处理结果。类型：{@link RiskDecisionLogEntity}
+     */
     @Override
     public RiskDecisionLogEntity findByUserEvent(Long userId, String eventId) {
         if (userId == null || eventId == null || eventId.isBlank()) {
@@ -44,6 +67,17 @@ public class RiskDecisionLogRepository implements IRiskDecisionLogRepository {
         return toEntity(decisionLogDao.selectByUserEvent(userId, eventId));
     }
 
+    /**
+     * 执行 updateResult 逻辑。
+     *
+     * @param decisionId decisionId 参数。类型：{@link Long}
+     * @param result result 参数。类型：{@link String}
+     * @param reasonCode reasonCode 参数。类型：{@link String}
+     * @param signalsJson signalsJson 参数。类型：{@link String}
+     * @param actionsJson actionsJson 参数。类型：{@link String}
+     * @param extJson extJson 参数。类型：{@link String}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean updateResult(Long decisionId, String result, String reasonCode, String signalsJson, String actionsJson, String extJson) {
         if (decisionId == null) {
@@ -52,6 +86,14 @@ public class RiskDecisionLogRepository implements IRiskDecisionLogRepository {
         return decisionLogDao.updateResult(decisionId, result, reasonCode, signalsJson, actionsJson, extJson) > 0;
     }
 
+    /**
+     * 执行 listByUser 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param limit 分页大小。类型：{@link Integer}
+     * @param offset offset 参数。类型：{@link Integer}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskDecisionLogEntity> listByUser(Long userId, Integer limit, Integer offset) {
         if (userId == null) {
@@ -73,6 +115,19 @@ public class RiskDecisionLogRepository implements IRiskDecisionLogRepository {
         return res;
     }
 
+    /**
+     * 执行 listByFilter 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param actionType actionType 参数。类型：{@link String}
+     * @param scenario scenario 参数。类型：{@link String}
+     * @param result result 参数。类型：{@link String}
+     * @param beginTimeMs beginTimeMs 参数。类型：{@link Long}
+     * @param endTimeMs endTimeMs 参数。类型：{@link Long}
+     * @param limit 分页大小。类型：{@link Integer}
+     * @param offset offset 参数。类型：{@link Integer}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskDecisionLogEntity> listByFilter(Long userId,
                                                     String actionType,

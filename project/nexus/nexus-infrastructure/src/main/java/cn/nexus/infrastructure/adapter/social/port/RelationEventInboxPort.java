@@ -8,7 +8,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
- * 关系事件收件箱持久化实现。
+ * 关系事件收件箱持久化实现：负责去重、失败重试和历史清理的数据落库。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Component
 @RequiredArgsConstructor
@@ -20,6 +24,14 @@ public class RelationEventInboxPort implements IRelationEventInboxPort {
 
     private final IRelationEventInboxDao relationEventInboxDao;
 
+    /**
+     * 执行 save 逻辑。
+     *
+     * @param eventType eventType 参数。类型：{@link String}
+     * @param fingerprint fingerprint 参数。类型：{@link String}
+     * @param payload payload 参数。类型：{@link String}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean save(String eventType, String fingerprint, String payload) {
         RelationEventInboxPO po = new RelationEventInboxPO();
@@ -30,16 +42,32 @@ public class RelationEventInboxPort implements IRelationEventInboxPort {
         return relationEventInboxDao.insertIgnore(po) > 0;
     }
 
+    /**
+     * 执行 markDone 逻辑。
+     *
+     * @param fingerprint fingerprint 参数。类型：{@link String}
+     */
     @Override
     public void markDone(String fingerprint) {
         relationEventInboxDao.updateStatus(fingerprint, STATUS_PROCESSED);
     }
 
+    /**
+     * 执行 markFail 逻辑。
+     *
+     * @param fingerprint fingerprint 参数。类型：{@link String}
+     */
     @Override
     public void markFail(String fingerprint) {
         relationEventInboxDao.updateStatus(fingerprint, STATUS_FAILED);
     }
 
+    /**
+     * 执行 fetchRetry 逻辑。
+     *
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public java.util.List<RelationEventInboxVO> fetchRetry(int limit) {
         return relationEventInboxDao.selectByStatus(STATUS_FAILED, limit).stream()
@@ -47,6 +75,12 @@ public class RelationEventInboxPort implements IRelationEventInboxPort {
                 .toList();
     }
 
+    /**
+     * 执行 cleanBefore 逻辑。
+     *
+     * @param beforeTime beforeTime 参数。类型：{@link Date}
+     * @return 处理结果。类型：{@code int}
+     */
     @Override
     public int cleanBefore(java.util.Date beforeTime) {
         return relationEventInboxDao.deleteOlderThan(beforeTime, STATUS_PROCESSED);

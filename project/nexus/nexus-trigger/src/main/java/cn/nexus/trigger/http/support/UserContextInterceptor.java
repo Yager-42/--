@@ -13,13 +13,18 @@ import org.springframework.web.servlet.HandlerInterceptor;
 import java.nio.charset.StandardCharsets;
 
 /**
- * userId 注入拦截器：从 HTTP Header 解析 userId 并写入 {@link UserContext}。
+ * 当前用户注入拦截器：只从 Token 解析当前用户并写入 {@link UserContext}。
+ *
+ * <p>这层的职责很单一：把“当前请求是谁”收口到一个地方。后面的 Controller 只从 {@link UserContext} 取值，
+ * 不再自己到处解析 Token。</p>
  *
  * <p>注意：</p>
- * <p>1) 必须在 {@link #afterCompletion(HttpServletRequest, HttpServletResponse, Object, Exception)} 清理 ThreadLocal，否则线程复用会串号。</p>
- * <p>2) 必须放行 OPTIONS（CORS 预检），否则浏览器跨域请求会直接失败。</p>
+ * <p>1) 必须在 {@link #afterCompletion(HttpServletRequest, HttpServletResponse, Object, Exception)} 清理
+ * {@link ThreadLocal}，否则线程复用会串号。</p>
+ * <p>2) 必须放行 {@code OPTIONS} 预检请求，否则浏览器跨域请求会直接失败。</p>
  *
- * @author Codex
+ * @author rr
+ * @author codex
  * @since 2026-01-15
  */
 @Component
@@ -28,6 +33,15 @@ public class UserContextInterceptor implements HandlerInterceptor {
 
     private final ObjectMapper objectMapper;
 
+    /**
+     * 进入业务前解析当前请求用户。
+     *
+     * @param request 当前 HTTP 请求，类型：{@link HttpServletRequest}
+     * @param response 当前 HTTP 响应，类型：{@link HttpServletResponse}
+     * @param handler 当前处理器，类型：{@link Object}
+     * @return 是否继续执行后续链路，类型：{@code boolean}
+     * @throws Exception 写回错误响应时可能抛出的异常，类型：{@link Exception}
+     */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         // 防御性清理：避免容器线程复用时残留脏数据
@@ -39,28 +53,22 @@ public class UserContextInterceptor implements HandlerInterceptor {
         }
 
         Long tokenUserId = resolveUserIdFromToken();
-        if (tokenUserId != null) {
-            UserContext.setUserId(tokenUserId);
-            return true;
-        }
-
-        // 兼容多种 Header：playbook=userId，历史实现=X-User-Id
-        String raw = headerFirstNonBlank(request, "userId", UserContext.HEADER_USER_ID);
-        if (raw == null || raw.isBlank()) {
+        if (tokenUserId == null) {
             writeIllegalParameter(response);
             return false;
         }
-
-        try {
-            long userId = Long.parseLong(raw.trim());
-            UserContext.setUserId(userId);
-            return true;
-        } catch (NumberFormatException e) {
-            writeIllegalParameter(response);
-            return false;
-        }
+        UserContext.setUserId(tokenUserId);
+        return true;
     }
 
+    /**
+     * 请求完成后清理线程上下文。
+     *
+     * @param request 当前 HTTP 请求，类型：{@link HttpServletRequest}
+     * @param response 当前 HTTP 响应，类型：{@link HttpServletResponse}
+     * @param handler 当前处理器，类型：{@link Object}
+     * @param ex 请求期间抛出的异常，允许为空，类型：{@link Exception}
+     */
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
         UserContext.clear();
@@ -80,22 +88,6 @@ public class UserContextInterceptor implements HandlerInterceptor {
         } catch (Exception ignored) {
             return null;
         }
-    }
-
-    private String headerFirstNonBlank(HttpServletRequest request, String... headerNames) {
-        if (request == null || headerNames == null) {
-            return null;
-        }
-        for (String name : headerNames) {
-            if (name == null || name.isBlank()) {
-                continue;
-            }
-            String v = request.getHeader(name);
-            if (v != null && !v.isBlank()) {
-                return v;
-            }
-        }
-        return null;
     }
 }
 

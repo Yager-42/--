@@ -13,6 +13,10 @@ import java.util.List;
 
 /**
  * 风控处罚仓储 MyBatis 实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Repository
 @RequiredArgsConstructor
@@ -20,6 +24,12 @@ public class RiskPunishmentRepository implements IRiskPunishmentRepository {
 
     private final IRiskPunishmentDao punishmentDao;
 
+    /**
+     * 执行 insert 逻辑。
+     *
+     * @param entity entity 参数。类型：{@link RiskPunishmentEntity}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean insert(RiskPunishmentEntity entity) {
         if (entity == null || entity.getPunishId() == null || entity.getUserId() == null) {
@@ -28,6 +38,12 @@ public class RiskPunishmentRepository implements IRiskPunishmentRepository {
         return punishmentDao.insert(toPO(entity)) > 0;
     }
 
+    /**
+     * 幂等插入数据。
+     *
+     * @param entity entity 参数。类型：{@link RiskPunishmentEntity}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean insertIgnore(RiskPunishmentEntity entity) {
         if (entity == null || entity.getPunishId() == null || entity.getUserId() == null) {
@@ -36,6 +52,13 @@ public class RiskPunishmentRepository implements IRiskPunishmentRepository {
         return punishmentDao.insertIgnore(toPO(entity)) > 0;
     }
 
+    /**
+     * 执行 findByDecisionAndType 逻辑。
+     *
+     * @param decisionId decisionId 参数。类型：{@link Long}
+     * @param type 类型。类型：{@link String}
+     * @return 处理结果。类型：{@link RiskPunishmentEntity}
+     */
     @Override
     public RiskPunishmentEntity findByDecisionAndType(Long decisionId, String type) {
         if (decisionId == null || type == null || type.isBlank()) {
@@ -44,6 +67,13 @@ public class RiskPunishmentRepository implements IRiskPunishmentRepository {
         return toEntity(punishmentDao.selectByDecisionAndType(decisionId, type));
     }
 
+    /**
+     * 执行 listActiveByUser 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskPunishmentEntity> listActiveByUser(Long userId, Long nowMs) {
         if (userId == null) {
@@ -64,6 +94,13 @@ public class RiskPunishmentRepository implements IRiskPunishmentRepository {
         return res;
     }
 
+    /**
+     * 执行 revoke 逻辑。
+     *
+     * @param punishId punishId 参数。类型：{@link Long}
+     * @param operatorId operatorId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean revoke(Long punishId, Long operatorId) {
         if (punishId == null || operatorId == null) {
@@ -72,6 +109,14 @@ public class RiskPunishmentRepository implements IRiskPunishmentRepository {
         return punishmentDao.revoke(punishId, operatorId, new Date()) > 0;
     }
 
+    /**
+     * 执行 listByUser 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param limit 分页大小。类型：{@link Integer}
+     * @param offset offset 参数。类型：{@link Integer}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskPunishmentEntity> listByUser(Long userId, Integer limit, Integer offset) {
         if (userId == null) {
@@ -93,6 +138,17 @@ public class RiskPunishmentRepository implements IRiskPunishmentRepository {
         return res;
     }
 
+    /**
+     * 执行 listByFilter 逻辑。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param type 类型。类型：{@link String}
+     * @param beginTimeMs beginTimeMs 参数。类型：{@link Long}
+     * @param endTimeMs endTimeMs 参数。类型：{@link Long}
+     * @param limit 分页大小。类型：{@link Integer}
+     * @param offset offset 参数。类型：{@link Integer}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskPunishmentEntity> listByFilter(Long userId,
                                                    String type,

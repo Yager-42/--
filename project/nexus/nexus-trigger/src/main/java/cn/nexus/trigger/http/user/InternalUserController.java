@@ -18,7 +18,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 用户域 internal 写入口（给系统调用）。
+ * 用户域内部写入口。
+ *
+ * <p>这个接口只给系统内部同步用，规则比用户自助更新更严格：必须带稳定的 {@code userId}/{@code username}，
+ * 且只允许 update，不负责偷偷补建用户。</p>
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-02-03
  */
 @Slf4j
 @RestController
@@ -29,10 +36,17 @@ public class InternalUserController implements IUserInternalUserApi {
     @Resource
     private UserService userService;
 
+    /**
+     * 执行内部同步更新。
+     *
+     * @param requestDTO 内部同步请求，类型：{@link UserInternalUpsertRequestDTO}
+     * @return 更新结果，类型：{@link Response}&lt;{@link OperationResultDTO}&gt;
+     */
     @PostMapping("/internal/user/upsert")
     @Override
     public Response<OperationResultDTO> upsert(@RequestBody UserInternalUpsertRequestDTO requestDTO) {
         try {
+            // 触发层只做 DTO 到领域对象的映射，update-only 规则由领域服务统一判断。
             UserInternalUpsertRequestVO req = requestDTO == null ? null : UserInternalUpsertRequestVO.builder()
                     .userId(requestDTO.getUserId())
                     .username(requestDTO.getUsername())
@@ -67,4 +81,3 @@ public class InternalUserController implements IUserInternalUserApi {
                 .build();
     }
 }
-

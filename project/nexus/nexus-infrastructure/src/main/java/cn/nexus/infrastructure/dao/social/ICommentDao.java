@@ -50,6 +50,15 @@ public interface ICommentDao {
                                      @Param("cursorId") Long cursorId,
                                      @Param("limit") Integer limit);
 
+    /**
+     * 批量查询多个根评论的回复预览（每个 rootId 取最早的前 limit 条）。
+     *
+     * <p>返回的 CommentPO 只保证 rootId/commentId/createTime 有值。</p>
+     */
+    List<CommentPO> selectReplyPreviewIdsByRootIds(@Param("rootIds") List<Long> rootIds,
+                                                   @Param("viewerId") Long viewerId,
+                                                   @Param("limit") Integer limit);
+
     List<CommentPO> selectRecentRootBriefs(@Param("postId") Long postId, @Param("limit") Integer limit);
 
     /**

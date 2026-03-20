@@ -43,7 +43,11 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * 点赞子域服务实现：POST 维持现状；COMMENT 改成 DB 真相 + Redis 加速。
+ * 点赞子域服务。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-20
  */
 @Slf4j
 @Service
@@ -64,6 +68,15 @@ public class ReactionLikeService implements IReactionLikeService {
     private final IPostAuthorPort postAuthorPort;
     private final IUserBaseRepository userBaseRepository;
 
+    /**
+     * 统一点赞/取消点赞入口。
+     *
+     * @param userId 操作人 ID，类型：{@link Long}
+     * @param target 点赞目标，类型：{@link ReactionTargetVO}
+     * @param action 动作类型，类型：{@link ReactionActionEnumVO}
+     * @param requestId 请求幂等号；为空时自动生成，类型：{@link String}
+     * @return 点赞执行结果，类型：{@link ReactionResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ReactionResultVO applyReaction(Long userId, ReactionTargetVO target, ReactionActionEnumVO action, String requestId) {
@@ -72,6 +85,7 @@ public class ReactionLikeService implements IReactionLikeService {
         requireNonNull(action, "action");
         requireLikeOnly(target);
 
+        // `POST` 和 `COMMENT` 走不同的一致性策略：前者偏缓存，后者偏数据库真相。
         if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
             return applyPostLike(userId, target, action, requestId);
         }
@@ -87,6 +101,7 @@ public class ReactionLikeService implements IReactionLikeService {
             throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
         }
 
+        // 先把帖子和作者的计数缓存预热出来，后面的增减才能尽量走热路径。
         try {
             ReactionTargetVO cntTarget = ReactionTargetVO.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
@@ -133,6 +148,7 @@ public class ReactionLikeService implements IReactionLikeService {
         long currentCount = apply == null || apply.getCurrentCount() == null ? 0L : apply.getCurrentCount();
 
         if (delta != 0) {
+            // 作者维度的获赞总数和帖子点赞数不是一张表，这里顺手把作者侧缓存也推进去。
             try {
                 postLikeCachePort.applyCreatorLikeDelta(creatorId, delta);
             } catch (Exception ignored) {
@@ -175,6 +191,7 @@ public class ReactionLikeService implements IReactionLikeService {
     private ReactionResultVO applyCommentLike(Long userId, ReactionTargetVO target, ReactionActionEnumVO action, String requestId) {
         String rid = (requestId == null || requestId.isBlank()) ? ("rid-" + socialIdPort.nextId()) : requestId.trim();
         int desiredState = action.desiredState();
+        // 评论点赞以数据库为真相：先落边，再改聚合计数，最后事务后刷新缓存。
         int affected = desiredState == 1 ? reactionRepository.insertIgnore(target, userId) : reactionRepository.deleteOne(target, userId);
         int delta = desiredState == 1 ? (affected > 0 ? 1 : 0) : (affected > 0 ? -1 : 0);
         if (delta != 0) {
@@ -208,6 +225,13 @@ public class ReactionLikeService implements IReactionLikeService {
                 .build();
     }
 
+    /**
+     * 查询当前用户的点赞状态。
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @param target 点赞目标，类型：{@link ReactionTargetVO}
+     * @return 点赞状态结果，类型：{@link ReactionStateVO}
+     */
     @Override
     public ReactionStateVO queryState(Long userId, ReactionTargetVO target) {
         requireNonNull(userId, "userId");
@@ -238,6 +262,14 @@ public class ReactionLikeService implements IReactionLikeService {
         return ReactionStateVO.builder().state(state).currentCount(cnt).build();
     }
 
+    /**
+     * 查询点赞人列表。
+     *
+     * @param target 点赞目标，类型：{@link ReactionTargetVO}
+     * @param cursor 翻页游标，类型：{@link String}
+     * @param limit 页大小，类型：{@link Integer}
+     * @return 点赞人分页结果，类型：{@link ReactionLikersVO}
+     */
     @Override
     public ReactionLikersVO queryLikers(ReactionTargetVO target, String cursor, Integer limit) {
         requireTarget(target);
@@ -285,7 +317,9 @@ public class ReactionLikeService implements IReactionLikeService {
     }
 
     /**
-     * 兼容保留：旧 COMMENT 延迟同步链路的收口方法。
+     * 兼容保留：收口旧的评论点赞延迟同步链路。
+     *
+     * @param target 同步目标，类型：{@link ReactionTargetVO}
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -293,6 +327,7 @@ public class ReactionLikeService implements IReactionLikeService {
         requireTarget(target);
         requireLikeOnly(target);
 
+        // 没有快照就直接清标记返回，避免空转调度。
         boolean hasSnapshot = reactionCachePort.snapshotOps(target);
         if (!hasSnapshot) {
             reactionCachePort.clearSyncFlag(target);
@@ -317,6 +352,7 @@ public class ReactionLikeService implements IReactionLikeService {
             }
         }
 
+        // 先按快照回放增删边，再把计数总值刷回数据库。
         if (!addUserIds.isEmpty()) {
             reactionRepository.batchUpsert(target, addUserIds);
         }
@@ -335,6 +371,7 @@ public class ReactionLikeService implements IReactionLikeService {
             return;
         }
 
+        // 快照清完后如果窗口里又进了新操作，就重新挂一次延迟任务继续收敛。
         reactionCachePort.setSyncPending(target, SYNC_TTL_SEC);
         long delayMs = reactionCachePort.getWindowMs(target, DEFAULT_WINDOW_MS);
         reactionDelayPort.sendDelay(target, delayMs);
@@ -436,6 +473,10 @@ public class ReactionLikeService implements IReactionLikeService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 action.run();

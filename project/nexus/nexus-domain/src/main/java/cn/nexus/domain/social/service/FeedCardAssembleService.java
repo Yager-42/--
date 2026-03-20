@@ -24,6 +24,13 @@ import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+/**
+ * Feed 卡片组装服务。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-08
+ */
 @Service
 @RequiredArgsConstructor
 public class FeedCardAssembleService {
@@ -36,6 +43,15 @@ public class FeedCardAssembleService {
     private final RelationQueryService relationQueryService;
     private final IFeedFollowSeenRepository feedFollowSeenRepository;
 
+    /**
+     * 批量组装 Feed 卡片。
+     *
+     * @param userId 当前用户 ID；匿名场景可为 `null`，类型：{@link Long}
+     * @param source 卡片来源标记，类型：{@link String}
+     * @param candidates 候选收件箱条目，类型：{@link List}&lt;{@link FeedInboxEntryVO}&gt;
+     * @param normalizedLimit 归一化后的返回上限，类型：{@code int}
+     * @return 可直接渲染的 Feed 卡片列表，类型：{@link List}&lt;{@link FeedItemVO}&gt;
+     */
     public List<FeedItemVO> assemble(Long userId, String source, List<FeedInboxEntryVO> candidates, int normalizedLimit) {
         if (candidates == null || candidates.isEmpty()) {
             return List.of();
@@ -50,6 +66,7 @@ public class FeedCardAssembleService {
             return List.of();
         }
 
+        // 先批量拿稳定字段，避免对每个候选帖子重复查仓储。
         Map<Long, FeedCardBaseVO> baseMap = loadBaseCards(candidateIds);
         Map<Long, Long> likeCountMap = loadLikeCounts(candidateIds);
         Map<Long, UserBriefVO> authorMap = loadAuthorBriefs(baseMap.values());
@@ -58,6 +75,7 @@ public class FeedCardAssembleService {
         Set<Long> followedSet = Set.of();
         Set<Long> seenSet = Set.of();
         if (userId != null) {
+            // 个性化状态只在登录用户场景计算；匿名流量直接跳过。
             ReactionTargetVO template = ReactionTargetVO.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(0L)

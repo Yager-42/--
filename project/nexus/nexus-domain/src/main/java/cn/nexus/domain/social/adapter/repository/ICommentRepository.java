@@ -4,6 +4,7 @@ import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.CommentViewVO;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 评论仓储接口：封装 MySQL interaction_comment 表读写。
@@ -74,6 +75,20 @@ public interface ICommentRepository {
      * 楼内回复分页（时间正序，游标分页）。cursor 为空表示从最早开始。
      */
     List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit, Long viewerId);
+
+    /**
+     * 批量查询“楼内回复预览”的 ID 列表（每个 rootId 取最早的前 limit 条）。
+     *
+     * <p>用于树形聚合场景：一次性拿到多个根评论的回复预览入口，避免按 rootId 循环查询（N+1）。</p>
+     *
+     * <p>注意：这是“预览”能力，不支持 cursor；limit 建议不超过 10。</p>
+     *
+     * @param rootIds 根评论 ID 列表
+     * @param limit 每个根评论预加载回复数
+     * @param viewerId 查看者 ID；匿名可为 {@code null}
+     * @return rootId -> replyIds（按时间正序）
+     */
+    Map<Long, List<Long>> batchListReplyPreviewIds(List<Long> rootIds, int limit, Long viewerId);
 
     /**
      * 扫描某帖最近的一级评论（用于热榜冷启动/重建）。

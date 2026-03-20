@@ -1,5 +1,6 @@
 package cn.nexus.trigger.http.social;
 
+import cn.dev33.satoken.annotation.SaCheckRole;
 import cn.nexus.api.response.Response;
 import cn.nexus.api.social.IRiskAdminApi;
 import cn.nexus.api.social.common.OperationResultDTO;
@@ -24,10 +25,15 @@ import java.util.List;
 
 /**
  * 风控后台接口入口（risk-admin）。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Slf4j
 @RestController
 @CrossOrigin("*")
+@SaCheckRole("ADMIN")
 @RequestMapping("/api/v1/risk/admin")
 public class RiskAdminController implements IRiskAdminApi {
 
@@ -37,6 +43,12 @@ public class RiskAdminController implements IRiskAdminApi {
     @Resource
     private IRiskAppealService riskAppealService;
 
+    /**
+     * 执行 upsertRuleVersion 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskRuleVersionUpsertRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/rules/versions")
     @Override
     public Response<RiskRuleVersionUpsertResponseDTO> upsertRuleVersion(@RequestBody RiskRuleVersionUpsertRequestDTO requestDTO) {
@@ -57,6 +69,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 listRuleVersions 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskRuleVersionListRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/rules/versions")
     @Override
     public Response<RiskRuleVersionListResponseDTO> listRuleVersions(RiskRuleVersionListRequestDTO requestDTO) {
@@ -96,6 +114,11 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 publishRuleVersion 逻辑。
+     *
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/rules/versions/{version}/publish")
     @Override
     public Response<OperationResultDTO> publishRuleVersion(@PathVariable("version") Long version,
@@ -115,6 +138,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 rollbackRuleVersion 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskRuleVersionRollbackRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/rules/rollback")
     @Override
     public Response<OperationResultDTO> rollbackRuleVersion(@RequestBody RiskRuleVersionRollbackRequestDTO requestDTO) {
@@ -130,6 +159,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 upsertPromptVersion 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskPromptVersionUpsertRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/prompts/versions")
     @Override
     public Response<RiskPromptVersionUpsertResponseDTO> upsertPromptVersion(@RequestBody RiskPromptVersionUpsertRequestDTO requestDTO) {
@@ -154,6 +189,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 listPromptVersions 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskPromptVersionListRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/prompts/versions")
     @Override
     public Response<RiskPromptVersionListResponseDTO> listPromptVersions(RiskPromptVersionListRequestDTO requestDTO) {
@@ -215,6 +256,11 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 publishPromptVersion 逻辑。
+     *
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/prompts/versions/{version}/publish")
     @Override
     public Response<OperationResultDTO> publishPromptVersion(@PathVariable("version") Long version,
@@ -231,6 +277,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 rollbackPromptVersion 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskPromptVersionRollbackRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/prompts/rollback")
     @Override
     public Response<OperationResultDTO> rollbackPromptVersion(@RequestBody RiskPromptVersionRollbackRequestDTO requestDTO) {
@@ -246,6 +298,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 listCases 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskCaseListRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/cases")
     @Override
     public Response<RiskCaseListResponseDTO> listCases(RiskCaseListRequestDTO requestDTO) {
@@ -287,6 +345,13 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 assignCase 逻辑。
+     *
+     * @param caseId caseId 参数。类型：{@link Long}
+     * @param requestDTO 请求参数。类型：{@link RiskCaseAssignRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/cases/{caseId}/assign")
     @Override
     public Response<OperationResultDTO> assignCase(@PathVariable("caseId") Long caseId, @RequestBody RiskCaseAssignRequestDTO requestDTO) {
@@ -304,6 +369,13 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 decideCase 逻辑。
+     *
+     * @param caseId caseId 参数。类型：{@link Long}
+     * @param requestDTO 请求参数。类型：{@link RiskCaseDecisionRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/cases/{caseId}/decision")
     @Override
     public Response<OperationResultDTO> decideCase(@PathVariable("caseId") Long caseId, @RequestBody RiskCaseDecisionRequestDTO requestDTO) {
@@ -327,6 +399,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 applyPunishment 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskPunishmentApplyRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/punishments/apply")
     @Override
     public Response<OperationResultDTO> applyPunishment(@RequestBody RiskPunishmentApplyRequestDTO requestDTO) {
@@ -349,6 +427,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 revokePunishment 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskPunishmentRevokeRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/punishments/revoke")
     @Override
     public Response<OperationResultDTO> revokePunishment(@RequestBody RiskPunishmentRevokeRequestDTO requestDTO) {
@@ -364,6 +448,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 listPunishments 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskPunishmentListRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/punishments")
     @Override
     public Response<RiskPunishmentListResponseDTO> listPunishments(RiskPunishmentListRequestDTO requestDTO) {
@@ -407,6 +497,12 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 listDecisions 逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link RiskDecisionLogListRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/decisions")
     @Override
     public Response<RiskDecisionLogListResponseDTO> listDecisions(RiskDecisionLogListRequestDTO requestDTO) {
@@ -454,6 +550,13 @@ public class RiskAdminController implements IRiskAdminApi {
         }
     }
 
+    /**
+     * 执行 decideAppeal 逻辑。
+     *
+     * @param appealId appealId 参数。类型：{@link Long}
+     * @param requestDTO 请求参数。类型：{@link RiskAppealDecisionRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/appeals/{appealId}/decision")
     @Override
     public Response<OperationResultDTO> decideAppeal(@PathVariable("appealId") Long appealId, @RequestBody RiskAppealDecisionRequestDTO requestDTO) {

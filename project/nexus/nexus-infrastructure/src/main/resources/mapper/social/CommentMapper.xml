@@ -115,6 +115,31 @@
         LIMIT #{limit}
     </select>
 
+    <select id="selectReplyPreviewIdsByRootIds" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
+        SELECT root_id, comment_id, create_time
+        FROM (
+            SELECT root_id,
+                   comment_id,
+                   create_time,
+                   ROW_NUMBER() OVER (PARTITION BY root_id ORDER BY create_time ASC, comment_id ASC) AS rn
+            FROM interaction_comment
+            WHERE root_id IN
+            <foreach collection="rootIds" item="id" open="(" separator="," close=")">
+                #{id}
+            </foreach>
+            <choose>
+                <when test="viewerId != null">
+                    AND (status = 1 OR (status = 0 AND user_id = #{viewerId}))
+                </when>
+                <otherwise>
+                    AND status = 1
+                </otherwise>
+            </choose>
+        ) t
+        WHERE rn &lt;= #{limit}
+        ORDER BY root_id ASC, create_time ASC, comment_id ASC
+    </select>
+
     <select id="selectRecentRootBriefs" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
         SELECT comment_id, post_id, user_id, root_id, status, like_count, reply_count
         FROM interaction_comment

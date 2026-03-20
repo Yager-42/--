@@ -17,6 +17,10 @@ import java.util.stream.Collectors;
 
 /**
  * 互动接口入口。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Slf4j
 @RestController
@@ -27,6 +31,12 @@ public class InteractionController implements IInteractionApi {
     @Resource
     private IInteractionService interactionService;
 
+    /**
+     * 处理互动动作并返回结果。
+     *
+     * @param requestDTO 请求参数。类型：{@link ReactionRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/interact/reaction")
     @Override
     public Response<ReactionResponseDTO> react(@RequestBody ReactionRequestDTO requestDTO) {
@@ -57,6 +67,12 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
+    /**
+     * 查询互动状态。
+     *
+     * @param requestDTO 请求参数。类型：{@link ReactionStateRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/interact/reaction/state")
     @Override
     public Response<ReactionStateResponseDTO> reactionState(ReactionStateRequestDTO requestDTO) {
@@ -81,6 +97,12 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
+    /**
+     * 查询点赞用户列表。
+     *
+     * @param requestDTO 请求参数。类型：{@link ReactionLikersRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/interact/reaction/likers")
     @Override
     public Response<ReactionLikersResponseDTO> reactionLikers(ReactionLikersRequestDTO requestDTO) {
@@ -108,6 +130,12 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
+    /**
+     * 创建评论并返回结果。
+     *
+     * @param requestDTO 请求参数。类型：{@link CommentRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/interact/comment")
     @Override
     public Response<CommentResponseDTO> comment(@RequestBody CommentRequestDTO requestDTO) {
@@ -128,6 +156,12 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
+    /**
+     * 置顶评论。
+     *
+     * @param requestDTO 请求参数。类型：{@link PinCommentRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/interact/comment/pin")
     @Override
     public Response<OperationResultDTO> pinComment(@RequestBody PinCommentRequestDTO requestDTO) {
@@ -146,6 +180,12 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
+    /**
+     * 查询通知列表。
+     *
+     * @param requestDTO 请求参数。类型：{@link NotificationListRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/notification/list")
     @Override
     public Response<NotificationListResponseDTO> notifications(NotificationListRequestDTO requestDTO) {
@@ -168,6 +208,12 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
+    /**
+     * 标记单条通知已读。
+     *
+     * @param requestDTO 请求参数。类型：{@link NotificationReadRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/notification/read")
     @Override
     public Response<OperationResultDTO> readNotification(@RequestBody NotificationReadRequestDTO requestDTO) {
@@ -187,6 +233,11 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
+    /**
+     * 标记全部通知已读。
+     *
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/notification/read/all")
     @Override
     public Response<OperationResultDTO> readAllNotifications() {
@@ -205,6 +256,12 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
+    /**
+     * 执行打赏占位逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link TipRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/wallet/tip")
     @Override
     public Response<TipResponseDTO> tip(@RequestBody TipRequestDTO requestDTO) {
@@ -213,6 +270,12 @@ public class InteractionController implements IInteractionApi {
                 TipResponseDTO.builder().txId(vo.getTxId()).effectUrl(vo.getEffectUrl()).build());
     }
 
+    /**
+     * 创建投票占位逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link PollCreateRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/interaction/poll/create")
     @Override
     public Response<PollCreateResponseDTO> createPoll(@RequestBody PollCreateRequestDTO requestDTO) {
@@ -221,6 +284,12 @@ public class InteractionController implements IInteractionApi {
                 PollCreateResponseDTO.builder().pollId(vo.getPollId()).build());
     }
 
+    /**
+     * 执行投票占位逻辑。
+     *
+     * @param requestDTO 请求参数。类型：{@link PollVoteRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @PostMapping("/interaction/poll/vote")
     @Override
     public Response<PollVoteResponseDTO> vote(@RequestBody PollVoteRequestDTO requestDTO) {
@@ -229,6 +298,12 @@ public class InteractionController implements IInteractionApi {
                 PollVoteResponseDTO.builder().updatedStats(vo.getUpdatedStats()).build());
     }
 
+    /**
+     * 查询钱包余额占位结果。
+     *
+     * @param requestDTO 请求参数。类型：{@link WalletBalanceRequestDTO}
+     * @return 处理结果。类型：{@link Response}
+     */
     @GetMapping("/wallet/balance")
     @Override
     public Response<WalletBalanceResponseDTO> balance(WalletBalanceRequestDTO requestDTO) {

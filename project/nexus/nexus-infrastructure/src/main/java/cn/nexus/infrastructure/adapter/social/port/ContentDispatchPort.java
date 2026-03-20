@@ -11,6 +11,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * 内容分发事件端口实现：使用 RabbitMQ 直接投递。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-05
  */
 @Slf4j
 @Component
@@ -24,6 +28,12 @@ public class ContentDispatchPort implements IContentDispatchPort {
 
     private final RabbitTemplate rabbitTemplate;
 
+    /**
+     * 执行 onPublished 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     */
     @Override
     public void onPublished(Long postId, Long userId) {
         PostPublishedEvent event = new PostPublishedEvent();
@@ -34,6 +44,12 @@ public class ContentDispatchPort implements IContentDispatchPort {
         log.info("Post_Published dispatched. postId={}, userId={}", postId, userId);
     }
 
+    /**
+     * 执行 onUpdated 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param operatorId operatorId 参数。类型：{@link Long}
+     */
     @Override
     public void onUpdated(Long postId, Long operatorId) {
         PostUpdatedEvent event = new PostUpdatedEvent();
@@ -44,6 +60,12 @@ public class ContentDispatchPort implements IContentDispatchPort {
         log.info("Post_Updated dispatched. postId={}, operatorId={}", postId, operatorId);
     }
 
+    /**
+     * 执行 onDeleted 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param operatorId operatorId 参数。类型：{@link Long}
+     */
     @Override
     public void onDeleted(Long postId, Long operatorId) {
         PostDeletedEvent event = new PostDeletedEvent();

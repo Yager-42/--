@@ -12,7 +12,9 @@ import org.springframework.stereotype.Component;
 /**
  * 风控异步任务 MQ 实现：使用 RabbitMQ 作为工作队列。
  *
- * <p>注意：这里不依赖 trigger 模块的 MQ Config（避免分层穿透），仅复用一致的 exchange/routingKey 字符串。</p>
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Slf4j
 @Component
@@ -26,6 +28,11 @@ public class RiskTaskPort implements IRiskTaskPort {
 
     private final ReliableMqOutboxService reliableMqOutboxService;
 
+    /**
+     * 执行 dispatchLlmScan 逻辑。
+     *
+     * @param event 事件对象。类型：{@link LlmScanRequestedEvent}
+     */
     @Override
     public void dispatchLlmScan(LlmScanRequestedEvent event) {
         if (event == null) {
@@ -35,6 +42,11 @@ public class RiskTaskPort implements IRiskTaskPort {
         log.debug("risk llm scan dispatched. decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId());
     }
 
+    /**
+     * 执行 dispatchImageScan 逻辑。
+     *
+     * @param event 事件对象。类型：{@link ImageScanRequestedEvent}
+     */
     @Override
     public void dispatchImageScan(ImageScanRequestedEvent event) {
         if (event == null) {
@@ -44,6 +56,11 @@ public class RiskTaskPort implements IRiskTaskPort {
         log.debug("risk image scan dispatched. decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId());
     }
 
+    /**
+     * 执行 dispatchReviewCase 逻辑。
+     *
+     * @param event 事件对象。类型：{@link ReviewCaseCreatedEvent}
+     */
     @Override
     public void dispatchReviewCase(ReviewCaseCreatedEvent event) {
         if (event == null) {

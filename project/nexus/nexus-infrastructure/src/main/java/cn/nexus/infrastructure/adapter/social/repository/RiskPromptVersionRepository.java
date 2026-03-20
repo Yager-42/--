@@ -14,6 +14,10 @@ import java.util.List;
 
 /**
  * 风控 Prompt 版本仓储 MyBatis 实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Repository
 @RequiredArgsConstructor
@@ -21,6 +25,12 @@ public class RiskPromptVersionRepository implements IRiskPromptVersionRepository
 
     private final IRiskPromptVersionDao promptVersionDao;
 
+    /**
+     * 执行 insert 逻辑。
+     *
+     * @param entity entity 参数。类型：{@link RiskPromptVersionEntity}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean insert(RiskPromptVersionEntity entity) {
         if (entity == null || entity.getVersion() == null) {
@@ -35,6 +45,12 @@ public class RiskPromptVersionRepository implements IRiskPromptVersionRepository
         return promptVersionDao.insert(toPO(entity)) > 0;
     }
 
+    /**
+     * 执行 findByVersion 逻辑。
+     *
+     * @param version version 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link RiskPromptVersionEntity}
+     */
     @Override
     public RiskPromptVersionEntity findByVersion(Long version) {
         if (version == null) {
@@ -43,6 +59,12 @@ public class RiskPromptVersionRepository implements IRiskPromptVersionRepository
         return toEntity(promptVersionDao.selectByVersion(version));
     }
 
+    /**
+     * 执行 findActive 逻辑。
+     *
+     * @param contentType contentType 参数。类型：{@link String}
+     * @return 处理结果。类型：{@link RiskPromptVersionEntity}
+     */
     @Override
     public RiskPromptVersionEntity findActive(String contentType) {
         if (contentType == null || contentType.isBlank()) {
@@ -51,6 +73,12 @@ public class RiskPromptVersionRepository implements IRiskPromptVersionRepository
         return toEntity(promptVersionDao.selectActive(contentType));
     }
 
+    /**
+     * 执行 listAll 逻辑。
+     *
+     * @param contentType contentType 参数。类型：{@link String}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskPromptVersionEntity> listAll(String contentType) {
         List<RiskPromptVersionPO> list = promptVersionDao.selectAll(contentType);
@@ -67,12 +95,26 @@ public class RiskPromptVersionRepository implements IRiskPromptVersionRepository
         return res;
     }
 
+    /**
+     * 执行 maxVersion 逻辑。
+     *
+     * @return 处理结果。类型：{@link Long}
+     */
     @Override
     public Long maxVersion() {
         Long v = promptVersionDao.selectMaxVersion();
         return v == null ? 0L : v;
     }
 
+    /**
+     * 执行 updatePrompt 逻辑。
+     *
+     * @param version version 参数。类型：{@link Long}
+     * @param promptText promptText 参数。类型：{@link String}
+     * @param model model 参数。类型：{@link String}
+     * @param expectedStatus expectedStatus 参数。类型：{@link String}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean updatePrompt(Long version, String promptText, String model, String expectedStatus) {
         if (version == null || expectedStatus == null || expectedStatus.isBlank()) {
@@ -84,6 +126,13 @@ public class RiskPromptVersionRepository implements IRiskPromptVersionRepository
         return promptVersionDao.updatePrompt(version, promptText, model == null ? "" : model, expectedStatus) > 0;
     }
 
+    /**
+     * 发布事件。
+     *
+     * @param version version 参数。类型：{@link Long}
+     * @param publishBy publishBy 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean publish(Long version, Long publishBy) {
@@ -98,6 +147,13 @@ public class RiskPromptVersionRepository implements IRiskPromptVersionRepository
         return promptVersionDao.publish(version, "PUBLISHED", publishBy, new Date()) > 0;
     }
 
+    /**
+     * 执行 rollback 逻辑。
+     *
+     * @param toVersion toVersion 参数。类型：{@link Long}
+     * @param operatorId operatorId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean rollback(Long toVersion, Long operatorId) {

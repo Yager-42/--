@@ -14,6 +14,10 @@ import java.util.List;
 
 /**
  * 风控规则版本仓储 MyBatis 实现。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Repository
 @RequiredArgsConstructor
@@ -21,6 +25,12 @@ public class RiskRuleVersionRepository implements IRiskRuleVersionRepository {
 
     private final IRiskRuleVersionDao ruleVersionDao;
 
+    /**
+     * 执行 insert 逻辑。
+     *
+     * @param entity entity 参数。类型：{@link RiskRuleVersionEntity}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean insert(RiskRuleVersionEntity entity) {
         if (entity == null || entity.getVersion() == null || entity.getRulesJson() == null) {
@@ -29,6 +39,12 @@ public class RiskRuleVersionRepository implements IRiskRuleVersionRepository {
         return ruleVersionDao.insert(toPO(entity)) > 0;
     }
 
+    /**
+     * 执行 findByVersion 逻辑。
+     *
+     * @param version version 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link RiskRuleVersionEntity}
+     */
     @Override
     public RiskRuleVersionEntity findByVersion(Long version) {
         if (version == null) {
@@ -37,11 +53,21 @@ public class RiskRuleVersionRepository implements IRiskRuleVersionRepository {
         return toEntity(ruleVersionDao.selectByVersion(version));
     }
 
+    /**
+     * 执行 findActive 逻辑。
+     *
+     * @return 处理结果。类型：{@link RiskRuleVersionEntity}
+     */
     @Override
     public RiskRuleVersionEntity findActive() {
         return toEntity(ruleVersionDao.selectActive());
     }
 
+    /**
+     * 执行 listAll 逻辑。
+     *
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<RiskRuleVersionEntity> listAll() {
         List<RiskRuleVersionPO> list = ruleVersionDao.selectAll();
@@ -58,12 +84,25 @@ public class RiskRuleVersionRepository implements IRiskRuleVersionRepository {
         return res;
     }
 
+    /**
+     * 执行 maxVersion 逻辑。
+     *
+     * @return 处理结果。类型：{@link Long}
+     */
     @Override
     public Long maxVersion() {
         Long v = ruleVersionDao.selectMaxVersion();
         return v == null ? 0L : v;
     }
 
+    /**
+     * 执行 updateRulesJson 逻辑。
+     *
+     * @param version version 参数。类型：{@link Long}
+     * @param rulesJson rulesJson 参数。类型：{@link String}
+     * @param expectedStatus expectedStatus 参数。类型：{@link String}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean updateRulesJson(Long version, String rulesJson, String expectedStatus) {
         if (version == null || rulesJson == null || rulesJson.isBlank() || expectedStatus == null || expectedStatus.isBlank()) {
@@ -72,6 +111,13 @@ public class RiskRuleVersionRepository implements IRiskRuleVersionRepository {
         return ruleVersionDao.updateRulesJson(version, rulesJson, expectedStatus) > 0;
     }
 
+    /**
+     * 发布事件。
+     *
+     * @param version version 参数。类型：{@link Long}
+     * @param publishBy publishBy 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean publish(Long version, Long publishBy) {
@@ -82,6 +128,13 @@ public class RiskRuleVersionRepository implements IRiskRuleVersionRepository {
         return ruleVersionDao.publish(version, "PUBLISHED", publishBy, new Date()) > 0;
     }
 
+    /**
+     * 执行 rollback 逻辑。
+     *
+     * @param toVersion toVersion 参数。类型：{@link Long}
+     * @param operatorId operatorId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean rollback(Long toVersion, Long operatorId) {

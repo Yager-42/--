@@ -20,13 +20,7 @@ import java.util.*;
 /**
  * 点赞缓存端口 Redis 实现。
  *
- * <p>职责：</p>
- * <ul>
- *   <li>在线写入：Lua 原子更新（bitmap 去重 + cnt 计数 + ops 记录 + sync 标记）。</li>
- *   <li>延迟同步：opsKey -> processingKey 的快照（Lua 原子 RENAME）。</li>
- *   <li>读优化：热点 key 才启用 L1 Caffeine，且一律 L1-first（miss 回源 Redis 并回填）。</li>
- * </ul>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-20
  */
@@ -65,6 +59,15 @@ public class ReactionCachePort implements IReactionCachePort {
 
     private final SingleFlight singleFlight = new SingleFlight();
 
+    /**
+     * 原子应用状态和计数。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param desiredState desiredState 参数。类型：{@code int}
+     * @param syncTtlSec syncTtlSec 参数。类型：{@code int}
+     * @return 处理结果。类型：{@link ReactionApplyResultVO}
+     */
     @Override
     public ReactionApplyResultVO applyAtomic(Long userId, ReactionTargetVO target, int desiredState, int syncTtlSec) {
         if (userId == null || target == null) {
@@ -102,6 +105,12 @@ public class ReactionCachePort implements IReactionCachePort {
                 .build();
     }
 
+    /**
+     * 记录操作快照。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean snapshotOps(ReactionTargetVO target) {
         if (target == null) {
@@ -114,6 +123,12 @@ public class ReactionCachePort implements IReactionCachePort {
         return moved != null && moved > 0;
     }
 
+    /**
+     * 读取操作快照。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @return 处理结果。类型：{@link Map}
+     */
     @Override
     public Map<Long, Integer> readOpsSnapshot(ReactionTargetVO target) {
         if (target == null) {
@@ -135,6 +150,11 @@ public class ReactionCachePort implements IReactionCachePort {
         return out;
     }
 
+    /**
+     * 清理操作快照。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     */
     @Override
     public void clearOpsSnapshot(ReactionTargetVO target) {
         if (target == null) {
@@ -143,6 +163,12 @@ public class ReactionCachePort implements IReactionCachePort {
         stringRedisTemplate.delete(processingKey(target));
     }
 
+    /**
+     * 读取计数。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @return 处理结果。类型：{@code long}
+     */
     @Override
     public long getCount(ReactionTargetVO target) {
         if (target == null) {
@@ -165,6 +191,12 @@ public class ReactionCachePort implements IReactionCachePort {
         return cnt;
     }
 
+    /**
+     * 批量读取计数。
+     *
+     * @param targets targets 参数。类型：{@link List}
+     * @return 处理结果。类型：{@link Map}
+     */
     @Override
     public Map<String, Long> batchGetCount(List<ReactionTargetVO> targets) {
         if (targets == null || targets.isEmpty()) {
@@ -225,6 +257,12 @@ public class ReactionCachePort implements IReactionCachePort {
         return result;
     }
 
+    /**
+     * 从 Redis 读取计数。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @return 处理结果。类型：{@code long}
+     */
     @Override
     public long getCountFromRedis(ReactionTargetVO target) {
         if (target == null) {
@@ -233,6 +271,13 @@ public class ReactionCachePort implements IReactionCachePort {
         return redisGetCntOrRebuild(target);
     }
 
+    /**
+     * 读取互动状态。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean getState(Long userId, ReactionTargetVO target) {
         if (userId == null || target == null) {
@@ -247,6 +292,13 @@ public class ReactionCachePort implements IReactionCachePort {
         return Boolean.TRUE.equals(bit);
     }
 
+    /**
+     * 判断位图分片是否存在。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean bitmapShardExists(Long userId, ReactionTargetVO target) {
         if (userId == null || target == null || userId < 0) {
@@ -257,6 +309,13 @@ public class ReactionCachePort implements IReactionCachePort {
         return Boolean.TRUE.equals(exists);
     }
 
+    /**
+     * 写入互动状态。
+     *
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param state state 参数。类型：{@code boolean}
+     */
     @Override
     public void setState(Long userId, ReactionTargetVO target, boolean state) {
         if (userId == null || target == null || userId < 0) {
@@ -267,6 +326,12 @@ public class ReactionCachePort implements IReactionCachePort {
         stringRedisTemplate.opsForValue().setBit(bmKey(target, shard), offset, state);
     }
 
+    /**
+     * 写入互动计数。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param count count 参数。类型：{@code long}
+     */
     @Override
     public void setCount(ReactionTargetVO target, long count) {
         if (target == null) {
@@ -278,6 +343,13 @@ public class ReactionCachePort implements IReactionCachePort {
         countCache.invalidate(hotkeyKey(target));
     }
 
+    /**
+     * 获取窗口大小。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param defaultMs defaultMs 参数。类型：{@code long}
+     * @return 处理结果。类型：{@code long}
+     */
     @Override
     public long getWindowMs(ReactionTargetVO target, long defaultMs) {
         if (target == null) {
@@ -291,6 +363,12 @@ public class ReactionCachePort implements IReactionCachePort {
         return clamp(ms, WINDOW_MS_MIN, WINDOW_MS_MAX);
     }
 
+    /**
+     * 标记待同步。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param ttlSec ttlSec 参数。类型：{@code int}
+     */
     @Override
     public void setSyncPending(ReactionTargetVO target, int ttlSec) {
         if (target == null) {
@@ -300,6 +378,11 @@ public class ReactionCachePort implements IReactionCachePort {
         stringRedisTemplate.opsForValue().set(syncKey(target), "PENDING", Duration.ofSeconds(ttl));
     }
 
+    /**
+     * 清理同步标记。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     */
     @Override
     public void clearSyncFlag(ReactionTargetVO target) {
         if (target == null) {
@@ -308,6 +391,12 @@ public class ReactionCachePort implements IReactionCachePort {
         stringRedisTemplate.delete(syncKey(target));
     }
 
+    /**
+     * 记录最近同步时间。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @param epochMillis epochMillis 参数。类型：{@code long}
+     */
     @Override
     public void setLastSyncTime(ReactionTargetVO target, long epochMillis) {
         if (target == null) {
@@ -316,6 +405,12 @@ public class ReactionCachePort implements IReactionCachePort {
         stringRedisTemplate.opsForValue().set(lastSyncKey(target), String.valueOf(epochMillis));
     }
 
+    /**
+     * 判断操作快照是否存在。
+     *
+     * @param target target 参数。类型：{@link ReactionTargetVO}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean existsOps(ReactionTargetVO target) {
         if (target == null) {

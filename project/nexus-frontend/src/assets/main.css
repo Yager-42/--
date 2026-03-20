@@ -1,0 +1,65 @@
+/* Apple Style Global CSS Variables */
+:root {
+  /* Colors */
+  --apple-bg: #ffffff;
+  --apple-card-bg: #f5f5f7;
+  --apple-text: #1d1d1f;
+  --apple-text-secondary: #86868b;
+  --apple-blur-bg: rgba(255, 255, 255, 0.72);
+  --apple-accent: #0066cc; /* Apple Blue */
+
+  /* Spacing */
+  --safe-area-inset-top: env(safe-area-inset-top);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom);
+
+  /* Animations */
+  --spring-easing: cubic-bezier(0.32, 0.72, 0, 1);
+  --spring-duration: 0.6s;
+}
+
+/* Global Reset */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden; /* Prevent default scrolling */
+  background-color: var(--apple-bg);
+  color: var(--apple-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+}
+
+/* Typography Utilities */
+.text-large-title {
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.text-headline {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.text-body {
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.text-secondary {
+  color: var(--apple-text-secondary);
+}

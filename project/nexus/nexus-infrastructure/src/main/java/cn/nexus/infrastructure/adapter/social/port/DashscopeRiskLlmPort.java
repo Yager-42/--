@@ -24,7 +24,9 @@ import java.util.List;
 /**
  * Spring AI Alibaba DashScope LLM 适配：用于异步内容风控扫描。
  *
- * <p>约束：必须返回结构化 JSON；禁止自然语言输出。</p>
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Slf4j
 @Component
@@ -41,6 +43,15 @@ public class DashscopeRiskLlmPort implements IRiskLlmPort {
     @Value("${risk.llm.image-model:}")
     private String imageModel;
 
+    /**
+     * 执行 scanText 逻辑。
+     *
+     * @param scenario scenario 参数。类型：{@link String}
+     * @param actionType actionType 参数。类型：{@link String}
+     * @param contentText contentText 参数。类型：{@link String}
+     * @param extJson extJson 参数。类型：{@link String}
+     * @return 处理结果。类型：{@link RiskLlmResultVO}
+     */
     @Override
     public RiskLlmResultVO scanText(String scenario, String actionType, String contentText, String extJson) {
         PromptSnapshot snap = loadActivePrompt("TEXT");
@@ -51,6 +62,15 @@ public class DashscopeRiskLlmPort implements IRiskLlmPort {
         return callAndParse(prompt, "TEXT", snap, modelToUse);
     }
 
+    /**
+     * 执行 scanImage 逻辑。
+     *
+     * @param scenario scenario 参数。类型：{@link String}
+     * @param actionType actionType 参数。类型：{@link String}
+     * @param imageUrls imageUrls 参数。类型：{@link List}
+     * @param extJson extJson 参数。类型：{@link String}
+     * @return 处理结果。类型：{@link RiskLlmResultVO}
+     */
     @Override
     public RiskLlmResultVO scanImage(String scenario, String actionType, List<String> imageUrls, String extJson) {
         PromptSnapshot snap = loadActivePrompt("IMAGE");

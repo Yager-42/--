@@ -17,6 +17,13 @@ import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+/**
+ * 关系读侧查询服务。
+ *
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-08
+ */
 @Service
 @RequiredArgsConstructor
 public class RelationQueryService {
@@ -30,22 +37,46 @@ public class RelationQueryService {
     private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IRelationRepository relationRepository;
 
+    /**
+     * 查询关注列表。
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @param cursor 翻页游标，类型：{@link String}
+     * @param limit 页大小，类型：{@link Integer}
+     * @return 关注列表结果，类型：{@link RelationListVO}
+     */
     public RelationListVO following(Long userId, String cursor, Integer limit) {
         List<RelationUserEdgeVO> rows = relationAdjacencyCachePort.pageFollowing(userId, cursor, normalizeLimit(limit));
         return toListVO(rows);
     }
 
+    /**
+     * 查询粉丝列表。
+     *
+     * @param userId 当前用户 ID，类型：{@link Long}
+     * @param cursor 翻页游标，类型：{@link String}
+     * @param limit 页大小，类型：{@link Integer}
+     * @return 粉丝列表结果，类型：{@link RelationListVO}
+     */
     public RelationListVO followers(Long userId, String cursor, Integer limit) {
         List<RelationUserEdgeVO> rows = relationAdjacencyCachePort.pageFollowers(userId, cursor, normalizeLimit(limit));
         return toListVO(rows);
     }
 
+    /**
+     * 批量查询关注态与屏蔽态。
+     *
+     * @param sourceId 发起人 ID，类型：{@link Long}
+     * @param targetUserIds 目标用户 ID 列表，类型：{@link List}&lt;{@link Long}&gt;
+     * @return 批量关系态结果，类型：{@link RelationStateBatchVO}
+     */
     public RelationStateBatchVO batchState(Long sourceId, List<Long> targetUserIds) {
         if (sourceId == null || targetUserIds == null || targetUserIds.isEmpty()) {
             return RelationStateBatchVO.builder().followingUserIds(List.of()).blockedUserIds(List.of()).build();
         }
         List<Long> deduped = new ArrayList<>();
         Set<Long> seen = new HashSet<>();
+        // 先做去重，保证后面批量查库和返回顺序都稳定。
         for (Long targetId : targetUserIds) {
             if (targetId != null && seen.add(targetId)) {
                 deduped.add(targetId);
@@ -58,6 +89,7 @@ public class RelationQueryService {
         Set<Long> blockFromMe = new HashSet<>(relationRepository.batchFindBlockTargetsBySource(sourceId, deduped));
         Set<Long> blockToMe = new HashSet<>(relationRepository.batchFindBlockSourcesByTarget(sourceId, deduped));
         List<Long> blocked = new ArrayList<>();
+        // 屏蔽是双向语义：任意一边拉黑，都视为当前不可见。
         for (Long targetId : deduped) {
             if (blockFromMe.contains(targetId) || blockToMe.contains(targetId)) {
                 blocked.add(targetId);
@@ -75,6 +107,13 @@ public class RelationQueryService {
                 .build();
     }
 
+    /**
+     * 批量查询“我是否关注了这些人”。
+     *
+     * @param sourceId 发起人 ID，类型：{@link Long}
+     * @param targetUserIds 目标用户 ID 列表，类型：{@link List}&lt;{@link Long}&gt;
+     * @return 已关注用户 ID 集合，类型：{@link Set}&lt;{@link Long}&gt;
+     */
     public Set<Long> batchFollowing(Long sourceId, List<Long> targetUserIds) {
         RelationStateBatchVO state = batchState(sourceId, targetUserIds);
         return new HashSet<>(state.getFollowingUserIds() == null ? List.of() : state.getFollowingUserIds());
@@ -91,6 +130,7 @@ public class RelationQueryService {
             }
         }
         Map<Long, UserBriefVO> briefMap = new HashMap<>();
+        // 先批量补昵称头像，再按边的顺序回填，避免 N+1。
         for (UserBriefVO brief : userBaseRepository.listByUserIds(userIds)) {
             if (brief != null && brief.getUserId() != null) {
                 briefMap.put(brief.getUserId(), brief);

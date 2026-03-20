@@ -11,7 +11,9 @@ import org.springframework.stereotype.Component;
 /**
  * 软删评论定时物理清理任务。
  *
- * <p>规则：软删超过 N 天（默认 7）后，物理删除 interaction_comment.status=2 的记录。</p>
+ * @author m0_52354773
+ * @author codex
+ * @since 2026-03-01
  */
 @Component
 @RequiredArgsConstructor

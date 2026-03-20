@@ -22,9 +22,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 风控异步回写服务：消费 LLM/图片扫描结果后回写 decision_log，并生成后续处置所需信息。
+ * 风控异步回写服务：消费 LLM 与图片扫描结果后回写 decision_log，并生成后续处置所需信息。
  *
- * <p>原则：LLM 永不阻塞在线链路；异步链路要能把“隔离中的内容/评论”推进到最终状态。</p>
+ * @author rr
+ * @author rr
+ * @author codex
+ * @author codex
+ * @since 2026-01-29
  */
 @Slf4j
 @Service
@@ -49,6 +53,14 @@ public class RiskAsyncService {
     @Value("${risk.autoPunish.durationSeconds:600}")
     private long autoPunishDurationSeconds;
 
+    /**
+     * 应用 LLM 结果：合并 signals、更新 decision_log，并在给出最终结论时推进业务侧状态。
+     *
+     * <p>该方法是异步链路入口：允许重复投递，内部通过 decisionId 定位并覆盖更新。</p>
+     *
+     * @param decisionId 决策日志 ID {@link Long}
+     * @param llm LLM 结果 {@link RiskLlmResultVO}
+     */
     @Transactional(rollbackFor = Exception.class)
     public void applyLlmResult(Long decisionId, RiskLlmResultVO llm) {
         if (decisionId == null || llm == null) {
@@ -70,7 +82,7 @@ public class RiskAsyncService {
                 logEntity.getExtJson()
         );
 
-        // 若异步结果给出了明确结论，则推进业务侧状态（内容/评论）。
+        // 若异步结果给出了明确结论，则推进业务侧状态（内容与评论）。
         applyToBiz(logEntity, newResult, newReason);
 
         // 可选：自动处罚（默认关闭），避免误杀时直接影响用户体验。

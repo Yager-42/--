@@ -21,7 +21,11 @@ import java.util.Date;
 import java.util.Objects;
 
 /**
- * 关系领域服务实现。
+ * 关系领域写服务：负责关注、取关、拉黑这几条改边主链路。
+ *
+ * @author rr
+ * @author codex
+ * @since 2025-12-26
  */
 @Service
 @RequiredArgsConstructor
@@ -39,20 +43,31 @@ public class RelationService implements IRelationService {
     private final IRelationAdjacencyCachePort adjacencyCachePort;
     private final IRelationCachePort relationCachePort;
 
+    /**
+     * 建立关注关系。
+     *
+     * @param sourceId 发起关注的用户 ID，类型：{@link Long}
+     * @param targetId 被关注用户 ID，类型：{@link Long}
+     * @return 关注结果，类型：{@link FollowResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public FollowResultVO follow(Long sourceId, Long targetId) {
+        // 第一层先把脏请求挡掉，避免后面落库时出现“自己关注自己”或空 ID 这种无意义写入。
         if (invalidPair(sourceId, targetId)) {
             return FollowResultVO.builder().status("INVALID").build();
         }
+        // block 检查必须在事务主写入前完成，否则会把不允许建立的边写进真相源。
         if (relationPolicyPort.isBlocked(sourceId, targetId) || blockedPair(sourceId, targetId)) {
             return FollowResultVO.builder().status("BLOCKED").build();
         }
+        // 关注上限走缓存计数，目的是避免每次关注前都去做高成本 COUNT(*)。
         if (relationCachePort.getFollowingCount(sourceId) >= FOLLOW_LIMIT) {
             return FollowResultVO.builder().status("LIMIT_REACHED").build();
         }
 
         RelationEntity existFollow = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
+        // 已经是 ACTIVE 就直接返回，保证重复点击不会制造重复关系和重复事件。
         if (existFollow != null && Integer.valueOf(STATUS_ACTIVE).equals(existFollow.getStatus())) {
             return FollowResultVO.builder().status("ACTIVE").build();
         }
@@ -70,12 +85,14 @@ public class RelationService implements IRelationService {
                 .version(0L)
                 .createTime(followTime)
                 .build();
+        // 事务内只做三件最核心的事：写关系边、写粉丝倒排、写 outbox。
         relationRepository.saveRelation(saved);
         relationRepository.saveFollower(socialIdPort.nextId(), targetId, sourceId, followTime);
 
         long eventId = socialIdPort.nextId();
         relationEventOutboxRepository.save(eventId, "FOLLOW", buildFollowPayload(eventId, sourceId, targetId, "ACTIVE"));
 
+        // 缓存和邻接门面一定要等事务提交后再碰，避免回滚时出现“库没成功，缓存先脏了”。
         afterCommit(() -> {
             adjacencyCachePort.addFollow(sourceId, targetId, nowMs);
             relationCachePort.incrFollowing(sourceId, 1);
@@ -84,6 +101,13 @@ public class RelationService implements IRelationService {
         return FollowResultVO.builder().status("ACTIVE").build();
     }
 
+    /**
+     * 删除关注关系。
+     *
+     * @param sourceId 发起取关的用户 ID，类型：{@link Long}
+     * @param targetId 被取关用户 ID，类型：{@link Long}
+     * @return 取关结果，类型：{@link FollowResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public FollowResultVO unfollow(Long sourceId, Long targetId) {
@@ -93,6 +117,7 @@ public class RelationService implements IRelationService {
 
         RelationEntity existFollow = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
         if (existFollow == null || !Integer.valueOf(STATUS_ACTIVE).equals(existFollow.getStatus())) {
+            // 没关注也顺手清一次残留数据，这是幂等修复，不是额外业务。
             afterCommit(() -> {
                 adjacencyCachePort.removeFollow(sourceId, targetId);
                 relationCachePort.evict(sourceId);
@@ -108,6 +133,7 @@ public class RelationService implements IRelationService {
         long eventId = socialIdPort.nextId();
         relationEventOutboxRepository.save(eventId, "FOLLOW", buildFollowPayload(eventId, sourceId, targetId, "UNFOLLOW"));
 
+        // 写侧不精确删除 Feed inbox，而是把“取关立刻生效”的责任交给事件链路和读侧过滤。
         afterCommit(() -> {
             adjacencyCachePort.removeFollow(sourceId, targetId);
             relationCachePort.incrFollowing(sourceId, -1);
@@ -116,6 +142,13 @@ public class RelationService implements IRelationService {
         return FollowResultVO.builder().status("UNFOLLOWED").build();
     }
 
+    /**
+     * 建立拉黑关系，并清理双向关注边。
+     *
+     * @param sourceId 发起拉黑的用户 ID，类型：{@link Long}
+     * @param targetId 被拉黑用户 ID，类型：{@link Long}
+     * @return 拉黑执行结果，类型：{@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO block(Long sourceId, Long targetId) {
@@ -130,6 +163,8 @@ public class RelationService implements IRelationService {
         boolean forwardFollow = isActiveFollow(sourceId, targetId);
         boolean reverseFollow = isActiveFollow(targetId, sourceId);
 
+        // 拉黑不是单独加一条 block 边就结束，还要把双向 follow 关系和粉丝倒排一起清掉，
+        // 否则后面的关注列表、粉丝列表、Feed 可见性都会继续看到旧关系。
         RelationEntity block = RelationEntity.builder()
                 .id(socialIdPort.nextId())
                 .sourceId(sourceId)
@@ -216,6 +251,10 @@ public class RelationService implements IRelationService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            /**
+             * 执行 afterCommit 逻辑。
+             *
+             */
             @Override
             public void afterCommit() {
                 action.run();

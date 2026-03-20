@@ -17,6 +17,12 @@ import java.io.InputStream;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * MinIO 媒体存储策略：生成预签名 PUT/GET URL，支持客户端直传与后端中转上传。
+ *
+ * @author {$authorName}
+ * @since 2026-01-06
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -25,6 +31,9 @@ public class MinioMediaStorageStrategy implements MediaStorageStrategy {
     private final MinioMediaProperties properties;
     private MinioClient client;
 
+    /**
+     * 初始化 MinIO 客户端。
+     */
     @PostConstruct
     public void init() {
         this.client = MinioClient.builder()
@@ -33,11 +42,25 @@ public class MinioMediaStorageStrategy implements MediaStorageStrategy {
                 .build();
     }
 
+    /**
+     * 策略类型标识。
+     *
+     * @return 类型（固定为 {@code "minio"}） {@link String}
+     */
     @Override
     public String type() {
         return "minio";
     }
 
+    /**
+     * 生成上传会话：返回预签名上传 URL，客户端可直接 PUT 到对象存储。
+     *
+     * @param sessionId 会话 ID {@link String}
+     * @param fileType 文件类型（MIME） {@link String}
+     * @param fileSize 文件大小（字节，可为空） {@link Long}
+     * @param crc32 内容校验值（当前未使用，透传保留） {@link String}
+     * @return 上传会话信息 {@link UploadSessionVO}
+     */
     @Override
     public UploadSessionVO generateUploadSession(String sessionId, String fileType, Long fileSize, String crc32) {
         String objectName = buildObjectName(sessionId);
@@ -65,6 +88,12 @@ public class MinioMediaStorageStrategy implements MediaStorageStrategy {
         }
     }
 
+    /**
+     * 生成读取 URL（预签名 GET）。
+     *
+     * @param sessionId 会话 ID {@link String}
+     * @return 读取 URL（生成失败时返回 {@code null}） {@link String}
+     */
     @Override
     public String generateReadUrl(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -88,6 +117,15 @@ public class MinioMediaStorageStrategy implements MediaStorageStrategy {
         }
     }
 
+    /**
+     * 服务端中转上传文件到对象存储。
+     *
+     * @param originalFilename 原始文件名（可为空） {@link String}
+     * @param fileType 文件类型（MIME，可为空） {@link String}
+     * @param fileSize 文件大小（字节，可为空） {@link Long}
+     * @param inputStream 文件输入流 {@link InputStream}
+     * @return 读取 URL（上传成功后返回） {@link String}
+     */
     @Override
     public String uploadFile(String originalFilename, String fileType, Long fileSize, InputStream inputStream) {
         if (inputStream == null) {
@@ -140,7 +178,7 @@ public class MinioMediaStorageStrategy implements MediaStorageStrategy {
             int dot = name.lastIndexOf('.');
             if (dot >= 0 && dot < name.length() - 1) {
                 String ext = name.substring(dot);
-                // Defensive: keep suffix short and ASCII-ish.
+                // 防御性处理：限制后缀长度与字符集，避免写入奇怪路径或过长对象名。
                 if (ext.length() <= 16 && ext.indexOf('/') < 0 && ext.indexOf('\\') < 0) {
                     suffix = ext;
                 }

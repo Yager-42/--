@@ -33,6 +33,7 @@ import org.springframework.stereotype.Repository;
 /**
  * 鐠囧嫯顔戞禒鎾冲亶 MyBatis 鐎圭偟骞囬妴?
  *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */
@@ -62,6 +63,12 @@ public class CommentRepository implements ICommentRepository {
 
     private final SingleFlight singleFlight = new SingleFlight();
 
+    /**
+     * 执行 getBrief 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @return 处理结果。类型：{@link CommentBriefVO}
+     */
     @Override
     public CommentBriefVO getBrief(Long commentId) {
         if (commentId == null) {
@@ -82,6 +89,12 @@ public class CommentRepository implements ICommentRepository {
                 .build();
     }
 
+    /**
+     * 执行 listByIds 逻辑。
+     *
+     * @param commentIds commentIds 参数。类型：{@link List}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<CommentViewVO> listByIds(List<Long> commentIds) {
         if (commentIds == null || commentIds.isEmpty()) {
@@ -118,6 +131,19 @@ public class CommentRepository implements ICommentRepository {
         return orderCommentViews(commentIds, resultById);
     }
 
+    /**
+     * 执行 insert 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param userId 当前用户 ID。类型：{@link Long}
+     * @param rootId rootId 参数。类型：{@link Long}
+     * @param parentId 父评论 ID。类型：{@link Long}
+     * @param replyToId replyToId 参数。类型：{@link Long}
+     * @param content 文本内容。类型：{@link String}
+     * @param status status 参数。类型：{@link Integer}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     */
     @Override
     public void insert(Long commentId, Long postId, Long userId, Long rootId, Long parentId, Long replyToId, String content, Integer status, Long nowMs) {
         Date now = new Date(nowMs == null ? System.currentTimeMillis() : nowMs);
@@ -152,6 +178,13 @@ public class CommentRepository implements ICommentRepository {
         }
     }
 
+    /**
+     * 执行 approvePending 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean approvePending(Long commentId, Long nowMs) {
         if (commentId == null) {
@@ -169,6 +202,13 @@ public class CommentRepository implements ICommentRepository {
         return updated;
     }
 
+    /**
+     * 执行 rejectPending 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean rejectPending(Long commentId, Long nowMs) {
         if (commentId == null) {
@@ -186,6 +226,13 @@ public class CommentRepository implements ICommentRepository {
         return updated;
     }
 
+    /**
+     * 执行 softDelete 逻辑。
+     *
+     * @param commentId 评论 ID。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean softDelete(Long commentId, Long nowMs) {
         if (commentId == null) {
@@ -203,6 +250,13 @@ public class CommentRepository implements ICommentRepository {
         return affected > 0;
     }
 
+    /**
+     * 执行 softDeleteByRootId 逻辑。
+     *
+     * @param rootId rootId 参数。类型：{@link Long}
+     * @param nowMs nowMs 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@code boolean}
+     */
     @Override
     public boolean softDeleteByRootId(Long rootId, Long nowMs) {
         if (rootId == null) {
@@ -217,6 +271,13 @@ public class CommentRepository implements ICommentRepository {
         return affected > 0;
     }
 
+    /**
+     * 执行 deleteSoftDeletedBefore 逻辑。
+     *
+     * @param cutoff cutoff 参数。类型：{@link Date}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@code int}
+     */
     @Override
     public int deleteSoftDeletedBefore(Date cutoff, int limit) {
         if (cutoff == null) {
@@ -226,6 +287,12 @@ public class CommentRepository implements ICommentRepository {
         return commentDao.deleteSoftDeletedBefore(cutoff, normalizedLimit);
     }
 
+    /**
+     * 执行 addReplyCount 逻辑。
+     *
+     * @param rootCommentId rootCommentId 参数。类型：{@link Long}
+     * @param delta delta 参数。类型：{@link Long}
+     */
     @Override
     public void addReplyCount(Long rootCommentId, Long delta) {
         if (rootCommentId == null || delta == null || delta == 0) {
@@ -237,6 +304,12 @@ public class CommentRepository implements ICommentRepository {
         evictReplyPreviews(rootCommentId);
     }
 
+    /**
+     * 执行 addLikeCount 逻辑。
+     *
+     * @param rootCommentId rootCommentId 参数。类型：{@link Long}
+     * @param delta delta 参数。类型：{@link Long}
+     */
     @Override
     public void addLikeCount(Long rootCommentId, Long delta) {
         if (rootCommentId == null || delta == null || delta == 0) {
@@ -246,6 +319,16 @@ public class CommentRepository implements ICommentRepository {
         evictCommentView(rootCommentId);
     }
 
+    /**
+     * 执行 pageRootCommentIds 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param pinnedId pinnedId 参数。类型：{@link Long}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @param viewerId viewerId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> pageRootCommentIds(Long postId, Long pinnedId, String cursor, int limit, Long viewerId) {
         Cursor c = Cursor.parse(cursor);
@@ -265,6 +348,15 @@ public class CommentRepository implements ICommentRepository {
                 normalizedLimit);
     }
 
+    /**
+     * 执行 pageReplyCommentIds 逻辑。
+     *
+     * @param rootId rootId 参数。类型：{@link Long}
+     * @param cursor 分页游标。类型：{@link String}
+     * @param limit 分页大小。类型：{@code int}
+     * @param viewerId viewerId 参数。类型：{@link Long}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<Long> pageReplyCommentIds(Long rootId, String cursor, int limit, Long viewerId) {
         Cursor c = Cursor.parse(cursor);
@@ -297,6 +389,104 @@ public class CommentRepository implements ICommentRepository {
         }
 
         return pageReplyIdsFromDb(rootId, c, normalizedLimit, viewerId);
+    }
+
+    @Override
+    public Map<Long, List<Long>> batchListReplyPreviewIds(List<Long> rootIds, int limit, Long viewerId) {
+        if (rootIds == null || rootIds.isEmpty()) {
+            return Map.of();
+        }
+
+        int normalizedLimit = Math.max(1, limit);
+        List<Long> deduped = new ArrayList<>(rootIds.size());
+        Set<Long> seen = new LinkedHashSet<>();
+        for (Long rootId : rootIds) {
+            if (rootId != null && seen.add(rootId)) {
+                deduped.add(rootId);
+            }
+        }
+        if (deduped.isEmpty()) {
+            return Map.of();
+        }
+
+        // 只对“匿名 + 小 limit”的预览做缓存；带 viewerId 的预览不能复用缓存，否则会有可见性风险。
+        boolean preview = viewerId == null && normalizedLimit <= 10;
+        Map<Long, List<Long>> result = new HashMap<>(deduped.size() * 2);
+
+        List<Long> unresolved = new ArrayList<>();
+        if (preview) {
+            List<Long> l1Miss = new ArrayList<>();
+            for (Long rootId : deduped) {
+                String l1Key = rootId + ":" + normalizedLimit;
+                List<Long> cached = replyPreviewIdsCache.getIfPresent(l1Key);
+                if (cached != null) {
+                    result.put(rootId, new ArrayList<>(cached));
+                    continue;
+                }
+                l1Miss.add(rootId);
+            }
+
+            if (!l1Miss.isEmpty()) {
+                List<String> keys = new ArrayList<>(l1Miss.size());
+                for (Long rootId : l1Miss) {
+                    keys.add(replyPreviewRedisKey(rootId, normalizedLimit));
+                }
+
+                List<String> values = null;
+                try {
+                    values = stringRedisTemplate.opsForValue().multiGet(keys);
+                } catch (Exception ignored) {
+                    // ignore and fall back to DB
+                }
+
+                for (int i = 0; i < l1Miss.size(); i++) {
+                    Long rootId = l1Miss.get(i);
+                    String redisKey = keys.get(i);
+                    String json = values == null || values.size() <= i ? null : values.get(i);
+                    if (json != null) {
+                        List<Long> ids = parseReplyPreviewIdsCache(json);
+                        if (ids != null) {
+                            replyPreviewIdsCache.put(rootId + ":" + normalizedLimit, ids);
+                            result.put(rootId, new ArrayList<>(ids));
+                            continue;
+                        }
+                        deleteRedisQuietly(redisKey);
+                    }
+                    unresolved.add(rootId);
+                }
+            }
+        } else {
+            unresolved.addAll(deduped);
+        }
+
+        if (!unresolved.isEmpty()) {
+            List<CommentPO> rows = commentDao.selectReplyPreviewIdsByRootIds(unresolved, viewerId, normalizedLimit);
+            Map<Long, List<Long>> idsByRoot = new HashMap<>(unresolved.size() * 2);
+            if (rows != null) {
+                for (CommentPO po : rows) {
+                    if (po == null || po.getRootId() == null || po.getCommentId() == null) {
+                        continue;
+                    }
+                    idsByRoot.computeIfAbsent(po.getRootId(), x -> new ArrayList<>()).add(po.getCommentId());
+                }
+            }
+
+            for (Long rootId : unresolved) {
+                List<Long> ids = cleanIds(idsByRoot.get(rootId), normalizedLimit);
+                if (preview) {
+                    String l1Key = rootId + ":" + normalizedLimit;
+                    replyPreviewIdsCache.put(l1Key, ids);
+                    writeReplyPreviewIdsCache(replyPreviewRedisKey(rootId, normalizedLimit), ids);
+                }
+                result.put(rootId, new ArrayList<>(ids));
+            }
+        }
+
+        // 保证每个 rootId 都有返回值，调用方可以直接 getOrDefault。
+        for (Long rootId : deduped) {
+            result.putIfAbsent(rootId, List.of());
+        }
+        return result;
     }
 
     private List<Long> pageReplyIdsFromDb(Long rootId, Cursor c, int normalizedLimit, Long viewerId) {
@@ -725,6 +915,13 @@ public class CommentRepository implements ICommentRepository {
         }
     }
 
+    /**
+     * 执行 listRecentRootBriefs 逻辑。
+     *
+     * @param postId 帖子 ID。类型：{@link Long}
+     * @param limit 分页大小。类型：{@code int}
+     * @return 处理结果。类型：{@link List}
+     */
     @Override
     public List<CommentBriefVO> listRecentRootBriefs(Long postId, int limit) {
         if (postId == null) {

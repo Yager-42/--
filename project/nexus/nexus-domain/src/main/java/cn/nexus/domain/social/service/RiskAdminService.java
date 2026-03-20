@@ -31,7 +31,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 风控后台实现：规则版本、人审工单、处罚、审计查询。
+ * 风控后台实现：规则版本、Prompt 版本、人审工单、处罚、审计查询。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-01-29
  */
 @Slf4j
 @Service
@@ -60,6 +64,16 @@ public class RiskAdminService implements IRiskAdminService {
     private final RedissonClient redissonClient;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 创建或更新规则版本（仅允许 DRAFT 状态更新）。
+     *
+     * <p>version 为空时创建新版本；不为空时更新指定版本的 rulesJson。</p>
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param version 规则版本号（为空则创建新版本） {@link Long}
+     * @param rulesJson 规则集合 JSON {@link String}
+     * @return 保存后的规则版本 {@link RiskRuleVersionEntity}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public RiskRuleVersionEntity upsertRuleVersion(Long operatorId, Long version, String rulesJson) {
@@ -107,16 +121,38 @@ public class RiskAdminService implements IRiskAdminService {
         return saved;
     }
 
+    /**
+     * 获取当前生效的规则版本。
+     *
+     * @return 生效版本（可能为空） {@link RiskRuleVersionEntity}
+     */
     @Override
     public RiskRuleVersionEntity activeRuleVersion() {
         return ruleVersionRepository.findActive();
     }
 
+    /**
+     * 列出所有规则版本（含未发布/已回滚）。
+     *
+     * @return 规则版本列表 {@link List}
+     */
     @Override
     public List<RiskRuleVersionEntity> listRuleVersions() {
         return ruleVersionRepository.listAll();
     }
 
+    /**
+     * 发布规则版本：可在发布前对规则集打补丁（shadow/canary 参数），然后把版本状态置为 PUBLISHED。
+     *
+     * <p>补丁会被写回 rulesJson，目的是让“发布的内容”与“回滚/审计的内容”保持一致。</p>
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param version 规则版本号 {@link Long}
+     * @param shadow 是否影子模式（可为空，不传则保持原值） {@link Boolean}
+     * @param canaryPercent 灰度百分比（可为空，不传则保持原值） {@link Integer}
+     * @param canarySalt 灰度盐值（可为空，不传则保持原值） {@link String}
+     * @return 发布结果 {@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO publishRuleVersion(Long operatorId, Long version, Boolean shadow, Integer canaryPercent, String canarySalt) {
@@ -133,6 +169,7 @@ public class RiskAdminService implements IRiskAdminService {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "rules_json 不能为空");
         }
 
+        // 发布时把 shadow/canary 等参数固化到版本内容，确保“当前生效版本”可被完整审计与回放。
         String patched = patchRuleSet(existed.getRulesJson(), shadow, canaryPercent, canarySalt);
         if (!patched.equals(existed.getRulesJson())) {
             // 仅在未发布状态下允许更新 rules_json
@@ -152,6 +189,13 @@ public class RiskAdminService implements IRiskAdminService {
                 .build();
     }
 
+    /**
+     * 回滚规则版本：把指定版本（或自动选择的目标版本）回滚为新的生效版本。
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param toVersion 目标版本号（可为空，空则自动选择） {@link Long}
+     * @return 回滚结果 {@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO rollbackRuleVersion(Long operatorId, Long toVersion) {
@@ -169,6 +213,16 @@ public class RiskAdminService implements IRiskAdminService {
                 .build();
     }
 
+    /**
+     * 创建或更新 Prompt 版本（仅允许 DRAFT 状态更新）。
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param version Prompt 版本号（为空则创建新版本） {@link Long}
+     * @param contentType 内容类型（TEXT/IMAGE） {@link String}
+     * @param promptText Prompt 文本 {@link String}
+     * @param model 模型标识（可为空） {@link String}
+     * @return 保存后的 Prompt 版本 {@link RiskPromptVersionEntity}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public RiskPromptVersionEntity upsertPromptVersion(Long operatorId, Long version, String contentType, String promptText, String model) {
@@ -222,12 +276,24 @@ public class RiskAdminService implements IRiskAdminService {
         return saved;
     }
 
+    /**
+     * 获取指定内容类型的生效 Prompt 版本。
+     *
+     * @param contentType 内容类型（TEXT/IMAGE） {@link String}
+     * @return 生效 Prompt 版本（可能为空） {@link RiskPromptVersionEntity}
+     */
     @Override
     public RiskPromptVersionEntity activePromptVersion(String contentType) {
         String ct = normalizePromptContentType(contentType);
         return promptVersionRepository.findActive(ct);
     }
 
+    /**
+     * 列出 Prompt 版本：contentType 为空则返回全部，否则按内容类型过滤。
+     *
+     * @param contentType 内容类型（可为空） {@link String}
+     * @return Prompt 版本列表 {@link List}
+     */
     @Override
     public List<RiskPromptVersionEntity> listPromptVersions(String contentType) {
         if (contentType == null || contentType.isBlank()) {
@@ -237,6 +303,13 @@ public class RiskAdminService implements IRiskAdminService {
         return promptVersionRepository.listAll(ct);
     }
 
+    /**
+     * 发布 Prompt 版本：将版本状态置为 PUBLISHED。
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param version Prompt 版本号 {@link Long}
+     * @return 发布结果 {@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO publishPromptVersion(Long operatorId, Long version) {
@@ -261,6 +334,13 @@ public class RiskAdminService implements IRiskAdminService {
                 .build();
     }
 
+    /**
+     * 回滚 Prompt 版本：把指定版本（或自动选择的目标版本）回滚为新的生效版本。
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param toVersion 目标版本号（可为空，空则自动选择） {@link Long}
+     * @return 回滚结果 {@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO rollbackPromptVersion(Long operatorId, Long toVersion) {
@@ -278,11 +358,31 @@ public class RiskAdminService implements IRiskAdminService {
                 .build();
     }
 
+    /**
+     * 查询工单列表（按状态/队列/时间范围过滤）。
+     *
+     * @param status 工单状态（可为空） {@link String}
+     * @param queue 队列/分组（可为空） {@link String}
+     * @param beginTimeMs 开始时间（毫秒，可为空） {@link Long}
+     * @param endTimeMs 结束时间（毫秒，可为空） {@link Long}
+     * @param limit 分页大小（可为空） {@link Integer}
+     * @param offset 分页偏移（可为空） {@link Integer}
+     * @return 工单列表 {@link List}
+     */
     @Override
     public List<RiskCaseEntity> listCases(String status, String queue, Long beginTimeMs, Long endTimeMs, Integer limit, Integer offset) {
         return caseRepository.list(status, queue, beginTimeMs, endTimeMs, limit, offset);
     }
 
+    /**
+     * 分配工单：使用 expectedStatus 做乐观锁，避免重复分配或状态漂移。
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param caseId 工单 ID {@link Long}
+     * @param assignee 指派给谁（用户 ID） {@link Long}
+     * @param expectedStatus 期望当前状态（可为空，默认 OPEN） {@link String}
+     * @return 分配结果 {@link OperationResultVO}
+     */
     @Override
     public OperationResultVO assignCase(Long operatorId, Long caseId, Long assignee, String expectedStatus) {
         requireId(operatorId, "operatorId");
@@ -298,6 +398,21 @@ public class RiskAdminService implements IRiskAdminService {
                 .build();
     }
 
+    /**
+     * 裁决工单：先将工单从 ASSIGNED 置为完成，再把裁决结果写入 decision_log 并回写业务侧。
+     *
+     * <p>以工单状态作为“是否已处理”的幂等开关，避免重复提交导致重复处罚或重复回写。</p>
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param caseId 工单 ID {@link Long}
+     * @param result 最终结论（PASS/BLOCK） {@link String}
+     * @param reasonCode 原因码（可为空） {@link String}
+     * @param evidenceJson 证据 JSON（可为空） {@link String}
+     * @param expectedStatus 期望当前状态（可为空，默认 ASSIGNED） {@link String}
+     * @param punishType 处罚类型（可为空，BLOCK 时可选） {@link String}
+     * @param punishDurationSeconds 处罚时长（秒，可为空，BLOCK 时可选） {@link Long}
+     * @return 裁决结果 {@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO decideCase(Long operatorId,
@@ -317,15 +432,32 @@ public class RiskAdminService implements IRiskAdminService {
         if (c == null) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "工单不存在");
         }
+        // 用 expectedStatus 做乐观锁：确保工单只会被裁决一次，避免重复提交导致重复处罚/重复回写。
         boolean finished = caseRepository.finish(caseId, r, evidenceJson, expected);
         if (!finished) {
             return OperationResultVO.builder().success(false).id(caseId).status("FAILED").message("提交失败（可能状态已变化）").build();
         }
 
+        // 工单完成后再推进 decision_log 与业务侧状态，保证“先落库，再对外可见”的一致性。
         applyCaseDecision(operatorId, c.getDecisionId(), r, reasonCode, evidenceJson, punishType, punishDurationSeconds);
         return OperationResultVO.builder().success(true).id(caseId).status("DONE").message("OK").build();
     }
 
+    /**
+     * 对用户施加处罚：写入处罚记录，并在需要时以（decisionId + type）做幂等去重。
+     *
+     * <p>decisionId 为空：视为后台手工操作，允许重复写入；decisionId 不为空：使用 insertIgnore 保证幂等。</p>
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param userId 用户 ID {@link Long}
+     * @param type 处罚类型 {@link String}
+     * @param decisionId 决策日志 ID（可为空） {@link Long}
+     * @param reasonCode 原因码（可为空） {@link String}
+     * @param startTimeMs 开始时间（毫秒，可为空，默认当前时间） {@link Long}
+     * @param endTimeMs 结束时间（毫秒，可为空） {@link Long}
+     * @param durationSeconds 时长（秒，可为空，用于计算 endTime） {@link Long}
+     * @return 处罚结果 {@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO applyPunishment(Long operatorId,
@@ -340,6 +472,7 @@ public class RiskAdminService implements IRiskAdminService {
         requireId(userId, "userId");
         requireNonBlank(type, "type");
 
+        // endTimeMs 优先，其次使用 durationSeconds 计算；避免后台误操作写入“无效处罚”（end <= start）。
         long start = startTimeMs == null ? socialIdPort.now() : startTimeMs;
         Long end = endTimeMs;
         if (end == null && durationSeconds != null && durationSeconds > 0) {
@@ -363,8 +496,10 @@ public class RiskAdminService implements IRiskAdminService {
                 .updateTime(socialIdPort.now())
                 .build();
 
+        // decisionId 为空表示“后台手工”处罚；非空表示来自决策链路，需用（decisionId + type）做幂等。
         boolean inserted = decisionId == null ? punishmentRepository.insert(entity) : punishmentRepository.insertIgnore(entity);
         if (!inserted && decisionId != null) {
+            // 幂等命中：视为成功，并返回已存在的处罚 ID（若能查到）。
             invalidateUserStatusCache(userId);
             RiskPunishmentEntity existed = punishmentRepository.findByDecisionAndType(decisionId, type);
             Long id = existed == null ? null : existed.getPunishId();
@@ -377,6 +512,13 @@ public class RiskAdminService implements IRiskAdminService {
         return OperationResultVO.builder().success(true).id(entity.getPunishId()).status(PUNISH_STATUS_ACTIVE).message("OK").build();
     }
 
+    /**
+     * 撤销处罚：将处罚标记为已撤销。
+     *
+     * @param operatorId 操作人 ID {@link Long}
+     * @param punishId 处罚 ID {@link Long}
+     * @return 撤销结果 {@link OperationResultVO}
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OperationResultVO revokePunishment(Long operatorId, Long punishId) {
@@ -391,11 +533,35 @@ public class RiskAdminService implements IRiskAdminService {
                 .build();
     }
 
+    /**
+     * 查询处罚列表（按用户、类型、时间范围过滤）。
+     *
+     * @param userId 用户 ID（可为空） {@link Long}
+     * @param type 处罚类型（可为空） {@link String}
+     * @param beginTimeMs 开始时间（毫秒，可为空） {@link Long}
+     * @param endTimeMs 结束时间（毫秒，可为空） {@link Long}
+     * @param limit 分页大小（可为空） {@link Integer}
+     * @param offset 分页偏移（可为空） {@link Integer}
+     * @return 处罚列表 {@link List}
+     */
     @Override
     public List<RiskPunishmentEntity> listPunishments(Long userId, String type, Long beginTimeMs, Long endTimeMs, Integer limit, Integer offset) {
         return punishmentRepository.listByFilter(userId, type, beginTimeMs, endTimeMs, limit, offset);
     }
 
+    /**
+     * 查询决策日志列表（按用户、动作、场景、结果、时间范围过滤）。
+     *
+     * @param userId 用户 ID（可为空） {@link Long}
+     * @param actionType 动作类型（可为空） {@link String}
+     * @param scenario 场景（可为空） {@link String}
+     * @param result 结果（可为空） {@link String}
+     * @param beginTimeMs 开始时间（毫秒，可为空） {@link Long}
+     * @param endTimeMs 结束时间（毫秒，可为空） {@link Long}
+     * @param limit 分页大小（可为空） {@link Integer}
+     * @param offset 分页偏移（可为空） {@link Integer}
+     * @return 决策日志列表 {@link List}
+     */
     @Override
     public List<RiskDecisionLogEntity> listDecisions(Long userId,
                                                     String actionType,

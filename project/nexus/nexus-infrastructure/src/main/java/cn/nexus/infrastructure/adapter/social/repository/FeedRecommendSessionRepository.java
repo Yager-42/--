@@ -13,8 +13,7 @@ import java.util.List;
 /**
  * 推荐流 session cache Redis 实现（LIST/SET/STRING）。
  *
- * <p>Key 规则在 domain 接口注释中已定死：不要改名。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-26
  */
@@ -29,6 +28,13 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedRecommendProperties feedRecommendProperties;
 
+    /**
+     * 判断推荐 session 是否存在。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     * @param sessionId session 标识。 {@link String}
+     * @return session 是否存在。 {@code boolean}
+     */
     @Override
     public boolean sessionExists(Long userId, String sessionId) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {
@@ -38,6 +44,13 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
         return Boolean.TRUE.equals(exists);
     }
 
+    /**
+     * 获取 session 当前缓存的候选数量。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     * @param sessionId session 标识。 {@link String}
+     * @return 候选数量。 {@code long}
+     */
     @Override
     public long size(Long userId, String sessionId) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {
@@ -47,6 +60,15 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
         return size == null ? 0L : Math.max(0L, size);
     }
 
+    /**
+     * 读取 session 指定区间的候选帖子。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     * @param sessionId session 标识。 {@link String}
+     * @param startIndex 起始下标。 {@code long}
+     * @param endIndex 结束下标。 {@code long}
+     * @return 候选帖子 ID 列表。 {@link List}
+     */
     @Override
     public List<Long> range(Long userId, String sessionId, long startIndex, long endIndex) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {
@@ -67,6 +89,14 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
         return ids;
     }
 
+    /**
+     * 读取 session 指定位置的候选帖子。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     * @param sessionId session 标识。 {@link String}
+     * @param index 候选位置。 {@code long}
+     * @return 候选帖子 ID。 {@link Long}
+     */
     @Override
     public Long get(Long userId, String sessionId, long index) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {
@@ -83,6 +113,14 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
         return parseLong(raw);
     }
 
+    /**
+     * 追加推荐候选，并用 seen 集合做 session 内去重。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     * @param sessionId session 标识。 {@link String}
+     * @param postIds 待追加的帖子 ID 列表。 {@link List}
+     * @return 实际追加条数。 {@code int}
+     */
     @Override
     public int appendCandidates(Long userId, String sessionId, List<Long> postIds) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {
@@ -99,6 +137,7 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
             if (id == null) {
                 continue;
             }
+            // 先写 seen 集合，再写 LIST；只有去重成功的候选才进入可扫描队列。
             Long added = stringRedisTemplate.opsForSet().add(seenKey, id.toString());
             if (added == null || added <= 0) {
                 continue;
@@ -111,6 +150,13 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
         return appended;
     }
 
+    /**
+     * 读取 latest 兜底扫描游标。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     * @param sessionId session 标识。 {@link String}
+     * @return latest 游标。 {@link String}
+     */
     @Override
     public String getLatestCursor(Long userId, String sessionId) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {
@@ -121,6 +167,13 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
         return value;
     }
 
+    /**
+     * 保存 latest 兜底扫描游标。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     * @param sessionId session 标识。 {@link String}
+     * @param latestCursor latest 游标。 {@link String}
+     */
     @Override
     public void setLatestCursor(Long userId, String sessionId, String latestCursor) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {
@@ -133,6 +186,12 @@ public class FeedRecommendSessionRepository implements IFeedRecommendSessionRepo
         touch(userId, sessionId);
     }
 
+    /**
+     * 删除整组推荐 session 缓存。
+     *
+     * @param userId 用户 ID。 {@link Long}
+     * @param sessionId session 标识。 {@link String}
+     */
     @Override
     public void deleteSession(Long userId, String sessionId) {
         if (userId == null || sessionId == null || sessionId.isBlank()) {

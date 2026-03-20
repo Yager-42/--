@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 /**
  * 评论创建事件消费者：一级评论入热榜。
  *
+ * @author rr
  * @author codex
  * @since 2026-01-14
  */
@@ -21,6 +22,11 @@ public class CommentCreatedConsumer {
 
     private final ICommentHotRankRepository hotRankRepository;
 
+    /**
+     * 消费单条消息。
+     *
+     * @param event 事件对象。类型：{@link CommentCreatedEvent}
+     */
     @RabbitListener(queues = InteractionCommentMqConfig.Q_COMMENT_CREATED)
     public void onMessage(CommentCreatedEvent event) {
         if (event == null || event.getPostId() == null || event.getCommentId() == null) {

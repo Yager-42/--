@@ -11,14 +11,7 @@ import org.slf4j.LoggerFactory;
 /**
  * 评论热榜重建启动器：仅在显式配置 postId 时执行一次。
  *
- * <p>用法（示例）：</p>
- *
- * <pre>
- *   java -jar nexus-app.jar --comment.hot.rebuild.postId=123
- * </pre>
- *
- * <p>默认不执行，避免线上误伤。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-22
  */
@@ -42,6 +35,11 @@ public class CommentHotRankRebuildRunner implements ApplicationRunner {
         this.rebuildService = rebuildService;
     }
 
+    /**
+     * 执行启动任务。
+     *
+     * @param args args 参数。类型：{@link ApplicationArguments}
+     */
     @Override
     public void run(ApplicationArguments args) {
         if (postId <= 0) {

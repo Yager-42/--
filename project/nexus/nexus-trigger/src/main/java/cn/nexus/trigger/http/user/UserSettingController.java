@@ -23,7 +23,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 用户设置（隐私）写接口入口。
+ * 用户隐私设置接口入口。
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-02-03
  */
 @Slf4j
 @RestController
@@ -40,6 +44,11 @@ public class UserSettingController implements IUserSettingApi {
     @Resource
     private IUserPrivacyRepository userPrivacyRepository;
 
+    /**
+     * 查询当前登录用户的隐私设置。
+     *
+     * @return 隐私设置结果，类型：{@link Response}&lt;{@link UserPrivacyResponseDTO}&gt;
+     */
     @GetMapping("/user/me/privacy")
     @Override
     public Response<UserPrivacyResponseDTO> myPrivacy() {
@@ -63,6 +72,12 @@ public class UserSettingController implements IUserSettingApi {
         }
     }
 
+    /**
+     * 更新当前登录用户的隐私设置。
+     *
+     * @param requestDTO 隐私设置更新请求，类型：{@link UserPrivacyUpdateRequestDTO}
+     * @return 更新结果，类型：{@link Response}&lt;{@link OperationResultDTO}&gt;
+     */
     @PostMapping("/user/me/privacy")
     @Override
     public Response<OperationResultDTO> updateMyPrivacy(@RequestBody UserPrivacyUpdateRequestDTO requestDTO) {

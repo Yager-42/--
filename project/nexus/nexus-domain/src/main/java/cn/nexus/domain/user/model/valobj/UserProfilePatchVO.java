@@ -6,7 +6,13 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 用户 Profile Patch：null=不改；""=清空（仅 avatarUrl 支持清空）；nickname 空白一律非法。
+ * 用户 `Profile` Patch 值对象。
+ *
+ * <p>`null = 不改`；空串只允许拿来清空 `avatarUrl`；`nickname` 只要是空白字符串就视为非法。</p>
+ *
+ * @author rr
+ * @author codex
+ * @since 2026-02-03
  */
 @Data
 @Builder
@@ -16,4 +22,3 @@ public class UserProfilePatchVO {
     private String nickname;
     private String avatarUrl;
 }
-

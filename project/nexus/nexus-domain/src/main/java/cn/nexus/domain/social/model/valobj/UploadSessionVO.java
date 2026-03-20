@@ -7,6 +7,9 @@ import lombok.NoArgsConstructor;
 
 /**
  * 上传会话信息。
+ *
+ * @author {$authorName}
+ * @since 2025-12-26
  */
 @Data
 @Builder

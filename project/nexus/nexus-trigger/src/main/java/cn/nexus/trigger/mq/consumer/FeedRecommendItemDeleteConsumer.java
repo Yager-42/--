@@ -14,8 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * 推荐 Item 删除消费者：PostDeletedEvent -> deleteItem。
  *
- * <p>best-effort：失败只打日志，不阻断主链路。</p>
- *
+ * @author rr
  * @author codex
  * @since 2026-01-26
  */
@@ -30,6 +29,11 @@ public class FeedRecommendItemDeleteConsumer {
     private final ReliableMqConsumerRecordService consumerRecordService;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 消费删帖事件并同步删除推荐系统里的 Item。
+     *
+     * @param event 删帖事件。 {@link PostDeletedEvent}
+     */
     @RabbitListener(queues = FeedRecommendItemMqConfig.Q_FEED_RECOMMEND_ITEM_DELETE, containerFactory = "reliableMqListenerContainerFactory")
     public void onMessage(PostDeletedEvent event) {
         if (event == null || event.getPostId() == null || event.getEventId() == null || event.getEventId().isBlank()) {

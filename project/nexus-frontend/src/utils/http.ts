@@ -4,9 +4,14 @@ import type { ApiResponse } from '@/api/types';
 import { useAuthStore } from '@/store/auth';
 import router from '@/router';
 
+const rawBaseURL = import.meta.env.VITE_API_BASE_URL?.trim();
+const baseURL = rawBaseURL && rawBaseURL.length > 0
+  ? rawBaseURL.replace(/\/+$/, '')
+  : '/api/v1';
+
 // Create a singleton axios instance
 const http = axios.create({
-  baseURL: 'http://localhost:8080/api/v1',
+  baseURL,
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json'

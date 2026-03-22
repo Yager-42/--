@@ -1,0 +1,8 @@
+.git
+.idea
+docs
+_removed_friend
+**/target
+**/*.iml
+*.log
+AGENTS.md

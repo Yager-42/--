@@ -430,10 +430,14 @@ public class ReactionLikeService implements IReactionLikeService {
 
     private void publishNotifyLikeAdded(String requestId, Long fromUserId, ReactionTargetVO target) {
         try {
+            // ReliableMqOutbox 的 event_id 是全局唯一：同一个 requestId 可能同时触发多条业务消息（LikeUnlike + Notify）。
+            // 如果复用 requestId 作为 eventId，会导致第二条消息被 INSERT IGNORE 静默丢弃。
+            String rid = requestId == null ? "" : requestId.trim();
+            String eventId = rid.isBlank() ? ("notify:like:" + socialIdPort.nextId()) : ("notify:like:" + rid);
             InteractionNotifyEvent event = new InteractionNotifyEvent();
             event.setEventType(EventType.LIKE_ADDED);
-            event.setEventId(requestId);
-            event.setRequestId(requestId);
+            event.setEventId(eventId);
+            event.setRequestId(rid.isBlank() ? null : rid);
             event.setFromUserId(fromUserId);
             event.setTargetType(target == null || target.getTargetType() == null ? null : target.getTargetType().getCode());
             event.setTargetId(target == null ? null : target.getTargetId());
@@ -452,8 +456,11 @@ public class ReactionLikeService implements IReactionLikeService {
             return;
         }
         try {
+            // unlike 与 recommend feedback 是两条独立消息：避免与 LikeUnlike 的 outbox eventId 冲突。
+            String rid = requestId == null ? "" : requestId.trim();
+            String eventId = rid.isBlank() ? ("recommend:unlike:" + socialIdPort.nextId()) : ("recommend:unlike:" + rid);
             RecommendFeedbackEvent event = new RecommendFeedbackEvent();
-            event.setEventId(requestId);
+            event.setEventId(eventId);
             event.setFromUserId(fromUserId);
             event.setPostId(target.getTargetId());
             event.setFeedbackType("unlike");

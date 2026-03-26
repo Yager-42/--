@@ -62,8 +62,8 @@
           AND reaction_type = #{reactionType}
           <if test="cursorTime != null">
               AND (
-                update_time < #{cursorTime}
-                OR (update_time = #{cursorTime} AND user_id < #{cursorUserId})
+                update_time &lt; #{cursorTime}
+                OR (update_time = #{cursorTime} AND user_id &lt; #{cursorUserId})
               )
           </if>
         ORDER BY update_time DESC, user_id DESC

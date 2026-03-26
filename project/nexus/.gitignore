@@ -3,3 +3,6 @@
 
 # IDE files (already under .idea, keep for safety)
 .idea
+
+# Local runtime logs
+nexus-app/logs/

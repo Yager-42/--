@@ -8,6 +8,7 @@ import cn.nexus.types.event.PostPublishedEvent;
 import cn.nexus.types.event.PostSummaryGenerateEvent;
 import cn.nexus.types.event.PostUpdatedEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import java.util.Date;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -45,7 +46,14 @@ public class ContentEventOutboxPort implements IContentEventOutboxPort {
 
     private final IContentEventOutboxDao outboxDao;
     private final RabbitTemplate rabbitTemplate;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
+
+    @PostConstruct
+    void init() {
+        // 事件基类包含 java.time.Instant 字段，默认 ObjectMapper 可能无法反序列化。
+        // 这里显式加载模块，避免 outbox 发布与 MQ 消费链路因 occurredAt 失败。
+        objectMapper.findAndRegisterModules();
+    }
 
     /**
      * 保存“内容已发布”事件到 Outbox。

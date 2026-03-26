@@ -1,5 +1,6 @@
 package cn.nexus.trigger.mq.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
@@ -81,8 +82,9 @@ public class FeedFanoutConfig {
      * @return JSON MessageConverter {@link MessageConverter}
      */
     @Bean
-    public MessageConverter messageConverter() {
-        Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter();
+    public MessageConverter messageConverter(ObjectMapper objectMapper) {
+        ObjectMapper mapper = objectMapper.copy().findAndRegisterModules();
+        Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter(mapper);
         DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
         typeMapper.setTrustedPackages("*");
         converter.setJavaTypeMapper(typeMapper);

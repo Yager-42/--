@@ -3,11 +3,11 @@ package cn.nexus.infrastructure.adapter.social.port;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.model.valobj.ReactionApplyResultVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import cn.nexus.infrastructure.config.HotKeyStoreBridge;
 import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDao;
 import cn.nexus.infrastructure.support.SingleFlight;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -48,6 +48,7 @@ public class ReactionCachePort implements IReactionCachePort {
 
     private final StringRedisTemplate stringRedisTemplate;
     private final IInteractionReactionCountDao interactionReactionCountDao;
+    private final HotKeyStoreBridge hotKeyStoreBridge;
 
     /**
      * 只缓存 count：热点读走 L1，短 TTL。
@@ -476,7 +477,7 @@ public class ReactionCachePort implements IReactionCachePort {
 
     private boolean isHotKeySafe(String hotkey) {
         try {
-            return JdHotKeyStore.isHotKey(hotkey);
+            return hotKeyStoreBridge.isHotKey(hotkey);
         } catch (Exception e) {
             // 外部依赖不可用时，热点治理直接关闭（不影响主链路）。
             log.warn("jd-hotkey isHotKey failed, hotkey={}", hotkey, e);

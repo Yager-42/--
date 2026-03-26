@@ -8,12 +8,12 @@ import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
+import cn.nexus.infrastructure.config.HotKeyStoreBridge;
 import cn.nexus.infrastructure.config.SocialCacheHotTtlProperties;
 import cn.nexus.infrastructure.support.SingleFlight;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
 import cn.nexus.infrastructure.dao.social.IContentDraftDao;
 import cn.nexus.infrastructure.dao.social.IContentHistoryDao;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
@@ -68,6 +68,7 @@ public class ContentRepository implements IContentRepository {
     private final ObjectMapper objectMapper;
     private final ObjectProvider<IContentCacheEvictPort> contentCacheEvictPortProvider;
     private final SocialCacheHotTtlProperties socialCacheHotTtlProperties;
+    private final HotKeyStoreBridge hotKeyStoreBridge;
 
     private static final String HOTKEY_PREFIX = "post__";
     private static final int L1_MAX_SIZE = 100_000;
@@ -268,6 +269,18 @@ public class ContentRepository implements IContentRepository {
             tryExtendHotCacheTtl(postId, post);
         }
         return post == null ? null : copyPost(post);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ContentPostEntity findPostBypassCache(Long postId) {
+        if (postId == null) {
+            return null;
+        }
+        ContentPostEntity rebuilt = toPostEntity(contentPostDao.selectById(postId));
+        fillPostTypes(rebuilt == null ? List.of() : List.of(rebuilt));
+        fillPostContent(rebuilt == null ? List.of() : List.of(rebuilt));
+        return rebuilt;
     }
 
     /**
@@ -1036,7 +1049,7 @@ public class ContentRepository implements IContentRepository {
 
     private boolean isHotKeySafe(String hotkey) {
         try {
-            return JdHotKeyStore.isHotKey(hotkey);
+            return hotKeyStoreBridge.isHotKey(hotkey);
         } catch (Exception e) {
             // 澶栭儴渚濊禆涓嶅彲鐢ㄦ椂锛岀儹鐐规不鐞嗙洿鎺ュ叧闂紙涓嶅奖鍝嶄富閾捐矾锛夈€?
             log.warn("jd-hotkey isHotKey failed, hotkey={}", hotkey, e);

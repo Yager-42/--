@@ -26,7 +26,7 @@
                update_time AS updateTime
         FROM reliable_mq_outbox
         WHERE status IN ('PENDING', 'RETRY_PENDING')
-          AND next_retry_at <= #{now}
+          AND next_retry_at &lt;= #{now}
         ORDER BY id ASC
         LIMIT #{limit}
     </select>

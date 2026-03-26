@@ -36,6 +36,17 @@ public interface IContentRepository {
     void replacePostTypes(Long postId, List<String> postTypes);
 
     ContentPostEntity findPost(Long postId);
+
+    /**
+     * 绕过 L1/Redis 缓存，直接从主库 + KV 回源查询帖子完整信息。
+     *
+     * <p>用于 MQ 消费/索引等“必须读到最新提交值”的链路，避免缓存乱序或延迟导致写错索引。</p>
+     *
+     * @param postId 帖子 ID
+     * @return 帖子实体（不存在则返回 {@code null}）
+     */
+    ContentPostEntity findPostBypassCache(Long postId);
+
     ContentPostEntity findPostForUpdate(Long postId);
     ContentPostEntity findPostMeta(Long postId);
 

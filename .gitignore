@@ -6,5 +6,8 @@
 
 # Local tooling (do not commit binaries)
 .codex/tools/
+.codex/tmp/
+.gitconfig-codex
+META-INF/
 
 project/nexus-frontend/node_modules

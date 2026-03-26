@@ -103,8 +103,8 @@ public class SearchIndexConsumer {
 
     private void handleUpsert(Long postId) {
         long startNs = System.nanoTime();
-        // 每次都先回内容主库拿真值；只要帖子不再可索引，就主动让索引侧收敛为删除状态。
-        ContentPostEntity post = contentRepository.findPost(postId);
+        // 消费链路必须读到“最新提交值”，否则可能把旧缓存写回索引。
+        ContentPostEntity post = contentRepository.findPostBypassCache(postId);
         if (!indexable(post)) {
             handleSoftDelete(postId, post == null ? "POST_NOT_FOUND" : "NOT_INDEXABLE");
             return;

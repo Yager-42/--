@@ -31,8 +31,7 @@
     <delete id="deleteOlderThan">
         DELETE FROM user_event_outbox
         WHERE status = #{status}
-          AND update_time < #{before}
+          AND update_time &lt; #{before}
     </delete>
 
 </mapper>
-

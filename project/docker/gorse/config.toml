@@ -1,0 +1,55 @@
+[database]
+cache_store = "redis://redis:6379/0"
+data_store = "mysql://root:root@tcp(mysql:3306)/gorse?charset=utf8mb4&parseTime=true"
+
+[master]
+port = 8086
+host = "0.0.0.0"
+http_port = 8088
+http_host = "0.0.0.0"
+dashboard_user_name = ""
+dashboard_password = ""
+admin_api_key = ""
+
+[server]
+default_n = 20
+api_key = ""
+auto_insert_user = true
+auto_insert_item = true
+cache_expire = "10s"
+
+[recommend]
+cache_size = 100
+cache_expire = "24h"
+
+[recommend.data_source]
+positive_feedback_types = ["read", "like"]
+read_feedback_types = ["read"]
+
+[recommend.popular]
+popular_window = "720h"
+
+[[recommend.non-personalized]]
+name = "latest"
+score = "item.Timestamp.Unix()"
+
+[[recommend.non-personalized]]
+name = "trending"
+score = "(count(feedback, .FeedbackType == 'like') * 3 + count(feedback, .FeedbackType == 'read') + 1) / ((now() - item.Timestamp).Seconds() + 2)^0.5"
+
+[[recommend.item-to-item]]
+name = "similar"
+type = "tags"
+column = "item.Labels"
+
+[recommend.offline]
+enable_latest_recommend = true
+enable_popular_recommend = true
+enable_user_based_recommend = false
+enable_item_based_recommend = true
+enable_collaborative_recommend = false
+enable_click_through_prediction = false
+
+[recommend.online]
+fallback_recommend = ["item_based", "latest"]
+num_feedback_fallback_item_based = 10

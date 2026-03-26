@@ -1,4 +1,7 @@
 spring:
+  config:
+    activate:
+      on-profile: "!wsl"
   application:
     name: nexus
   cloud:
@@ -8,4 +11,3 @@ spring:
         file-extension: yml
         group: DEFAULT_GROUP
         refresh-enabled: true
-

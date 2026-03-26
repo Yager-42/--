@@ -3,6 +3,9 @@ spring:
     name: nexus
   profiles:
     active: dev
+    group:
+      wsl:
+        - dev
 
 server:
   port: 8080

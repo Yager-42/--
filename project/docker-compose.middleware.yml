@@ -20,6 +20,17 @@ services:
       timeout: 5s
       retries: 20
 
+  mysql-extra-init:
+    image: mysql:8.4
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./docker/mysql/init-extra.sh:/init-extra.sh:ro
+      - ./docker/hotkey/init/schema.sql:/schema/hotkey-schema.sql:ro
+    entrypoint: ["bash", "/init-extra.sh"]
+    restart: "no"
+
   redis:
     image: redis/redis-stack-server:latest
     restart: unless-stopped
@@ -32,6 +43,67 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+
+  gorse-master:
+    build:
+      context: .
+      dockerfile: docker/gorse/Dockerfile
+      target: master
+    image: nexus-gorse-master:0.5.6
+    restart: unless-stopped
+    depends_on:
+      mysql-extra-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command: >
+      -c /etc/gorse/config.toml
+      --log-path /var/log/gorse/master.log
+    ports:
+      - "8086:8086"
+      - "8088:8088"
+    volumes:
+      - ./docker/gorse/config.toml:/etc/gorse/config.toml:ro
+      - gorse-log:/var/log/gorse
+      - gorse-master-data:/var/lib/gorse
+
+  gorse-server:
+    build:
+      context: .
+      dockerfile: docker/gorse/Dockerfile
+      target: server
+    image: nexus-gorse-server:0.5.6
+    restart: unless-stopped
+    depends_on:
+      - gorse-master
+    command: >
+      --master-host gorse-master --master-port 8086
+      --http-host 0.0.0.0 --http-port 8087
+      --log-path /var/log/gorse/server.log
+    ports:
+      - "8087:8087"
+    volumes:
+      - gorse-log:/var/log/gorse
+      - gorse-server-data:/var/lib/gorse
+
+  gorse-worker:
+    build:
+      context: .
+      dockerfile: docker/gorse/Dockerfile
+      target: worker
+    image: nexus-gorse-worker:0.5.6
+    restart: unless-stopped
+    depends_on:
+      - gorse-master
+    command: >
+      --master-host gorse-master --master-port 8086
+      --http-host 0.0.0.0 --http-port 8089
+      --log-path /var/log/gorse/worker.log
+    ports:
+      - "8089:8089"
+    volumes:
+      - gorse-log:/var/log/gorse
+      - gorse-worker-data:/var/lib/gorse
 
   rabbitmq:
     build:
@@ -73,7 +145,7 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
@@ -85,6 +157,68 @@ services:
       - "9092:9092"
     volumes:
       - kafka-data:/var/lib/kafka/data
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.15
+    restart: unless-stopped
+    command: >
+      /usr/local/bin/etcd
+      --name etcd
+      --data-dir /etcd-data
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd:2379
+      --listen-peer-urls http://0.0.0.0:2380
+      --initial-advertise-peer-urls http://etcd:2380
+      --initial-cluster etcd=http://etcd:2380
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd-data:/etcd-data
+
+  hotkey-worker:
+    build:
+      context: .
+      dockerfile: docker/hotkey/Dockerfile
+      target: worker
+      additional_contexts:
+        hotkeysrc: ../.codex/tmp/l2cache-2.0.0
+    image: nexus-hotkey-worker:2.0.0
+    restart: unless-stopped
+    depends_on:
+      mysql-extra-init:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_started
+    environment:
+      etcdServer: http://etcd:2379
+      workerPath: nexus
+      nettyPort: "11111"
+      JAVA_TOOL_OPTIONS: -Dlocal.address=${HOTKEY_PUBLIC_IP:-}
+    ports:
+      - "11111:11111"
+      - "9902:9902"
+
+  hotkey-dashboard:
+    build:
+      context: .
+      dockerfile: docker/hotkey/Dockerfile
+      target: dashboard
+      additional_contexts:
+        hotkeysrc: ../.codex/tmp/l2cache-2.0.0
+    image: nexus-hotkey-dashboard:2.0.0
+    restart: unless-stopped
+    depends_on:
+      mysql-extra-init:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_started
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASS: root
+      etcdServer: http://etcd:2379
+    ports:
+      - "9901:9901"
 
   cassandra:
     image: cassandra:4.1
@@ -155,72 +289,14 @@ services:
       "
     restart: "no"
 
-  backend:
-    build:
-      context: ./nexus
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      cassandra-init:
-        condition: service_completed_successfully
-      zookeeper:
-        condition: service_started
-      kafka:
-        condition: service_started
-      elasticsearch:
-        condition: service_started
-      minio-init:
-        condition: service_completed_successfully
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_CLOUD_NACOS_CONFIG_ENABLED: "false"
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/nexus_social?useSSL=false&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: root
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_RABBITMQ_HOST: rabbitmq
-      SPRING_RABBITMQ_PORT: "5672"
-      SPRING_RABBITMQ_USERNAME: guest
-      SPRING_RABBITMQ_PASSWORD: guest
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SPRING_CASSANDRA_CONTACT_POINTS: cassandra
-      SPRING_CASSANDRA_PORT: "9042"
-      SPRING_CASSANDRA_KEYSPACE_NAME: nexus_kv
-      SPRING_CASSANDRA_LOCAL_DATACENTER: datacenter1
-      SEARCH_ES_ENDPOINTS: http://elasticsearch:9200
-      STORAGE_TYPE: minio
-      MINIO_MEDIA_ENDPOINT: http://minio:9000
-      MINIO_MEDIA_ACCESS_KEY: minioadmin
-      MINIO_MEDIA_SECRET_KEY: minioadmin
-      MINIO_MEDIA_BUCKET: nexus
-      LEAF_SNOWFLAKE_ZK_ADDRESS: zookeeper:2181
-      LEAF_SNOWFLAKE_PORT: "2222"
-      HOTKEY_APP_NAME: ""
-      HOTKEY_ETCD_SERVER: ""
-      FEED_RECOMMEND_BASE_URL: ""
-    ports:
-      - "8080:8080"
-
-  frontend:
-    build:
-      context: ./nexus-frontend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "3000:80"
-
 volumes:
   mysql-data:
+  etcd-data:
   redis-data:
+  gorse-log:
+  gorse-master-data:
+  gorse-server-data:
+  gorse-worker-data:
   rabbitmq-data:
   zookeeper-data:
   kafka-data:

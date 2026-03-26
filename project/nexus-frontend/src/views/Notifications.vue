@@ -1,20 +1,32 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { fetchNotifications, markAllAsRead, type NotificationDTO } from '@/api/notification'
+import { useAuthStore } from '@/store/auth'
 import NotificationItem from '@/components/NotificationItem.vue'
 import TheNavBar from '@/components/TheNavBar.vue'
 import TheDock from '@/components/TheDock.vue'
 
+const authStore = useAuthStore()
 const notifications = ref<NotificationDTO[]>([])
 const loading = ref(true)
 const nextCursor = ref<string | null>(null)
+const hasMore = ref(true)
 
 const loadNotifications = async () => {
+  if (!authStore.userId || loading.value || !hasMore.value) {
+    loading.value = false
+    return
+  }
+
   loading.value = true
   try {
-    const res: any = await fetchNotifications({ cursor: nextCursor.value || undefined })
-    notifications.value = [...notifications.value, ...(res.notifications || [])]
-    nextCursor.value = res.nextCursor
+    const res = await fetchNotifications({
+      userId: authStore.userId,
+      cursor: nextCursor.value || undefined
+    })
+    notifications.value = [...notifications.value, ...res.notifications]
+    nextCursor.value = res.page.nextCursor
+    hasMore.value = res.page.hasMore
   } catch (err) {
     console.error('Fetch notifications failed', err)
   } finally {
@@ -25,7 +37,11 @@ const loadNotifications = async () => {
 const handleReadAll = async () => {
   try {
     await markAllAsRead()
-    notifications.value = notifications.value.map(n => ({ ...n, isRead: true }))
+    notifications.value = notifications.value.map((item) => ({
+      ...item,
+      isRead: true,
+      hasUnread: false
+    }))
   } catch (err) {
     console.error('Mark all as read failed', err)
   }

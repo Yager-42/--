@@ -2,6 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import Home from '@/views/Home.vue'
 import Login from '@/views/Login.vue'
+import Register from '@/views/Register.vue'
+import ContentDetail from '@/views/ContentDetail.vue'
 import Profile from '@/views/Profile.vue'
 import RelationList from '@/views/RelationList.vue'
 import Notifications from '@/views/Notifications.vue'
@@ -20,6 +22,17 @@ const routes = [
     path: '/login',
     name: 'Login',
     component: Login
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: Register
+  },
+  {
+    path: '/content/:postId',
+    name: 'ContentDetail',
+    component: ContentDetail,
+    meta: { requiresAuth: true }
   },
   {
     path: '/profile',
@@ -79,7 +92,7 @@ router.beforeEach((to, from, next) => {
   
   if (to.meta.requiresAuth && !authStore.isLoggedIn()) {
     next('/login')
-  } else if (to.path === '/login' && authStore.isLoggedIn()) {
+  } else if ((to.path === '/login' || to.path === '/register') && authStore.isLoggedIn()) {
     next('/')
   } else {
     next()

@@ -16,10 +16,10 @@ const loading = ref(true)
 const loadData = async () => {
   loading.value = true
   try {
-    const res: any = type.value === 'followers' 
+    const res = type.value === 'followers' 
       ? await fetchFollowers({ userId: userId.value })
       : await fetchFollowing({ userId: userId.value })
-    items.value = res.items || []
+    items.value = res.items
   } catch (err) {
     console.error('Failed to load relation list', err)
   } finally {
@@ -33,10 +33,14 @@ const toggleTab = (newType: string) => {
 }
 
 onMounted(loadData)
-watch(() => route.params.type, (newVal) => {
-  type.value = newVal as string
-  loadData()
-})
+watch(
+  () => [route.params.type, route.params.userId],
+  ([nextType, nextUserId]) => {
+    type.value = String(nextType)
+    userId.value = String(nextUserId)
+    loadData()
+  }
+)
 </script>
 
 <template>
@@ -79,7 +83,7 @@ watch(() => route.params.type, (newVal) => {
           <p class="bio text-secondary">{{ item.bio || '还没有签名' }}</p>
         </div>
         <div class="action-cell">
-          <FollowButton :user-id="item.userId" :initial-state="item.isFollowing" />
+          <FollowButton :user-id="item.userId" :relation-state="item.relationState" />
         </div>
       </div>
     </div>

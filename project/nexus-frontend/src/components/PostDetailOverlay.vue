@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { Motion } from '@motionone/vue'
-import { fetchComments, postComment } from '@/api/interact'
+import { fetchComments, postComment, type RootCommentDisplayItem } from '@/api/interact'
 import CommentItem from './CommentItem.vue'
 
 const props = defineProps<{
@@ -13,62 +13,79 @@ const props = defineProps<{
     image: string;
   } | null;
   isOpen: boolean;
-}>();
+}>()
 
-const emit = defineEmits(['close']);
+const emit = defineEmits(['close'])
 
-const comments = ref<any[]>([]);
-const commentContent = ref('');
-const loading = ref(false);
-const sending = ref(false);
-
-const springTransition = {
-  duration: 0.6,
-  easing: [0.32, 0.72, 0, 1]
-};
+const comments = ref<RootCommentDisplayItem[]>([])
+const commentContent = ref('')
+const loading = ref(false)
+const sending = ref(false)
 
 const loadComments = async () => {
-  if (!props.post?.id) return;
-  loading.value = true;
+  if (!props.post?.id) return
+
+  loading.value = true
   try {
-    const res: any = await fetchComments(props.post.id);
-    comments.value = res.items || [];
+    const res = await fetchComments({
+      postId: props.post.id,
+      limit: 20,
+      preloadReplyLimit: 2
+    })
+    comments.value = res.pinned ? [res.pinned, ...res.items] : res.items
   } catch (err) {
-    console.error('Fetch comments failed', err);
+    console.error('Fetch comments failed', err)
   } finally {
-    loading.value = false;
+    loading.value = false
   }
 }
 
 const handlePostComment = async () => {
-  if (!commentContent.value.trim() || !props.post?.id) return;
-  
-  sending.value = true;
+  const content = commentContent.value.trim()
+  if (!content || !props.post?.id) return
+
+  sending.value = true
+  const optimisticCommentId = `overlay-${Date.now()}`
+  const optimisticComment: RootCommentDisplayItem = {
+    commentId: optimisticCommentId,
+    postId: props.post.id,
+    userId: '',
+    authorName: '我',
+    authorAvatar: '',
+    rootId: optimisticCommentId,
+    parentId: '',
+    replyToId: '',
+    content,
+    status: 0,
+    likeCount: 0,
+    replyCount: 0,
+    createTime: Date.now(),
+    repliesPreview: []
+  }
+
+  comments.value = [optimisticComment, ...comments.value]
+  commentContent.value = ''
+
   try {
-    const newComment = {
-      authorName: '我',
-      content: commentContent.value,
-      createTime: Date.now()
-    };
-    
     await postComment({
       postId: props.post.id,
-      content: commentContent.value
-    });
-    
-    // Optimistic Update
-    comments.value = [newComment, ...comments.value];
-    commentContent.value = '';
+      content
+    })
+    await loadComments()
   } catch (err) {
-    console.error('Post comment failed', err);
+    console.error('Post comment failed', err)
+    comments.value = comments.value.filter((item) => item.commentId !== optimisticCommentId)
+    commentContent.value = content
   } finally {
-    sending.value = false;
+    sending.value = false
   }
 }
 
 watch(() => props.isOpen, (newVal) => {
-  if (newVal) loadComments();
-});
+  if (newVal) {
+    loadComments()
+  }
+})
 </script>
 
 <template>
@@ -78,7 +95,6 @@ watch(() => props.isOpen, (newVal) => {
       :initial="{ y: 100, opacity: 0, scale: 0.9 }"
       :animate="{ y: 0, opacity: 1, scale: 1 }"
       :exit="{ y: 100, opacity: 0, scale: 0.9 }"
-      :transition="springTransition"
     >
       <div class="close-btn" @click="emit('close')">✕</div>
       <div class="detail-image-wrapper">
@@ -118,8 +134,8 @@ watch(() => props.isOpen, (newVal) => {
           </div>
           <div v-else class="comment-list">
             <CommentItem 
-              v-for="(c, i) in comments" 
-              :key="i" 
+              v-for="c in comments" 
+              :key="c.commentId" 
               :comment="c" 
             />
           </div>

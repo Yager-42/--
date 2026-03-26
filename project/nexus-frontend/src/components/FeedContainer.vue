@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useFeedStore } from '@/store/feed'
 import PostCard from './PostCard.vue'
+import type { FeedCardViewModel } from '@/api/feed'
 
 const feedStore = useFeedStore()
 const containerRef = ref<HTMLElement | null>(null)
@@ -18,7 +19,7 @@ const onScroll = () => {
   }
 }
 
-const onCardClick = (post: any) => {
+const onCardClick = (post: FeedCardViewModel) => {
   emit('select', post);
 }
 
@@ -41,10 +42,13 @@ onMounted(() => {
       :key="post.postId" 
       :post="{
         id: post.postId,
-        title: post.contentTitle,
-        body: post.contentBody,
-        author: post.authorName,
-        image: post.mediaUrls[0] || 'https://via.placeholder.com/800x1200'
+        title: post.title,
+        body: post.body,
+        author: post.author,
+        image: post.image,
+        isLiked: post.isLiked,
+        reactionCount: post.reactionCount,
+        commentCount: post.commentCount
       }" 
       @click="onCardClick(post)"
     />

@@ -1,58 +1,91 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { publishContent, createUploadSession } from '@/api/content'
+import { publishContent, createUploadSession, saveDraft } from '@/api/content'
+import { useAuthStore } from '@/store/auth'
 import TheNavBar from '@/components/TheNavBar.vue'
 
 const router = useRouter()
+const authStore = useAuthStore()
 const title = ref('')
 const content = ref('')
 const images = ref<string[]>([])
+const mediaIds = ref<string[]>([])
 const loading = ref(false)
 const uploadProgress = ref(0)
+const errorMsg = ref('')
+
+const uploadFile = async (file: File) => {
+  const session = await createUploadSession({
+    fileType: file.type || 'application/octet-stream',
+    fileSize: file.size
+  })
+
+  const uploadResponse = await fetch(session.uploadUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream'
+    },
+    body: file
+  })
+
+  if (!uploadResponse.ok) {
+    throw new Error('媒体上传失败')
+  }
+
+  images.value.push(URL.createObjectURL(file))
+  mediaIds.value.push(session.sessionId)
+}
 
 const handleFileSelect = async (e: Event) => {
   const files = (e.target as HTMLInputElement).files
   if (!files || files.length === 0) return
   
-  // Simulated upload flow for prototype
   loading.value = true
+  errorMsg.value = ''
   uploadProgress.value = 10
   
   try {
-    // 1. Create session (Mocked call)
-    await createUploadSession({ fileType: 'image/jpeg', fileSize: files[0].size })
-    
-    // 2. Simulate progress
-    const timer = setInterval(() => {
-      uploadProgress.value += 20
-      if (uploadProgress.value >= 100) {
-        clearInterval(timer)
-        images.value.push(URL.createObjectURL(files[0]))
-        loading.value = false
-        uploadProgress.value = 0
-      }
-    }, 200)
+    uploadProgress.value = 30
+    await uploadFile(files[0])
+    uploadProgress.value = 100
   } catch (err) {
     console.error('Upload failed', err)
+    errorMsg.value = err instanceof Error ? err.message : '上传失败'
+  } finally {
     loading.value = false
+    uploadProgress.value = 0
   }
 }
 
 const onPublish = async () => {
-  if (!content.value) return
+  if (!content.value.trim()) {
+    errorMsg.value = '请输入正文内容'
+    return
+  }
   
   loading.value = true
+  errorMsg.value = ''
   try {
+    const draft = await saveDraft({
+      userId: authStore.userId || undefined,
+      title: title.value.trim(),
+      contentText: content.value.trim(),
+      mediaIds: mediaIds.value
+    })
+
     await publishContent({
-      title: title.value,
-      text: content.value,
-      mediaInfo: JSON.stringify(images.value),
+      postId: draft.draftId,
+      userId: authStore.userId || undefined,
+      title: title.value.trim(),
+      text: content.value.trim(),
+      mediaInfo: JSON.stringify(mediaIds.value),
       visibility: 'PUBLIC'
     })
     router.push('/')
   } catch (err) {
     console.error('Publish failed', err)
+    errorMsg.value = err instanceof Error ? err.message : '发布失败'
   } finally {
     loading.value = false
   }
@@ -66,12 +99,13 @@ const onPublish = async () => {
       <span class="page-title">撰写内容</span>
       <button 
         class="publish-btn" 
-        :disabled="!content || loading"
+        :disabled="!content.trim() || loading"
         @click="onPublish"
       >发布</button>
     </nav>
 
     <div class="editor-container">
+      <p v-if="errorMsg" class="error-banner">{{ errorMsg }}</p>
       <input 
         v-model="title" 
         type="text" 
@@ -87,7 +121,13 @@ const onPublish = async () => {
       <div class="media-section">
         <div v-for="(img, i) in images" :key="i" class="image-preview">
           <img :src="img" />
-          <div class="remove-btn" @click="images.splice(i, 1)">✕</div>
+          <div
+            class="remove-btn"
+            @click="
+              images.splice(i, 1);
+              mediaIds.splice(i, 1)
+            "
+          >✕</div>
         </div>
         
         <label v-if="images.length < 9" class="upload-btn">
@@ -150,6 +190,12 @@ const onPublish = async () => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.error-banner {
+  color: #ff3b30;
+  font-size: 14px;
+  margin: 0;
 }
 
 .title-input {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchSearch } from '@/api/search'
+import { fetchSearch, type SearchResultCardViewModel } from '@/api/search'
 import TheNavBar from '@/components/TheNavBar.vue'
 import TheDock from '@/components/TheDock.vue'
 import PostCard from '@/components/PostCard.vue'
@@ -10,15 +10,20 @@ const route = useRoute()
 const router = useRouter()
 
 const keyword = ref(route.query.q as string || '')
-const results = ref<any[]>([])
+const results = ref<SearchResultCardViewModel[]>([])
 const loading = ref(true)
 
 const performSearch = async () => {
-  if (!keyword.value) return
+  if (!keyword.value) {
+    results.value = []
+    loading.value = false
+    return
+  }
+
   loading.value = true
   try {
-    const res: any = await fetchSearch({ keyword: keyword.value })
-    results.value = res.items || []
+    const res = await fetchSearch({ q: keyword.value })
+    results.value = res.items
   } catch (err) {
     console.error('Search failed', err)
   } finally {
@@ -28,12 +33,12 @@ const performSearch = async () => {
 
 onMounted(performSearch)
 watch(() => route.query.q, (newVal) => {
-  keyword.value = newVal as string
+  keyword.value = typeof newVal === 'string' ? newVal : ''
   performSearch()
 })
 
-const onSelectPost = (post: any) => {
-  // Navigation logic to post detail (already handled by PostCard context if needed)
+const onSelectPost = (post: SearchResultCardViewModel) => {
+  router.push(`/content/${post.id}`)
 }
 </script>
 
@@ -59,13 +64,15 @@ const onSelectPost = (post: any) => {
         <!-- 这里可以根据后端返回的类型区分展示用户或帖子 -->
         <PostCard 
           v-for="item in results" 
-          :key="item.postId" 
+          :key="item.id" 
           :post="{
-            id: item.postId,
-            title: item.contentTitle,
-            body: item.contentBody,
-            author: item.authorName,
-            image: item.mediaUrls[0] || 'https://via.placeholder.com/800x1200'
+            id: item.id,
+            title: item.title,
+            body: item.body,
+            author: item.author,
+            image: item.image,
+            isLiked: item.isLiked,
+            reactionCount: item.reactionCount
           }" 
           @click="onSelectPost(item)"
         />

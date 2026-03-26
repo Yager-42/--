@@ -1,34 +1,50 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { loginWithPassword } from '@/api/auth'
 
+const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
-const account = ref('')
+const phone = ref('')
 const password = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
+const successMsg = ref('')
+
+onMounted(() => {
+  const phoneQuery = route.query.phone
+  if (typeof phoneQuery === 'string') {
+    phone.value = phoneQuery
+  }
+
+  if (route.query.registered === '1') {
+    successMsg.value = '注册成功，请直接登录'
+  }
+})
 
 const handleLogin = async () => {
-  if (!account.value || !password.value) return
+  if (!phone.value.trim() || !password.value.trim()) {
+    errorMsg.value = '请输入手机号和密码'
+    return
+  }
   
   loading.value = true
   errorMsg.value = ''
+  successMsg.value = ''
   
   try {
-    const res: any = await loginWithPassword({
-      account: account.value,
+    const res = await loginWithPassword({
+      phone: phone.value.trim(),
       password: password.value
     })
     
-    // Save token and navigate
-    authStore.setToken(res.token)
+    authStore.setToken(res.token, res.userId)
     router.push('/')
-  } catch (err: any) {
-    errorMsg.value = err.message || '登录失败，请检查账号密码'
+  } catch (err: unknown) {
+    errorMsg.value = err instanceof Error ? err.message : '登录失败，请检查账号密码'
   } finally {
     loading.value = false
   }
@@ -45,9 +61,9 @@ const handleLogin = async () => {
       <div class="form-section">
         <div class="input-group">
           <input 
-            v-model="account" 
+            v-model="phone" 
             type="text" 
-            placeholder="手机号 / 邮箱 / 账号" 
+            placeholder="请输入手机号" 
             class="apple-input"
           />
         </div>
@@ -62,6 +78,7 @@ const handleLogin = async () => {
         </div>
         
         <p v-if="errorMsg" class="error-text">{{ errorMsg }}</p>
+        <p v-if="successMsg" class="success-text">{{ successMsg }}</p>
         
         <button 
           class="apple-btn" 
@@ -75,7 +92,7 @@ const handleLogin = async () => {
       
       <div class="footer-links">
         <span class="text-secondary">没有账号？</span>
-        <a href="#" class="link">立即注册</a>
+        <button class="link link-btn" @click="router.push('/register')">立即注册</button>
       </div>
     </div>
   </div>
@@ -167,6 +184,12 @@ const handleLogin = async () => {
   margin-top: -8px;
 }
 
+.success-text {
+  color: #34c759;
+  font-size: 14px;
+  margin-top: -8px;
+}
+
 .footer-links {
   margin-top: 40px;
   font-size: 15px;
@@ -176,6 +199,14 @@ const handleLogin = async () => {
   color: var(--apple-accent);
   text-decoration: none;
   font-weight: 500;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
 }
 
 /* Loading spinner */

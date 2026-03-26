@@ -1,26 +1,50 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { followUser, unfollowUser } from '@/api/relation'
+import { useAuthStore } from '@/store/auth'
+import type { RelationState } from '@/api/types'
 
 const props = defineProps<{
   userId: string;
-  initialState?: boolean;
+  relationState?: RelationState;
 }>();
 
-const isFollowing = ref(props.initialState || false);
+const authStore = useAuthStore();
+const currentState = ref<RelationState>(props.relationState ?? 'UNKNOWN');
 const loading = ref(false);
+const isDisabled = computed(() => {
+  return loading.value || currentState.value === 'UNKNOWN' || !authStore.userId;
+});
+const buttonText = computed(() => {
+  if (currentState.value === 'UNKNOWN') {
+    return '状态未知';
+  }
+  return currentState.value === 'FOLLOWING' ? '已关注' : '关注';
+});
+
+watch(
+  () => props.relationState,
+  (value) => {
+    currentState.value = value ?? 'UNKNOWN';
+  }
+);
 
 const toggleFollow = async () => {
-  if (loading.value) return;
+  if (isDisabled.value || !authStore.userId) return;
   
   loading.value = true;
   try {
-    if (isFollowing.value) {
-      await unfollowUser(props.userId);
-      isFollowing.value = false;
+    const payload = {
+      sourceId: authStore.userId,
+      targetId: props.userId
+    };
+
+    if (currentState.value === 'FOLLOWING') {
+      await unfollowUser(payload);
+      currentState.value = 'NOT_FOLLOWING';
     } else {
-      await followUser(props.userId);
-      isFollowing.value = true;
+      await followUser(payload);
+      currentState.value = 'FOLLOWING';
     }
   } catch (err) {
     console.error('Follow operation failed', err);
@@ -33,12 +57,12 @@ const toggleFollow = async () => {
 <template>
   <button 
     class="follow-btn" 
-    :class="{ 'following': isFollowing }"
-    :disabled="loading"
+    :class="{ 'following': currentState === 'FOLLOWING', 'disabled': currentState === 'UNKNOWN' }"
+    :disabled="isDisabled"
     @click="toggleFollow"
   >
     <span v-if="loading" class="spinner-small"></span>
-    <span v-else>{{ isFollowing ? '已关注' : '关注' }}</span>
+    <span v-else>{{ buttonText }}</span>
   </button>
 </template>
 
@@ -61,6 +85,11 @@ const toggleFollow = async () => {
 
 .follow-btn:active {
   transform: scale(0.96);
+}
+
+.follow-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .follow-btn.following {

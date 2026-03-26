@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchMyProfile, fetchUserProfile, type UserDTO } from '@/api/user'
-import { fetchUserRiskStatus } from '@/api/risk'
+import { fetchProfilePage, type ProfilePageViewModel } from '@/api/user'
 import { useAuthStore } from '@/store/auth'
 import FollowButton from '@/components/FollowButton.vue'
 import TheNavBar from '@/components/TheNavBar.vue'
@@ -12,28 +11,28 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
-const user = ref<UserDTO | null>(null)
+const user = ref<ProfilePageViewModel | null>(null)
 const loading = ref(true)
-const riskStatus = ref<string>('NORMAL')
-const isMyProfile = computed(() => !route.params.userId || route.params.userId === authStore.userInfo?.userId)
+const routeUserId = computed(() => typeof route.params.userId === 'string' ? route.params.userId : null)
+const isMyProfile = computed(() => !routeUserId.value || routeUserId.value === authStore.userId)
 
 const loadProfile = async () => {
   loading.value = true
   try {
-    const userId = route.params.userId as string
-    const res: any = userId ? await fetchUserProfile(userId) : await fetchMyProfile()
+    const targetUserId = routeUserId.value ?? authStore.userId
+    if (!targetUserId) {
+      throw new Error('缺少用户标识，无法加载个人页')
+    }
+
+    const res = await fetchProfilePage(targetUserId)
     user.value = res
-    
-    if (isMyProfile.value) {
-      try {
-        const risk: any = await fetchUserRiskStatus()
-        riskStatus.value = risk.status
-      } catch (e) {
-        console.warn('Risk status check failed')
-      }
+
+    if (!routeUserId.value) {
+      authStore.setUserId(res.userId)
     }
   } catch (err) {
     console.error('Failed to load profile', err)
+    user.value = null
   } finally {
     loading.value = false
   }
@@ -52,7 +51,7 @@ watch(() => route.params.userId, loadProfile)
     </div>
     
     <div v-else-if="user" class="profile-content">
-      <div v-if="riskStatus !== 'NORMAL'" class="risk-banner" @click="router.push('/settings/risk')">
+      <div v-if="user.riskStatus !== 'NORMAL'" class="risk-banner" @click="router.push('/settings/risk')">
         <span class="warning-icon">⚠️</span>
         <span class="risk-text">账号安全存在异常，点击查看详情并申诉</span>
         <span class="arrow">›</span>
@@ -66,7 +65,11 @@ watch(() => route.params.userId, loadProfile)
         <p class="text-body text-secondary bio">{{ user.bio || '还没有填写个人签名' }}</p>
         
         <div class="action-bar">
-          <FollowButton v-if="!isMyProfile" :user-id="user.userId" />
+          <FollowButton
+            v-if="!isMyProfile"
+            :user-id="user.userId"
+            :relation-state="user.relationState"
+          />
           <button v-else class="apple-btn-secondary">编辑资料</button>
         </div>
       </div>

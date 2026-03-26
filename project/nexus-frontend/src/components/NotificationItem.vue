@@ -9,16 +9,21 @@ const props = defineProps<{
 const router = useRouter();
 
 const handleClick = async () => {
-  if (!props.notification.isRead) {
+  if (props.notification.hasUnread) {
     try {
       await markAsRead(props.notification.notificationId);
       props.notification.isRead = true;
+      props.notification.hasUnread = false;
     } catch (err) {
       console.error('Mark as read failed', err);
     }
   }
   
-  // Navigation logic
+  if (props.notification.type === 'FOLLOW') {
+    router.push(`/user/${props.notification.senderId}`);
+    return;
+  }
+
   if (props.notification.targetId) {
     router.push(`/content/${props.notification.targetId}`);
   }
@@ -44,7 +49,7 @@ const getActionIcon = (type: string) => {
 </script>
 
 <template>
-  <div class="notification-item" :class="{ 'unread': !notification.isRead }" @click="handleClick">
+  <div class="notification-item" :class="{ 'unread': notification.hasUnread }" @click="handleClick">
     <div class="unread-dot"></div>
     <img :src="notification.senderAvatar || 'https://via.placeholder.com/80'" class="sender-avatar" />
     <div class="content">

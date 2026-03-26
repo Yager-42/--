@@ -70,7 +70,7 @@ class SearchIndexConsumerTest {
                 Mockito.mock(IUserBaseRepository.class),
                 Mockito.mock(IReactionRepository.class),
                 Mockito.mock(SearchDocumentAssembler.class));
-        when(contentRepository.findPost(101L)).thenReturn(ContentPostEntity.builder()
+        when(contentRepository.findPostBypassCache(101L)).thenReturn(ContentPostEntity.builder()
                 .postId(101L)
                 .userId(9L)
                 .status(ContentPostStatusEnumVO.PUBLISHED.getCode())
@@ -115,7 +115,7 @@ class SearchIndexConsumerTest {
                 .visibility(ContentPostVisibilityEnumVO.PUBLIC.getCode())
                 .publishTime(20L)
                 .build();
-        when(contentRepository.findPost(202L)).thenReturn(post);
+        when(contentRepository.findPostBypassCache(202L)).thenReturn(post);
         when(userBaseRepository.listByUserIds(List.of(20L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(20L).nickname("author").avatarUrl("avatar").build()));
         when(reactionRepository.getCount(any(ReactionTargetVO.class))).thenReturn(-5L);

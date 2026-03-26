@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
+import cn.nexus.infrastructure.config.HotKeyStoreBridge;
 import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDao;
 import java.util.List;
 import java.util.Map;
@@ -28,9 +29,10 @@ class ReactionCachePortTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         IInteractionReactionCountDao countDao = Mockito.mock(IInteractionReactionCountDao.class);
+        HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
 
-        ReactionCachePort port = new ReactionCachePort(stringRedisTemplate, countDao);
+        ReactionCachePort port = new ReactionCachePort(stringRedisTemplate, countDao, hotKeyStoreBridge);
         ReactionTargetVO first = target(1L);
         ReactionTargetVO second = target(2L);
         ReactionTargetVO third = target(3L);

@@ -8,10 +8,27 @@ import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 class ContentHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
+
+    @Test
+    void uploadSession_shouldReturnPresignedUrlAndSessionId() throws Exception {
+        TestSession author = registerAndLoginSession("content-upload");
+
+        JsonNode upload = assertSuccess(postJson("/api/v1/media/upload/session", JsonNodeFactory.instance.objectNode()
+                .put("fileType", "image/png")
+                .put("fileSize", 1024L)
+                .put("crc32", "abcd1234"), author.token()));
+
+        assertThat(upload.path("uploadUrl").asText()).isNotBlank();
+        assertThat(upload.path("token").asText()).isNotBlank();
+        assertThat(upload.path("sessionId").asText()).isNotBlank();
+    }
 
     @Test
     void draftPublishEditHistoryRollbackAndDelete_shouldRunThroughRealChain() throws Exception {
@@ -236,6 +253,86 @@ class ContentHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
             assertThat(audit.path("status").asInt()).isEqualTo(3);
             assertThat(audit.path("isCanceled").asInt()).isEqualTo(1);
         });
+    }
+
+    @Test
+    void detail_highConcurrencySmoke_shouldRemainAvailable() throws Exception {
+        TestSession author = registerAndLoginSession("content-detail-load");
+        long postId = seedPublishedPost(author.userId(), "detail-title-" + uniqueUuid().substring(0, 6), "detail-text-" + uniqueUuid());
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            JsonNode detail = assertSuccess(getJson("/api/v1/content/" + postId, author.token()));
+            assertThat(detail.path("postId").asLong()).isEqualTo(postId);
+            assertThat(detail.path("authorId").asLong()).isEqualTo(author.userId());
+        });
+
+        ConcurrentRunResult result = runConcurrentRequests(120, 24, 60, () -> {
+            JsonNode detail = assertSuccess(getJson("/api/v1/content/" + postId, author.token()));
+            assertThat(detail.path("postId").asLong()).isEqualTo(postId);
+        });
+
+        printLoadSmoke("content-detail", result);
+        assertThat(result.failure()).isEqualTo(0);
+        assertThat(result.success()).isEqualTo(result.totalRequests());
+    }
+
+    @Test
+    void draftCreate_highConcurrencySmoke_shouldKeepWriteAvailability() throws Exception {
+        TestSession author = registerAndLoginSession("content-load-author");
+        String titlePrefix = "content-load-" + uniqueUuid().substring(0, 6) + "-";
+        int beforeCount = countContentDraftByTitlePrefix(titlePrefix);
+
+        ConcurrentRunResult result = runConcurrentRequests(60, 12, 60, () -> {
+            JsonNode data = assertSuccess(putJson("/api/v1/content/draft", JsonNodeFactory.instance.objectNode()
+                    .put("title", titlePrefix + uniqueUuid().substring(0, 8))
+                    .put("contentText", "load-text-" + uniqueUuid()), author.token()));
+            assertThat(data.path("draftId").asLong()).isPositive();
+        });
+
+        printLoadSmoke("content-draft-create", result);
+        assertThat(result.failure()).isEqualTo(0);
+        assertThat(result.success()).isEqualTo(result.totalRequests());
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(countContentDraftByTitlePrefix(titlePrefix)).isEqualTo(beforeCount + result.totalRequests()));
+    }
+
+    private long seedPublishedPost(long authorId, String title, String body) {
+        long postId = uniqueId();
+        java.util.Date now = new java.util.Date();
+        String contentUuid = uniqueUuid();
+        cn.nexus.infrastructure.dao.social.po.ContentPostPO post = new cn.nexus.infrastructure.dao.social.po.ContentPostPO();
+        post.setPostId(postId);
+        post.setUserId(authorId);
+        post.setTitle(title);
+        post.setContentUuid(contentUuid);
+        post.setSummary("content detail integration");
+        post.setSummaryStatus(1);
+        post.setMediaType(0);
+        post.setStatus(ContentPostStatusEnumVO.PUBLISHED.getCode());
+        post.setVisibility(ContentPostVisibilityEnumVO.PUBLIC.getCode());
+        post.setVersionNum(1);
+        post.setIsEdited(0);
+        post.setCreateTime(now);
+        post.setPublishTime(now);
+        contentPostDao.insert(post);
+        postContentKvPort.add(contentUuid, body);
+        return postId;
+    }
+
+    private int countContentDraftByTitlePrefix(String titlePrefix) {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement("SELECT COUNT(1) FROM content_draft WHERE title LIKE ?")) {
+            ps.setString(1, titlePrefix + "%");
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return 0;
+                }
+                return rs.getInt(1);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("count content_draft failed, titlePrefix=" + titlePrefix, e);
+        }
     }
 
     private TestSession registerAndLoginSession(String nicknamePrefix) throws Exception {

@@ -9,8 +9,14 @@ import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Date;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class CommentHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
@@ -101,6 +107,54 @@ class CommentHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
             JsonNode replies = assertSuccess(getJson("/api/v1/comment/reply/list?rootId=" + rootCommentId + "&limit=10", commenter.token()));
             assertThat(replies.path("items")).isEmpty();
         });
+    }
+
+    @Test
+    void commentCreate_highConcurrencySmoke_shouldKeepWriteConsistency() throws Exception {
+        TestSession author = registerAndLoginSession("comment-load-author");
+        long postId = seedPublishedPost(author.userId());
+        String prefix = "load-root-" + uniqueUuid().substring(0, 6) + "-";
+        int beforeRootCount = countRootComments(postId);
+        List<TestSession> commenters = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            commenters.add(registerAndLoginSession("comment-load-user-" + i));
+        }
+        AtomicInteger rr = new AtomicInteger(0);
+
+        ConcurrentRunResult result = runConcurrentRequests(80, 16, 60, () -> {
+            TestSession commenter = commenters.get(Math.floorMod(rr.getAndIncrement(), commenters.size()));
+            JsonNode created = assertSuccess(postJson("/api/v1/interact/comment", JsonNodeFactory.instance.objectNode()
+                    .put("postId", postId)
+                    .put("content", prefix + uniqueUuid().substring(0, 8)), commenter.token()));
+            assertThat(created.path("commentId").asLong()).isPositive();
+        });
+
+        printLoadSmoke("comment-create", result);
+        assertThat(result.failure()).isEqualTo(0);
+        assertThat(result.success()).isEqualTo(result.totalRequests());
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(countRootComments(postId)).isEqualTo(beforeRootCount + result.totalRequests()));
+
+        publishPendingReliableMqMessages();
+        JsonNode hot = assertSuccess(getJson("/api/v1/comment/hot?postId=" + postId + "&limit=10&preloadReplyLimit=0", commenters.get(0).token()));
+        assertThat(hot.path("items")).isNotEmpty();
+    }
+
+    private int countRootComments(long postId) {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT COUNT(1) FROM interaction_comment WHERE post_id = ? AND root_id IS NULL")) {
+            ps.setLong(1, postId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return 0;
+                }
+                return rs.getInt(1);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("count interaction_comment failed, postId=" + postId, e);
+        }
     }
 
     private long seedPublishedPost(long authorId) {

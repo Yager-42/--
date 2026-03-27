@@ -70,6 +70,10 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertThat(following.path("items"))
                 .extracting(JsonNode::toString)
                 .anySatisfy(raw -> assertThat(raw).contains("\"userId\":" + followee.userId()));
+        JsonNode followers = assertSuccess(getJson("/api/v1/relation/followers?userId=" + followee.userId() + "&limit=10", followee.token()));
+        assertThat(followers.path("items"))
+                .extracting(JsonNode::toString)
+                .anySatisfy(raw -> assertThat(raw).contains("\"userId\":" + follower.userId()));
 
         JsonNode unfollow = postJson("/api/v1/relation/unfollow", JsonNodeFactory.instance.objectNode()
                 .put("targetId", followee.userId()), follower.token());
@@ -123,6 +127,39 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                     assertThat(relationOutboxStatus(blockEventId)).isEqualTo("DONE");
                     assertThat(relationInboxStatus(String.valueOf(blockEventId))).isEqualTo("PROCESSED");
                 });
+    }
+
+    @Test
+    void follow_highConcurrencySmoke_shouldRemainIdempotent() throws Exception {
+        TestSession followee = registerAndLoginSession("followee-load");
+        TestSession follower = registerAndLoginSession("follower-load");
+
+        ensureRelationTopology();
+        ensureRelationConsumersReady();
+
+        ConcurrentRunResult result = runConcurrentRequests(100, 20, 60, () -> {
+            JsonNode follow = postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
+                    .put("targetId", followee.userId()), follower.token());
+            JsonNode data = assertSuccess(follow);
+            assertThat(data.path("status").asText()).isNotBlank();
+        });
+
+        printLoadSmoke("relation-follow", result);
+        assertThat(result.failure()).isEqualTo(0);
+        assertThat(result.success()).isEqualTo(result.totalRequests());
+
+        var stateBatchReq = JsonNodeFactory.instance.objectNode();
+        stateBatchReq.putArray("targetUserIds").add(followee.userId());
+        JsonNode stateBatch = assertSuccess(postJson("/api/v1/relation/state/batch", stateBatchReq, follower.token()));
+        assertThat(stateBatch.path("followingUserIds")).extracting(JsonNode::asLong).contains(followee.userId());
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            publishPendingRelationEvents();
+            JsonNode following = assertSuccess(getJson("/api/v1/relation/following?userId=" + follower.userId() + "&limit=10", follower.token()));
+            assertThat(following.path("items"))
+                    .extracting(JsonNode::toString)
+                    .anySatisfy(raw -> assertThat(raw).contains("\"userId\":" + followee.userId()));
+        });
     }
 
     private void ensureRelationTopology() {

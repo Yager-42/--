@@ -47,7 +47,7 @@ import java.util.Iterator;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.sql.DataSource;
 import org.apache.http.util.EntityUtils;
 import org.elasticsearch.client.Request;
@@ -62,6 +62,8 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 public abstract class RealBusinessIntegrationTestSupport {
+
+    private static final AtomicLong UNIQUE_ID_SEQ = new AtomicLong(System.currentTimeMillis() * 1000L);
 
     @MockBean
     protected ISocialIdPort socialIdPort;
@@ -220,7 +222,7 @@ public abstract class RealBusinessIntegrationTestSupport {
     }
 
     protected long uniqueId() {
-        return System.currentTimeMillis() * 1000L + ThreadLocalRandom.current().nextInt(1000);
+        return UNIQUE_ID_SEQ.incrementAndGet();
     }
 
     protected String uniqueUuid() {

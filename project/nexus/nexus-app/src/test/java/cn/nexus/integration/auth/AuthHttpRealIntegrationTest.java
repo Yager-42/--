@@ -90,4 +90,22 @@ class AuthHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertSuccess(revoke);
         assertThat(authUserRoleDao.countByUserIdAndRoleCode(targetUserId, "ADMIN")).isEqualTo(0);
     }
+
+    @Test
+    void passwordLogin_highConcurrencySmoke_shouldKeepSuccessRate() throws Exception {
+        String phone = uniquePhone();
+        String password = "Pwd@" + uniqueUuid().substring(0, 8);
+        long userId = registerUser(phone, password, "auth-load-" + uniqueUuid().substring(0, 6));
+        assertThat(userId).isPositive();
+
+        ConcurrentRunResult result = runConcurrentRequests(120, 24, 60, () -> {
+            String token = passwordLogin(phone, password);
+            assertThat(token).isNotBlank();
+        });
+
+        printLoadSmoke("auth-password-login", result);
+        assertThat(result.failure()).isEqualTo(0);
+        assertThat(result.success()).isEqualTo(result.totalRequests());
+        assertThat(authAccountDao.selectByUserId(userId).getLastLoginAt()).isNotNull();
+    }
 }

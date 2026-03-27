@@ -8,7 +8,14 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.parallel.Isolated;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -124,6 +131,94 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
         return passwordLogin(phone, password);
     }
 
+    protected ConcurrentRunResult runConcurrentRequests(int totalRequests,
+                                                        int concurrentWorkers,
+                                                        long eachTaskTimeoutSec,
+                                                        ConcurrentRequestTask task) throws Exception {
+        if (totalRequests <= 0) {
+            throw new IllegalArgumentException("totalRequests must be > 0");
+        }
+        if (concurrentWorkers <= 0) {
+            throw new IllegalArgumentException("concurrentWorkers must be > 0");
+        }
+        if (task == null) {
+            throw new IllegalArgumentException("task must not be null");
+        }
+        int workers = Math.min(totalRequests, concurrentWorkers);
+        ExecutorService pool = Executors.newFixedThreadPool(workers);
+        CountDownLatch startGate = new CountDownLatch(1);
+        List<Future<SingleRunResult>> futures = new ArrayList<>(totalRequests);
+        for (int i = 0; i < totalRequests; i++) {
+            futures.add(pool.submit(() -> {
+                startGate.await(10, TimeUnit.SECONDS);
+                long begin = System.nanoTime();
+                try {
+                    task.run();
+                    long costMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - begin);
+                    return SingleRunResult.success(costMs);
+                } catch (Throwable e) {
+                    long costMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - begin);
+                    String type = e.getClass().getSimpleName();
+                    return SingleRunResult.failure(costMs, type == null || type.isBlank() ? "ERROR" : type);
+                }
+            }));
+        }
+
+        startGate.countDown();
+
+        List<Long> latencies = new ArrayList<>(totalRequests);
+        List<String> errorTypes = new ArrayList<>();
+        int success = 0;
+        int failure = 0;
+
+        try {
+            for (Future<SingleRunResult> future : futures) {
+                SingleRunResult result = future.get(eachTaskTimeoutSec, TimeUnit.SECONDS);
+                latencies.add(result.costMs());
+                if (result.ok()) {
+                    success++;
+                } else {
+                    failure++;
+                    errorTypes.add(result.errorType());
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        latencies.sort(Long::compareTo);
+        long p95 = percentile(latencies, 0.95);
+        long p99 = percentile(latencies, 0.99);
+
+        return new ConcurrentRunResult(totalRequests, workers, success, failure, p95, p99, errorTypes);
+    }
+
+    protected void printLoadSmoke(String label, ConcurrentRunResult result) {
+        if (result == null) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("[LOAD-SMOKE][").append(label).append("]")
+                .append(" total=").append(result.totalRequests())
+                .append(", concurrent=").append(result.concurrentWorkers())
+                .append(", success=").append(result.success())
+                .append(", failure=").append(result.failure())
+                .append(", p95Ms=").append(result.p95Ms())
+                .append(", p99Ms=").append(result.p99Ms());
+        if (result.failure() > 0 && result.errorTypes() != null && !result.errorTypes().isEmpty()) {
+            sb.append(", errors=").append(result.errorTypes());
+        }
+        System.out.println(sb);
+    }
+
+    private long percentile(List<Long> sortedMs, double ratio) {
+        if (sortedMs == null || sortedMs.isEmpty()) {
+            return 0L;
+        }
+        int idx = Math.max(0, (int) Math.ceil(sortedMs.size() * ratio) - 1);
+        return sortedMs.get(idx);
+    }
+
     private String baseUrl(String path) {
         return "http://127.0.0.1:" + port + path;
     }
@@ -150,6 +245,30 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
     private void withToken(HttpRequest.Builder builder, String token) {
         if (token != null && !token.isBlank()) {
             builder.header("Authorization", "Bearer " + token);
+        }
+    }
+
+    @FunctionalInterface
+    protected interface ConcurrentRequestTask {
+        void run() throws Exception;
+    }
+
+    protected record ConcurrentRunResult(int totalRequests,
+                                         int concurrentWorkers,
+                                         int success,
+                                         int failure,
+                                         long p95Ms,
+                                         long p99Ms,
+                                         List<String> errorTypes) {
+    }
+
+    private record SingleRunResult(boolean ok, long costMs, String errorType) {
+        static SingleRunResult success(long costMs) {
+            return new SingleRunResult(true, costMs, null);
+        }
+
+        static SingleRunResult failure(long costMs, String errorType) {
+            return new SingleRunResult(false, costMs, errorType);
         }
     }
 }

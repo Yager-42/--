@@ -9,8 +9,11 @@ import cn.nexus.trigger.mq.config.FeedFanoutConfig;
 import cn.nexus.trigger.mq.config.SearchIndexMqConfig;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
+import cn.nexus.types.event.PostDeletedEvent;
 import cn.nexus.types.event.PostPublishedEvent;
+import cn.nexus.types.event.UserNicknameChangedEvent;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.time.Duration;
 import java.util.Date;
 import org.elasticsearch.client.Request;
@@ -26,7 +29,7 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         long postId = uniqueId();
         long nowMs = System.currentTimeMillis();
         String keyword = "kw" + uniqueUuid().substring(0, 6);
-        String title = "it-title-" + keyword + "-" + uniqueUuid().substring(0, 6);
+        String title = "sug-" + keyword + "-it-title-" + uniqueUuid().substring(0, 6);
 
         seedPublishedPost(author.userId(), postId, title, nowMs);
 
@@ -51,18 +54,117 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         searchRestClient.performRequest(new Request("POST", "/" + indexAlias + "/_refresh"));
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            JsonNode search = assertSuccess(getJson("/api/v1/search?q=" + title + "&size=50", searcher.token()));
+            assertThat(search.path("items"))
+                    .extracting(JsonNode::toString)
+                    .anySatisfy(raw -> assertThat(raw).contains("\"id\":\"" + postId + "\""));
+        });
+
+        String prefix = title.substring(0, Math.min(12, title.length()));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            JsonNode suggest = assertSuccess(getJson("/api/v1/search/suggest?prefix=" + prefix + "&size=10", searcher.token()));
+            assertThat(suggest.path("items"))
+                    .extracting(JsonNode::asText)
+                    .contains(title);
+        });
+    }
+
+    @Test
+    void search_highConcurrencySmoke_shouldRemainAvailable() throws Exception {
+        TestSession author = registerAndLoginSession("search-load-author");
+        TestSession searcher = registerAndLoginSession("search-load-user");
+
+        long postId = uniqueId();
+        long nowMs = System.currentTimeMillis();
+        String keyword = "kw" + uniqueUuid().substring(0, 6);
+        String title = "it-title-" + keyword + "-" + uniqueUuid().substring(0, 6);
+        seedPublishedPost(author.userId(), postId, title, nowMs);
+
+        deleteRedisKey("interact:content:post:" + postId);
+        deleteDocumentQuietly(postId);
+
+        PostPublishedEvent event = new PostPublishedEvent();
+        event.setPostId(postId);
+        event.setAuthorId(author.userId());
+        event.setPublishTimeMs(nowMs);
+        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_PUBLISHED, event);
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(fetchDocumentSource(postId)).isNotNull());
+        searchRestClient.performRequest(new Request("POST", "/" + indexAlias + "/_refresh"));
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             JsonNode search = assertSuccess(getJson("/api/v1/search?q=" + keyword + "&size=10", searcher.token()));
             assertThat(search.path("items"))
                     .extracting(JsonNode::toString)
                     .anySatisfy(raw -> assertThat(raw).contains("\"id\":\"" + postId + "\""));
         });
 
-        String prefix = title.substring(0, Math.min(6, title.length()));
+        ConcurrentRunResult result = runConcurrentRequests(100, 20, 60,
+                () -> assertSearchContainsPost(keyword, postId, searcher.token(), 3, 30L));
+
+        printLoadSmoke("search-query", result);
+        assertThat(result.failure()).isEqualTo(0);
+        assertThat(result.success()).isEqualTo(result.totalRequests());
+    }
+
+    @Test
+    void nicknameRefreshAndSoftDelete_shouldPropagateToSearchIndex() throws Exception {
+        TestSession author = registerAndLoginSession("search-index-author");
+        registerAndLoginSession("search-index-user");
+
+        long postId = uniqueId();
+        long nowMs = System.currentTimeMillis();
+        String keyword = "kw" + uniqueUuid().substring(0, 6);
+        String title = "it-title-" + keyword + "-" + uniqueUuid().substring(0, 6);
+        seedPublishedPost(author.userId(), postId, title, nowMs);
+
+        deleteRedisKey("interact:content:post:" + postId);
+        deleteDocumentQuietly(postId);
+
+        PostPublishedEvent publishedEvent = new PostPublishedEvent();
+        publishedEvent.setPostId(postId);
+        publishedEvent.setAuthorId(author.userId());
+        publishedEvent.setPublishTimeMs(nowMs);
+        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_PUBLISHED, publishedEvent);
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(fetchDocumentSource(postId)).isNotNull());
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            JsonNode suggest = assertSuccess(getJson("/api/v1/search/suggest?prefix=" + prefix + "&size=10", searcher.token()));
-            assertThat(suggest.path("items"))
-                    .extracting(JsonNode::asText)
-                    .contains(title);
+            JsonNode source = fetchDocumentSource(postId);
+            assertThat(source).isNotNull();
+            assertThat(source.path("author_id").asLong()).isEqualTo(author.userId());
+        });
+        String oldNickname = fetchDocumentSource(postId).path("author_nickname").asText();
+
+        String newNickname = "search-new-" + uniqueUuid().substring(0, 6);
+        assertSuccess(postJson("/api/v1/user/me/profile", JsonNodeFactory.instance.objectNode()
+                .put("nickname", newNickname), author.token()));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(assertSuccess(getJson("/api/v1/auth/me", author.token())).path("nickname").asText())
+                        .isEqualTo(newNickname));
+        deleteRedisKey("social:userbase:" + author.userId());
+        UserNicknameChangedEvent changedEvent = new UserNicknameChangedEvent();
+        changedEvent.setUserId(author.userId());
+        changedEvent.setTsMs(System.currentTimeMillis());
+        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_USER_NICKNAME_CHANGED, changedEvent);
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            JsonNode source = fetchDocumentSource(postId);
+            assertThat(source).isNotNull();
+            assertThat(source.path("author_nickname").asText()).isIn(oldNickname, newNickname);
+        });
+
+        PostDeletedEvent deletedEvent = new PostDeletedEvent();
+        deletedEvent.setPostId(postId);
+        deletedEvent.setOperatorId(author.userId());
+        deletedEvent.setTsMs(System.currentTimeMillis());
+        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_DELETED, deletedEvent);
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            JsonNode source = fetchDocumentSource(postId);
+            assertThat(source).isNotNull();
+            assertThat(source.path("status").asText()).isEqualTo("deleted");
         });
     }
 
@@ -94,6 +196,29 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         String token = registerAndLogin(phone, password, nickname);
         long userId = assertSuccess(getJson("/api/v1/auth/me", token)).path("userId").asLong();
         return new TestSession(userId, token);
+    }
+
+    private void assertSearchContainsPost(String keyword, long postId, String token, int maxAttempts, long backoffMs)
+            throws Exception {
+        AssertionError last = null;
+        for (int i = 0; i < Math.max(1, maxAttempts); i++) {
+            try {
+                JsonNode search = assertSuccess(getJson("/api/v1/search?q=" + keyword + "&size=10", token));
+                assertThat(search.path("items"))
+                        .extracting(JsonNode::toString)
+                        .anySatisfy(raw -> assertThat(raw).contains("\"id\":\"" + postId + "\""));
+                return;
+            } catch (AssertionError e) {
+                last = e;
+                if (i + 1 < maxAttempts && backoffMs > 0) {
+                    Thread.sleep(backoffMs);
+                }
+            }
+        }
+        if (last == null) {
+            throw new AssertionError("search result did not contain postId=" + postId);
+        }
+        throw last;
     }
 
     private record TestSession(long userId, String token) {

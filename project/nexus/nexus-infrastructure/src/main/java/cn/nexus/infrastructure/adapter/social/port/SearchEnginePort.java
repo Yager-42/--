@@ -156,17 +156,27 @@ public class SearchEnginePort implements ISearchEnginePort {
             term.put("author_id", authorId);
 
             // `update_by_query` 让昵称刷新一次命中作者全部文档，不需要先分页再逐条回写。
-            Request request = new Request("POST", "/" + indexAlias + "/_update_by_query");
-            request.addParameter("conflicts", "proceed");
-            request.addParameter("refresh", "true");
-            request.setJsonEntity(body.toString());
-            Response response = searchRestClient.performRequest(request);
-            JsonNode root = objectMapper.readTree(EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8));
-            JsonNode updated = root.get("updated");
-            return updated == null || updated.isNull() ? 0L : updated.asLong();
+            long updated = updateAuthorNicknameByQuery(body);
+            if (updated > 0L) {
+                return updated;
+            }
+
+            searchRestClient.performRequest(new Request("POST", "/" + indexAlias + "/_refresh"));
+            return updateAuthorNicknameByQuery(body);
         } catch (Exception e) {
             throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo(), e);
         }
+    }
+
+    private long updateAuthorNicknameByQuery(ObjectNode body) throws Exception {
+        Request request = new Request("POST", "/" + indexAlias + "/_update_by_query");
+        request.addParameter("conflicts", "proceed");
+        request.addParameter("refresh", "true");
+        request.setJsonEntity(body.toString());
+        Response response = searchRestClient.performRequest(request);
+        JsonNode root = objectMapper.readTree(EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8));
+        JsonNode updated = root.get("updated");
+        return updated == null || updated.isNull() ? 0L : updated.asLong();
     }
 
     private ObjectNode buildSearchRequestBody(SearchEngineQueryVO query) {

@@ -28,6 +28,7 @@
         <redisson.version>3.26.0</redisson.version>
         <spring-cloud.version>2023.0.1</spring-cloud.version>
         <spring-cloud-alibaba.version>2023.0.1.0</spring-cloud-alibaba.version>
+        <skip.real.it.tests>true</skip.real.it.tests>
     </properties>
 
     <dependencyManagement>
@@ -94,5 +95,57 @@
         <module>nexus-trigger</module>
         <module>nexus-app</module>
     </modules>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/*IT.java</exclude>
+                        <exclude>**/*IntegrationTest.java</exclude>
+                        <exclude>**/*RealIntegrationTest.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <skip>${skip.real.it.tests}</skip>
+                    <includes>
+                        <include>**/*IT.java</include>
+                        <include>**/*IntegrationTest.java</include>
+                        <include>**/*RealIntegrationTest.java</include>
+                    </includes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>ci-it</id>
+            <properties>
+                <skip.real.it.tests>true</skip.real.it.tests>
+            </properties>
+        </profile>
+        <profile>
+            <id>local-real-it</id>
+            <properties>
+                <skip.real.it.tests>false</skip.real.it.tests>
+            </properties>
+        </profile>
+    </profiles>
 
 </project>

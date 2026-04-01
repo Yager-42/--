@@ -56,7 +56,7 @@ public class UserEventOutboxPort implements IUserEventOutboxPort {
 
     private final IUserEventOutboxDao outboxDao;
     private final RabbitTemplate rabbitTemplate;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     /**
      * 保存昵称变更事件到 Outbox。

@@ -1,12 +1,11 @@
 package cn.nexus.integration.support;
 
-import static org.mockito.BDDMockito.given;
-
 import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
 import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
+import cn.nexus.domain.user.adapter.port.IUserEventOutboxPort;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.infrastructure.adapter.id.LeafSnowflakeIdGenerator;
 import cn.nexus.infrastructure.adapter.social.repository.CommentHotRankRepository;
@@ -28,8 +27,10 @@ import cn.nexus.infrastructure.dao.social.IUserBaseDao;
 import cn.nexus.infrastructure.dao.social.IUserPrivacyDao;
 import cn.nexus.infrastructure.dao.user.IUserEventOutboxDao;
 import cn.nexus.infrastructure.dao.user.IUserStatusDao;
+import cn.nexus.infrastructure.adapter.id.LeafSnowflakeIdGenerator;
 import cn.nexus.trigger.mq.config.FeedFanoutConfig;
 import cn.nexus.trigger.mq.config.CountPostLikeMqConfig;
+import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendFeedbackMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendItemMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendFeedbackAMqConfig;
@@ -42,7 +43,12 @@ import cn.nexus.trigger.mq.config.SearchIndexMqConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Iterator;
 import java.util.Date;
 import java.util.List;
@@ -58,17 +64,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 public abstract class RealBusinessIntegrationTestSupport {
 
     private static final AtomicLong UNIQUE_ID_SEQ = new AtomicLong(System.currentTimeMillis() * 1000L);
 
-    @MockBean
+    @Autowired
     protected ISocialIdPort socialIdPort;
 
-    @MockBean
+    @Autowired
     protected LeafSnowflakeIdGenerator leafSnowflakeIdGenerator;
 
     @Autowired
@@ -144,19 +149,25 @@ public abstract class RealBusinessIntegrationTestSupport {
     protected IContentEventOutboxPort contentEventOutboxPort;
 
     @Autowired
+    protected IUserEventOutboxPort userEventOutboxPort;
+
+    @Autowired
     protected DataSource dataSource;
 
     @Value("${search.es.indexAlias}")
     protected String indexAlias;
 
-    protected final ObjectMapper objectMapper = new ObjectMapper();
+    @Value("${feed.recommend.baseUrl:}")
+    protected String gorseBaseUrl;
+
+    protected final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+    protected final HttpClient middlewareHttpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .build();
 
     @BeforeEach
     void setUpRealBusinessSupport() {
         clearMiddlewareOutboxTables();
-        given(leafSnowflakeIdGenerator.nextId()).willAnswer(invocation -> uniqueId());
-        given(socialIdPort.nextId()).willAnswer(invocation -> uniqueId());
-        given(socialIdPort.now()).willAnswer(invocation -> System.currentTimeMillis());
         purgeQueueQuietly(FeedFanoutConfig.QUEUE);
         purgeQueueQuietly(FeedFanoutConfig.TASK_QUEUE);
         purgeQueueQuietly(FeedFanoutConfig.DLQ_POST_PUBLISHED);
@@ -180,6 +191,8 @@ public abstract class RealBusinessIntegrationTestSupport {
         purgeQueueQuietly(LikeUnlikeMqConfig.DLQ_COUNT);
         purgeQueueQuietly(CountPostLikeMqConfig.QUEUE);
         purgeQueueQuietly(CountPostLikeMqConfig.DLQ);
+        purgeQueueQuietly(CountPostLike2SearchIndexMqConfig.QUEUE);
+        purgeQueueQuietly(CountPostLike2SearchIndexMqConfig.DLQ);
         purgeQueueQuietly(RelationMqConfig.Q_FOLLOW);
         purgeQueueQuietly(RelationMqConfig.Q_BLOCK);
         purgeQueueQuietly(RiskMqConfig.Q_LLM_SCAN);
@@ -222,7 +235,7 @@ public abstract class RealBusinessIntegrationTestSupport {
     }
 
     protected long uniqueId() {
-        return UNIQUE_ID_SEQ.incrementAndGet();
+        return socialIdPort.nextId();
     }
 
     protected String uniqueUuid() {
@@ -352,6 +365,11 @@ public abstract class RealBusinessIntegrationTestSupport {
         contentEventOutboxPort.tryPublishPending();
     }
 
+    protected void publishPendingUserEvents() {
+        execUpdate("UPDATE user_event_outbox SET status = 'NEW' WHERE status = 'FAIL'");
+        userEventOutboxPort.tryPublishPending();
+    }
+
     protected void ensureSearchIndexReady() {
         try {
             if (isSearchIndexMappingCompatible()) {
@@ -437,5 +455,141 @@ public abstract class RealBusinessIntegrationTestSupport {
         properties.putObject("is_top").put("type", "keyword");
         properties.putObject("title_suggest").put("type", "completion");
         return root;
+    }
+
+    protected JsonNode gorseGetJson(String path) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(normalizeGorseUrl(path)))
+                .timeout(Duration.ofSeconds(10))
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+        HttpResponse<String> response = middlewareHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new IllegalStateException("gorse GET failed, status=" + response.statusCode() + ", path=" + path + ", body=" + response.body());
+        }
+        return objectMapper.readTree(response.body());
+    }
+
+    protected JsonNode gorseGetJsonOrNull(String path) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(normalizeGorseUrl(path)))
+                .timeout(Duration.ofSeconds(10))
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+        HttpResponse<String> response = middlewareHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() == 404) {
+            return null;
+        }
+        if (response.statusCode() != 200) {
+            throw new IllegalStateException("gorse GET failed, status=" + response.statusCode() + ", path=" + path + ", body=" + response.body());
+        }
+        return objectMapper.readTree(response.body());
+    }
+
+    protected List<Long> gorseLatestItems(int n) throws Exception {
+        JsonNode root = gorseGetJson("/api/non-personalized/latest?n=" + Math.max(1, n));
+        return objectMapper.convertValue(
+                root.findValuesAsText("Id"),
+                objectMapper.getTypeFactory().constructCollectionType(List.class, Long.class)
+        );
+    }
+
+    protected JsonNode gorseItemOrNull(long postId) throws Exception {
+        return gorseGetJsonOrNull("/api/item/" + postId);
+    }
+
+    protected JsonNode gorseFeedbackPage(int n) throws Exception {
+        return gorseGetJson("/api/feedback?n=" + Math.max(1, n));
+    }
+
+    protected String reliableConsumerStatus(String eventId, String consumerName) {
+        if (eventId == null || eventId.isBlank() || consumerName == null || consumerName.isBlank()) {
+            return null;
+        }
+        try (java.sql.Connection conn = dataSource.getConnection();
+             java.sql.PreparedStatement ps = conn.prepareStatement(
+                     "SELECT status FROM reliable_mq_consumer_record WHERE event_id = ? AND consumer_name = ? LIMIT 1")) {
+            ps.setString(1, eventId.trim());
+            ps.setString(2, consumerName.trim());
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return rs.getString(1);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("query reliable_mq_consumer_record status failed, eventId=" + eventId + ", consumerName=" + consumerName, e);
+        }
+    }
+
+    protected String reliableConsumerPayload(String eventId, String consumerName) {
+        if (eventId == null || eventId.isBlank() || consumerName == null || consumerName.isBlank()) {
+            return null;
+        }
+        try (java.sql.Connection conn = dataSource.getConnection();
+             java.sql.PreparedStatement ps = conn.prepareStatement(
+                     "SELECT payload_json FROM reliable_mq_consumer_record WHERE event_id = ? AND consumer_name = ? LIMIT 1")) {
+            ps.setString(1, eventId.trim());
+            ps.setString(2, consumerName.trim());
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return rs.getString(1);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("query reliable_mq_consumer_record payload failed, eventId=" + eventId + ", consumerName=" + consumerName, e);
+        }
+    }
+
+    protected String reliableConsumerStatusByPayload(String consumerName, String payloadNeedle) {
+        if (consumerName == null || consumerName.isBlank() || payloadNeedle == null || payloadNeedle.isBlank()) {
+            return null;
+        }
+        try (java.sql.Connection conn = dataSource.getConnection();
+             java.sql.PreparedStatement ps = conn.prepareStatement(
+                     "SELECT status FROM reliable_mq_consumer_record WHERE consumer_name = ? AND payload_json LIKE ? ORDER BY id DESC LIMIT 1")) {
+            ps.setString(1, consumerName.trim());
+            ps.setString(2, "%" + payloadNeedle.trim() + "%");
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return rs.getString(1);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("query reliable_mq_consumer_record status by payload failed, consumerName=" + consumerName + ", payloadNeedle=" + payloadNeedle, e);
+        }
+    }
+
+    protected String reliableConsumerPayloadByPayload(String consumerName, String payloadNeedle) {
+        if (consumerName == null || consumerName.isBlank() || payloadNeedle == null || payloadNeedle.isBlank()) {
+            return null;
+        }
+        try (java.sql.Connection conn = dataSource.getConnection();
+             java.sql.PreparedStatement ps = conn.prepareStatement(
+                     "SELECT payload_json FROM reliable_mq_consumer_record WHERE consumer_name = ? AND payload_json LIKE ? ORDER BY id DESC LIMIT 1")) {
+            ps.setString(1, consumerName.trim());
+            ps.setString(2, "%" + payloadNeedle.trim() + "%");
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return rs.getString(1);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("query reliable_mq_consumer_record payload by payload failed, consumerName=" + consumerName + ", payloadNeedle=" + payloadNeedle, e);
+        }
+    }
+
+    private String normalizeGorseUrl(String path) {
+        String raw = (gorseBaseUrl == null || gorseBaseUrl.isBlank()) ? "http://127.0.0.1:8087" : gorseBaseUrl;
+        String base = raw.endsWith("/") ? raw.substring(0, raw.length() - 1) : raw;
+        if (path == null || path.isBlank()) {
+            return base;
+        }
+        return path.startsWith("/") ? base + path : base + "/" + path;
     }
 }

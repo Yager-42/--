@@ -43,7 +43,7 @@ search:
 
 feed:
   recommend:
-    baseUrl:
+    baseUrl: http://127.0.0.1:8087
     backfill:
       enabled: false
 
@@ -56,8 +56,17 @@ hotkey:
   enabled: false
 
 leaf:
+  name: nexus
+  segment:
+    enable: true
+  jdbc:
+    url: jdbc:mysql://127.0.0.1:3306/nexus_social?useSSL=false&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
   snowflake:
-    enabled: false
+    enabled: true
+    zk-address: 127.0.0.1:2181
+    port: 2222
 
 reaction:
   sync:

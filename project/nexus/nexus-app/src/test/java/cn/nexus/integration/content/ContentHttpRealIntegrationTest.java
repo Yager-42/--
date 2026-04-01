@@ -256,6 +256,68 @@ class ContentHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     }
 
     @Test
+    void scheduleDuplicateUpdateConflictAndCanceledGuards_shouldReturnExpectedStatuses() throws Exception {
+        TestSession author = registerAndLoginSession("content-schedule-guard");
+
+        long postId = assertSuccess(putJson("/api/v1/content/draft", JsonNodeFactory.instance.objectNode()
+                .put("title", "guard-" + uniqueUuid().substring(0, 6))
+                .put("contentText", "guard-text-" + uniqueUuid()), author.token()))
+                .path("draftId")
+                .asLong();
+        assertThat(postId).isPositive();
+
+        long publishTime = System.currentTimeMillis() + 60_000L;
+        JsonNode scheduled = assertSuccess(postJson("/api/v1/content/schedule", JsonNodeFactory.instance.objectNode()
+                .put("postId", postId)
+                .put("publishTime", publishTime)
+                .put("timezone", "Asia/Shanghai"), author.token()));
+        long taskId = scheduled.path("taskId").asLong();
+        assertThat(taskId).isPositive();
+        assertThat(scheduled.path("status").asText()).isEqualTo("SCHEDULED");
+
+        JsonNode duplicated = assertSuccess(postJson("/api/v1/content/schedule", JsonNodeFactory.instance.objectNode()
+                .put("postId", postId)
+                .put("publishTime", publishTime)
+                .put("timezone", "Asia/Shanghai"), author.token()));
+        assertThat(duplicated.path("taskId").asLong()).isEqualTo(taskId);
+        assertThat(duplicated.path("status").asText()).isEqualTo("SCHEDULED_DUPLICATE");
+
+        JsonNode updateConflict = patchJson("/api/v1/content/schedule", JsonNodeFactory.instance.objectNode()
+                .put("taskId", taskId)
+                .put("publishTime", publishTime + 1000L)
+                .put("contentData", "{\"patched\":true}")
+                .put("reason", "should-conflict"), author.token());
+        assertThat(updateConflict.path("code").asText()).isEqualTo("0409");
+        assertThat(updateConflict.path("info").asText()).contains("已设置定时发布");
+
+        JsonNode canceled = assertSuccess(postJson("/api/v1/content/schedule/cancel", JsonNodeFactory.instance.objectNode()
+                .put("taskId", taskId)
+                .put("reason", "stop"), author.token()));
+        assertThat(canceled.path("success").asBoolean()).isTrue();
+        assertThat(canceled.path("status").asText()).isEqualTo("CANCELED");
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            JsonNode audit = assertSuccess(getJson("/api/v1/content/schedule/" + taskId + "?userId=" + author.userId(), author.token()));
+            assertThat(audit.path("status").asInt()).isEqualTo(3);
+            assertThat(audit.path("isCanceled").asInt()).isEqualTo(1);
+        });
+
+        JsonNode updateCanceled = assertSuccess(patchJson("/api/v1/content/schedule", JsonNodeFactory.instance.objectNode()
+                .put("taskId", taskId)
+                .put("publishTime", publishTime + 2000L)
+                .put("contentData", "")
+                .put("reason", "after-cancel"), author.token()));
+        assertThat(updateCanceled.path("success").asBoolean()).isFalse();
+        assertThat(updateCanceled.path("status").asText()).isEqualTo("CANCELED");
+
+        JsonNode cancelAgain = assertSuccess(postJson("/api/v1/content/schedule/cancel", JsonNodeFactory.instance.objectNode()
+                .put("taskId", taskId)
+                .put("reason", "cancel-again"), author.token()));
+        assertThat(cancelAgain.path("success").asBoolean()).isFalse();
+        assertThat(cancelAgain.path("status").asText()).isEqualTo("CANCEL_FAIL");
+    }
+
+    @Test
     void detail_highConcurrencySmoke_shouldRemainAvailable() throws Exception {
         TestSession author = registerAndLoginSession("content-detail-load");
         long postId = seedPublishedPost(author.userId(), "detail-title-" + uniqueUuid().substring(0, 6), "detail-text-" + uniqueUuid());

@@ -158,6 +158,88 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     }
 
     @Test
+    void commentCreateReplyAndMention_shouldCreateDifferentNotificationBizTypes() throws Exception {
+        ensureNotifyConsumersReady();
+        TestSession author = registerAndLoginSession("notify-post-author");
+        TestSession rootCommentAuthor = registerAndLoginSession("notify-root-author");
+        TestSession mentionedUser = registerAndLoginSession("notify-mentioned");
+        TestSession actor = registerAndLoginSession("notify-actor");
+        long postId = seedPublishedPost(author.userId());
+
+        String mentionedUsername = userBaseDao.selectByUserId(mentionedUser.userId()).getUsername();
+        assertThat(mentionedUsername).isNotBlank();
+
+        long rootCommentId = uniqueId();
+        JsonNode rootComment = assertSuccess(postJson("/api/v1/interact/comment", JsonNodeFactory.instance.objectNode()
+                .put("postId", postId)
+                .put("content", "notify-root-" + uniqueUuid())
+                .put("commentId", rootCommentId), rootCommentAuthor.token()));
+        assertThat(rootComment.path("commentId").asLong()).isEqualTo(rootCommentId);
+
+        publishPendingReliableMqMessages();
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            publishPendingReliableMqMessages();
+            assertThat(notificationUnreadCount(author.userId(), "POST_COMMENTED", "POST", postId)).isGreaterThanOrEqualTo(1L);
+            JsonNode list = assertSuccess(getJson("/api/v1/notification/list", author.token()));
+            assertThat(list.path("notifications"))
+                    .extracting(node -> node.path("bizType").asText())
+                    .contains("POST_COMMENTED");
+            assertThat(list.path("notifications"))
+                    .extracting(JsonNode::toString)
+                    .anySatisfy(raw -> {
+                        assertThat(raw).contains("\"bizType\":\"POST_COMMENTED\"");
+                        assertThat(raw).contains("\"targetType\":\"POST\"");
+                        assertThat(raw).contains("\"targetId\":" + postId);
+                    });
+        });
+
+        long replyCommentId = uniqueId();
+        JsonNode reply = assertSuccess(postJson("/api/v1/interact/comment", JsonNodeFactory.instance.objectNode()
+                .put("postId", postId)
+                .put("parentId", rootCommentId)
+                .put("content", "reply mention @" + mentionedUsername + " " + uniqueUuid())
+                .put("commentId", replyCommentId), actor.token()));
+        assertThat(reply.path("commentId").asLong()).isEqualTo(replyCommentId);
+
+        publishPendingReliableMqMessages();
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            publishPendingReliableMqMessages();
+            assertThat(notificationUnreadCount(rootCommentAuthor.userId(), "COMMENT_REPLIED", "COMMENT", rootCommentId))
+                    .isGreaterThanOrEqualTo(1L);
+            JsonNode list = assertSuccess(getJson("/api/v1/notification/list", rootCommentAuthor.token()));
+            assertThat(list.path("notifications"))
+                    .extracting(node -> node.path("bizType").asText())
+                    .contains("COMMENT_REPLIED");
+            assertThat(list.path("notifications"))
+                    .extracting(JsonNode::toString)
+                    .anySatisfy(raw -> {
+                        assertThat(raw).contains("\"bizType\":\"COMMENT_REPLIED\"");
+                        assertThat(raw).contains("\"targetType\":\"COMMENT\"");
+                        assertThat(raw).contains("\"targetId\":" + rootCommentId);
+                    });
+        });
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            publishPendingReliableMqMessages();
+            assertThat(notificationUnreadCount(mentionedUser.userId(), "COMMENT_MENTIONED", "COMMENT", rootCommentId))
+                    .isGreaterThanOrEqualTo(1L);
+            JsonNode list = assertSuccess(getJson("/api/v1/notification/list", mentionedUser.token()));
+            assertThat(list.path("notifications"))
+                    .extracting(node -> node.path("bizType").asText())
+                    .contains("COMMENT_MENTIONED");
+            assertThat(list.path("notifications"))
+                    .extracting(JsonNode::toString)
+                    .anySatisfy(raw -> {
+                        assertThat(raw).contains("\"bizType\":\"COMMENT_MENTIONED\"");
+                        assertThat(raw).contains("\"targetType\":\"COMMENT\"");
+                        assertThat(raw).contains("\"targetId\":" + rootCommentId);
+                    });
+        });
+    }
+
+    @Test
     void reactionState_highConcurrencySmoke_shouldStayResponsive() throws Exception {
         TestSession author = registerAndLoginSession("state-load-author");
         TestSession liker = registerAndLoginSession("state-load-liker");

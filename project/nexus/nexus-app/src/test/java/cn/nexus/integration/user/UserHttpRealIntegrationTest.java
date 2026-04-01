@@ -30,8 +30,11 @@ class UserHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
         assertThat(latest.getNickname()).isEqualTo(newNickname);
         assertThat(meAfter.path("nickname").asText()).isEqualTo(newNickname);
-        assertThat(userEventOutboxDao.selectByStatus("DONE", 50))
-                .anySatisfy(po -> assertThat(po.getPayload()).contains("\"userId\":" + userId));
+        assertThat(userEventOutboxDao.selectByStatus("DONE", Integer.MAX_VALUE))
+                .anySatisfy(po -> {
+                    assertThat(po.getEventType()).isEqualTo("user.nickname_changed");
+                    assertThat(po.getPayload()).contains("\"userId\":" + userId);
+                });
     }
 
     @Test

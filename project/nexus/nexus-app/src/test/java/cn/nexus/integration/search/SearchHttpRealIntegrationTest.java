@@ -11,7 +11,6 @@ import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
 import cn.nexus.types.event.PostDeletedEvent;
 import cn.nexus.types.event.PostPublishedEvent;
-import cn.nexus.types.event.UserNicknameChangedEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.time.Duration;
@@ -144,15 +143,12 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                 assertThat(assertSuccess(getJson("/api/v1/auth/me", author.token())).path("nickname").asText())
                         .isEqualTo(newNickname));
         deleteRedisKey("social:userbase:" + author.userId());
-        UserNicknameChangedEvent changedEvent = new UserNicknameChangedEvent();
-        changedEvent.setUserId(author.userId());
-        changedEvent.setTsMs(System.currentTimeMillis());
-        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_USER_NICKNAME_CHANGED, changedEvent);
+        publishPendingUserEvents();
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             JsonNode source = fetchDocumentSource(postId);
             assertThat(source).isNotNull();
-            assertThat(source.path("author_nickname").asText()).isIn(oldNickname, newNickname);
+            assertThat(source.path("author_nickname").asText()).isEqualTo(newNickname);
         });
 
         PostDeletedEvent deletedEvent = new PostDeletedEvent();
@@ -165,6 +161,49 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
             JsonNode source = fetchDocumentSource(postId);
             assertThat(source).isNotNull();
             assertThat(source.path("status").asText()).isEqualTo("deleted");
+        });
+    }
+
+    @Test
+    void postLikeSnapshot_shouldRefreshIndexedLikeCount() throws Exception {
+        TestSession author = registerAndLoginSession("search-like-author");
+        TestSession liker = registerAndLoginSession("search-like-user");
+
+        long postId = uniqueId();
+        long nowMs = System.currentTimeMillis();
+        String title = "search-like-" + uniqueUuid().substring(0, 8);
+        seedPublishedPost(author.userId(), postId, title, nowMs);
+
+        deleteRedisKey("interact:content:author:" + postId);
+        deleteRedisKey("interact:content:post:" + postId);
+        deleteDocumentQuietly(postId);
+
+        PostPublishedEvent publishedEvent = new PostPublishedEvent();
+        publishedEvent.setPostId(postId);
+        publishedEvent.setAuthorId(author.userId());
+        publishedEvent.setPublishTimeMs(nowMs);
+        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_PUBLISHED, publishedEvent);
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            JsonNode source = fetchDocumentSource(postId);
+            assertThat(source).isNotNull();
+            assertThat(source.path("like_count").asLong()).isEqualTo(0L);
+        });
+
+        JsonNode like = assertSuccess(postJson("/api/v1/interact/reaction", JsonNodeFactory.instance.objectNode()
+                .put("requestId", "rid-" + uniqueUuid())
+                .put("targetId", postId)
+                .put("targetType", "POST")
+                .put("type", "LIKE")
+                .put("action", "ADD"), liker.token()));
+        assertThat(like.path("currentCount").asLong()).isEqualTo(1L);
+
+        publishPendingReliableMqMessages();
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            JsonNode source = fetchDocumentSource(postId);
+            assertThat(source).isNotNull();
+            assertThat(source.path("like_count").asLong()).isEqualTo(1L);
         });
     }
 

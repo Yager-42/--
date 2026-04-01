@@ -4,6 +4,7 @@ import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
+import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
 import cn.nexus.trigger.mq.config.CountPostLikeMqConfig;
 import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import cn.nexus.types.event.interaction.ReactionCountSnapshotEvent;
@@ -81,6 +82,9 @@ public class SnapshotPostLikeCountAggregateStrategy implements PostLikeCountAggr
         }
 
         rabbitTemplate.convertAndSend(CountPostLikeMqConfig.EXCHANGE, CountPostLikeMqConfig.ROUTING_KEY, snapshots);
+        rabbitTemplate.convertAndSend(CountPostLike2SearchIndexMqConfig.EXCHANGE,
+                CountPostLike2SearchIndexMqConfig.ROUTING_KEY,
+                snapshots);
     }
 
     private LikeUnlikePostEvent parse(Message m) {
@@ -108,4 +112,3 @@ public class SnapshotPostLikeCountAggregateStrategy implements PostLikeCountAggr
         return e;
     }
 }
-

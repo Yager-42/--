@@ -40,6 +40,10 @@ class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertThat(first.path("authorId").asLong()).isEqualTo(author.userId());
         assertThat(first.path("authorNickname").asText()).isEqualTo(author.nickname());
         assertThat(first.path("followed").asBoolean()).isTrue();
+        assertThat(timeline.path("nextCursor").isNull()).isTrue();
+        assertThat(timeline.path("nextCursorTs").asLong()).isEqualTo(nowMs);
+        assertThat(timeline.path("nextCursorPostId").asLong()).isEqualTo(postId);
+        assertThat(timeline.path("hasMore").asBoolean()).isFalse();
 
         JsonNode profile = assertSuccess(getJson("/api/v1/feed/profile/" + author.userId() + "?limit=10", viewer.token()));
         assertThat(profile.path("items"))
@@ -83,6 +87,8 @@ class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertThat(timeline.path("items"))
                 .extracting(JsonNode::toString)
                 .anySatisfy(raw -> assertThat(raw).contains("\"postId\":" + postId));
+        assertThat(timeline.path("nextCursorTs").asLong()).isEqualTo(nowMs);
+        assertThat(timeline.path("nextCursorPostId").asLong()).isEqualTo(postId);
     }
 
     @Test

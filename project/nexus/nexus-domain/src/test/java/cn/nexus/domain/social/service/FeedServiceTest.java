@@ -4,10 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -24,6 +27,8 @@ import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.entity.RelationEntity;
+import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
+import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
 import cn.nexus.domain.social.model.valobj.FeedNeighborsCursor;
 import cn.nexus.domain.social.model.valobj.FeedPopularCursor;
@@ -76,7 +81,6 @@ class FeedServiceTest {
                 feedTimelineRepository,
                 feedOutboxRepository,
                 feedBigVPoolRepository,
-                feedFollowSeenRepository,
                 feedInboxRebuildService,
                 feedGlobalLatestRepository,
                 feedRecommendSessionRepository,
@@ -102,7 +106,7 @@ class FeedServiceTest {
 
     @Test
     void timeline_shouldReturnEmptyWhenUserIdIsNull() {
-        FeedTimelineVO result = feedService.timeline(null, null, 20, "FOLLOW");
+        FeedTimelineVO result = feedService.timeline(null, null, 20, "FOLLOW", null, null, null);
 
         assertNotNull(result);
         assertEquals(List.of(), result.getItems());
@@ -114,11 +118,92 @@ class FeedServiceTest {
         when(feedInboxRebuildService.rebuildIfNeeded(1L)).thenReturn(true);
         when(feedTimelineRepository.pageInboxEntries(eq(1L), eq(null), eq(null), anyInt())).thenReturn(List.of());
 
-        FeedTimelineVO result = feedService.timeline(1L, null, 20, "FOLLOW");
+        FeedTimelineVO result = feedService.timeline(1L, null, 20, "FOLLOW", null, null, null);
 
         assertNotNull(result);
         assertEquals(List.of(), result.getItems());
         verify(feedInboxRebuildService).rebuildIfNeeded(1L);
+    }
+
+    @Test
+    void timeline_followRefreshShouldMergeInboxAndBigVOutboxUsingMaxIdOrder() {
+        when(feedInboxRebuildService.rebuildIfNeeded(1L)).thenReturn(false);
+        when(relationAdjacencyCachePort.listFollowing(1L, 2000)).thenReturn(List.of(200L, 300L));
+        when(feedAuthorCategoryRepository.batchGetCategory(List.of(200L, 300L))).thenReturn(java.util.Map.of(
+                200L, FeedAuthorCategoryEnumVO.NORMAL.getCode(),
+                300L, FeedAuthorCategoryEnumVO.BIGV.getCode()
+        ));
+        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 2)).thenReturn(List.of(
+                FeedInboxEntryVO.builder().postId(12L).publishTimeMs(900L).build(),
+                FeedInboxEntryVO.builder().postId(11L).publishTimeMs(800L).build()
+        ));
+        when(feedOutboxRepository.pageOutbox(300L, null, null, 2)).thenReturn(List.of(
+                FeedInboxEntryVO.builder().postId(20L).publishTimeMs(900L).build(),
+                FeedInboxEntryVO.builder().postId(19L).publishTimeMs(700L).build()
+        ));
+        when(contentRepository.listPostsByIds(List.of(20L, 12L))).thenReturn(List.of(
+                ContentPostEntity.builder().postId(20L).userId(300L).createTime(900L).build(),
+                ContentPostEntity.builder().postId(12L).userId(200L).createTime(900L).build()
+        ));
+        when(feedCardAssembleService.assemble(eq(1L), eq("FOLLOW"), any(), eq(2))).thenAnswer(invocation -> {
+            List<FeedInboxEntryVO> entries = invocation.getArgument(2);
+            return entries.stream()
+                    .map(entry -> FeedItemVO.builder()
+                            .postId(entry.getPostId())
+                            .publishTime(entry.getPublishTimeMs())
+                            .build())
+                    .toList();
+        });
+
+        FeedTimelineVO result = feedService.timeline(1L, null, 2, "FOLLOW", "REFRESH", null, null);
+
+        assertEquals(List.of(20L, 12L), result.getItems().stream().map(FeedItemVO::getPostId).toList());
+        assertEquals(900L, result.getNextCursorTs());
+        assertEquals(12L, result.getNextCursorPostId());
+        assertTrue(result.getHasMore());
+        assertNull(result.getNextCursor());
+        verify(feedTimelineRepository).pageInboxEntries(1L, null, null, 2);
+        verify(feedOutboxRepository).pageOutbox(300L, null, null, 2);
+        verify(feedOutboxRepository, never()).pageOutbox(200L, null, null, 2);
+        verify(feedFollowSeenRepository, never()).markSeen(anyLong(), anyLong());
+    }
+
+    @Test
+    void timeline_followHistoryShouldUseExplicitCursorAndExcludePreviousLastItem() {
+        when(relationAdjacencyCachePort.listFollowing(1L, 2000)).thenReturn(List.of(200L, 300L));
+        when(feedAuthorCategoryRepository.batchGetCategory(List.of(200L, 300L))).thenReturn(java.util.Map.of(
+                200L, FeedAuthorCategoryEnumVO.NORMAL.getCode(),
+                300L, FeedAuthorCategoryEnumVO.BIGV.getCode()
+        ));
+        when(feedTimelineRepository.pageInboxEntries(1L, 900L, 20L, 2)).thenReturn(List.of(
+                FeedInboxEntryVO.builder().postId(12L).publishTimeMs(900L).build(),
+                FeedInboxEntryVO.builder().postId(11L).publishTimeMs(800L).build()
+        ));
+        when(feedOutboxRepository.pageOutbox(300L, 900L, 20L, 2)).thenReturn(List.of(
+                FeedInboxEntryVO.builder().postId(19L).publishTimeMs(700L).build()
+        ));
+        when(contentRepository.listPostsByIds(List.of(12L, 11L))).thenReturn(List.of(
+                ContentPostEntity.builder().postId(12L).userId(200L).createTime(900L).build(),
+                ContentPostEntity.builder().postId(11L).userId(200L).createTime(800L).build()
+        ));
+        when(feedCardAssembleService.assemble(eq(1L), eq("FOLLOW"), any(), eq(2))).thenAnswer(invocation -> {
+            List<FeedInboxEntryVO> entries = invocation.getArgument(2);
+            return entries.stream()
+                    .map(entry -> FeedItemVO.builder()
+                            .postId(entry.getPostId())
+                            .publishTime(entry.getPublishTimeMs())
+                            .build())
+                    .toList();
+        });
+
+        FeedTimelineVO result = feedService.timeline(1L, null, 2, "FOLLOW", "HISTORY", 900L, 20L);
+
+        assertEquals(List.of(12L, 11L), result.getItems().stream().map(FeedItemVO::getPostId).toList());
+        assertEquals(800L, result.getNextCursorTs());
+        assertEquals(11L, result.getNextCursorPostId());
+        assertTrue(result.getHasMore());
+        verify(feedTimelineRepository).pageInboxEntries(1L, 900L, 20L, 2);
+        verify(feedOutboxRepository).pageOutbox(300L, 900L, 20L, 2);
     }
 
     @Test
@@ -147,7 +232,7 @@ class FeedServiceTest {
         when(feedCardAssembleService.assemble(eq(1L), eq("RECOMMEND"), any(), eq(1)))
                 .thenReturn(List.of(FeedItemVO.builder().postId(101L).build()));
 
-        FeedTimelineVO result = assertDoesNotThrow(() -> feedService.timeline(1L, expiredCursor, 1, "RECOMMEND"));
+        FeedTimelineVO result = assertDoesNotThrow(() -> feedService.timeline(1L, expiredCursor, 1, "RECOMMEND", null, null, null));
 
         assertNotNull(result);
         assertNotNull(result.getNextCursor());
@@ -163,7 +248,7 @@ class FeedServiceTest {
         when(feedCardAssembleService.assemble(eq(1L), eq("POPULAR"), any(), eq(1)))
                 .thenReturn(List.of(FeedItemVO.builder().postId(101L).build()));
 
-        FeedTimelineVO result = feedService.timeline(1L, null, 1, "POPULAR");
+        FeedTimelineVO result = feedService.timeline(1L, null, 1, "POPULAR", null, null, null);
 
         assertEquals(1, result.getItems().size());
         assertEquals(FeedPopularCursor.format(1), result.getNextCursor());
@@ -180,7 +265,7 @@ class FeedServiceTest {
         when(feedCardAssembleService.assemble(eq(1L), eq("NEIGHBORS"), any(), eq(1)))
                 .thenReturn(List.of(FeedItemVO.builder().postId(201L).build()));
 
-        FeedTimelineVO result = feedService.timeline(1L, cursor, 1, "NEIGHBORS");
+        FeedTimelineVO result = feedService.timeline(1L, cursor, 1, "NEIGHBORS", null, null, null);
 
         assertEquals(1, result.getItems().size());
         assertEquals(FeedNeighborsCursor.format(500L, 1L), result.getNextCursor());

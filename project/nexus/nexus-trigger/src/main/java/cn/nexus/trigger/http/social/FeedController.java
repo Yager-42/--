@@ -43,7 +43,15 @@ public class FeedController implements IFeedApi {
         try {
             // 控制层永远只信登录态里的用户 ID，不接受前端伪造的 userId。
             Long userId = UserContext.requireUserId();
-            FeedTimelineVO vo = feedService.timeline(userId, requestDTO.getCursor(), requestDTO.getLimit(), requestDTO.getFeedType());
+            FeedTimelineVO vo = feedService.timeline(
+                    userId,
+                    requestDTO.getCursor(),
+                    requestDTO.getLimit(),
+                    requestDTO.getFeedType(),
+                    requestDTO.getDirection(),
+                    requestDTO.getCursorTs(),
+                    requestDTO.getCursorPostId()
+            );
             FeedTimelineResponseDTO dto = toTimelineDTO(vo);
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
         } catch (AppException e) {
@@ -87,6 +95,9 @@ public class FeedController implements IFeedApi {
         return FeedTimelineResponseDTO.builder()
                 .items(vo.getItems().stream().map(this::toItem).collect(Collectors.toList()))
                 .nextCursor(vo.getNextCursor())
+                .nextCursorTs(vo.getNextCursorTs())
+                .nextCursorPostId(vo.getNextCursorPostId())
+                .hasMore(vo.getHasMore())
                 .build();
     }
 

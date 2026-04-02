@@ -17,4 +17,7 @@ public class FeedTimelineRequestDTO {
     private String cursor;
     private Integer limit;
     private String feedType;
+    private String direction;
+    private Long cursorTs;
+    private Long cursorPostId;
 }

@@ -8,11 +8,10 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.infrastructure.dao.social.po.UserBasePO;
-import cn.nexus.trigger.mq.config.FeedFanoutConfig;
-import cn.nexus.trigger.mq.config.SearchIndexMqConfig;
+import cn.nexus.trigger.mq.config.SearchIndexCdcMqConfig;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
-import cn.nexus.types.event.PostPublishedEvent;
+import cn.nexus.types.event.search.PostChangedCdcEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.Date;
@@ -21,7 +20,7 @@ import org.junit.jupiter.api.Test;
 class SearchIndexConsumerRealIntegrationTest extends RealMiddlewareIntegrationTestSupport {
 
     @Test
-    void postPublishedEvent_shouldFlowThroughRabbitMqAndIndexIntoElasticsearch() {
+    void postChangedCdcEvent_shouldFlowThroughRabbitMqAndIndexIntoElasticsearch() {
         long userId = uniqueId();
         long postId = uniqueId();
         long publishTimeMs = System.currentTimeMillis();
@@ -62,11 +61,13 @@ class SearchIndexConsumerRealIntegrationTest extends RealMiddlewareIntegrationTe
         deleteRedisKey("interact:content:post:" + postId);
         deleteDocumentQuietly(postId);
 
-        PostPublishedEvent event = new PostPublishedEvent();
+        PostChangedCdcEvent event = new PostChangedCdcEvent();
+        event.setEventId("it:" + postId);
         event.setPostId(postId);
-        event.setAuthorId(userId);
-        event.setPublishTimeMs(publishTimeMs);
-        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_PUBLISHED, event);
+        event.setTsMs(publishTimeMs);
+        event.setSource("it");
+        event.setTable("content_post");
+        rabbitTemplate.convertAndSend(SearchIndexCdcMqConfig.EXCHANGE, SearchIndexCdcMqConfig.ROUTING_KEY, event);
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             JsonNode source = fetchDocumentSource(postId);

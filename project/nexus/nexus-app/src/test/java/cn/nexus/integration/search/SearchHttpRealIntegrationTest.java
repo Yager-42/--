@@ -5,12 +5,10 @@ import static org.awaitility.Awaitility.await;
 
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
-import cn.nexus.trigger.mq.config.FeedFanoutConfig;
-import cn.nexus.trigger.mq.config.SearchIndexMqConfig;
+import cn.nexus.trigger.mq.config.SearchIndexCdcMqConfig;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
-import cn.nexus.types.event.PostDeletedEvent;
-import cn.nexus.types.event.PostPublishedEvent;
+import cn.nexus.types.event.search.PostChangedCdcEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.time.Duration;
@@ -35,11 +33,7 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         deleteRedisKey("interact:content:post:" + postId);
         deleteDocumentQuietly(postId);
 
-        PostPublishedEvent event = new PostPublishedEvent();
-        event.setPostId(postId);
-        event.setAuthorId(author.userId());
-        event.setPublishTimeMs(nowMs);
-        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_PUBLISHED, event);
+        publishSearchIndexCdc(postId, nowMs);
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             JsonNode source = fetchDocumentSource(postId);
@@ -82,11 +76,7 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         deleteRedisKey("interact:content:post:" + postId);
         deleteDocumentQuietly(postId);
 
-        PostPublishedEvent event = new PostPublishedEvent();
-        event.setPostId(postId);
-        event.setAuthorId(author.userId());
-        event.setPublishTimeMs(nowMs);
-        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_PUBLISHED, event);
+        publishSearchIndexCdc(postId, nowMs);
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(fetchDocumentSource(postId)).isNotNull());
@@ -121,11 +111,7 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         deleteRedisKey("interact:content:post:" + postId);
         deleteDocumentQuietly(postId);
 
-        PostPublishedEvent publishedEvent = new PostPublishedEvent();
-        publishedEvent.setPostId(postId);
-        publishedEvent.setAuthorId(author.userId());
-        publishedEvent.setPublishTimeMs(nowMs);
-        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_PUBLISHED, publishedEvent);
+        publishSearchIndexCdc(postId, nowMs);
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(fetchDocumentSource(postId)).isNotNull());
@@ -134,8 +120,6 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
             assertThat(source).isNotNull();
             assertThat(source.path("author_id").asLong()).isEqualTo(author.userId());
         });
-        String oldNickname = fetchDocumentSource(postId).path("author_nickname").asText();
-
         String newNickname = "search-new-" + uniqueUuid().substring(0, 6);
         assertSuccess(postJson("/api/v1/user/me/profile", JsonNodeFactory.instance.objectNode()
                 .put("nickname", newNickname), author.token()));
@@ -151,11 +135,8 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
             assertThat(source.path("author_nickname").asText()).isEqualTo(newNickname);
         });
 
-        PostDeletedEvent deletedEvent = new PostDeletedEvent();
-        deletedEvent.setPostId(postId);
-        deletedEvent.setOperatorId(author.userId());
-        deletedEvent.setTsMs(System.currentTimeMillis());
-        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_DELETED, deletedEvent);
+        contentPostDao.updateStatus(postId, 6);
+        publishSearchIndexCdc(postId, System.currentTimeMillis());
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             JsonNode source = fetchDocumentSource(postId);
@@ -178,11 +159,7 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         deleteRedisKey("interact:content:post:" + postId);
         deleteDocumentQuietly(postId);
 
-        PostPublishedEvent publishedEvent = new PostPublishedEvent();
-        publishedEvent.setPostId(postId);
-        publishedEvent.setAuthorId(author.userId());
-        publishedEvent.setPublishTimeMs(nowMs);
-        rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, SearchIndexMqConfig.RK_POST_PUBLISHED, publishedEvent);
+        publishSearchIndexCdc(postId, nowMs);
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             JsonNode source = fetchDocumentSource(postId);
@@ -258,6 +235,16 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
             throw new AssertionError("search result did not contain postId=" + postId);
         }
         throw last;
+    }
+
+    private void publishSearchIndexCdc(long postId, long tsMs) {
+        PostChangedCdcEvent event = new PostChangedCdcEvent();
+        event.setEventId("it:" + postId + ":" + tsMs);
+        event.setPostId(postId);
+        event.setTsMs(tsMs);
+        event.setSource("it");
+        event.setTable("content_post");
+        rabbitTemplate.convertAndSend(SearchIndexCdcMqConfig.EXCHANGE, SearchIndexCdcMqConfig.ROUTING_KEY, event);
     }
 
     private record TestSession(long userId, String token) {

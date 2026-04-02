@@ -128,6 +128,16 @@ search:
   es:
     endpoints: ${SEARCH_ES_ENDPOINTS:http://elasticsearch:9200}
     indexAlias: zhiguang_content_index
+  index:
+    cdc:
+      raw:
+        queue: ${SEARCH_INDEX_CDC_RAW_QUEUE:search.cdc.raw.queue}
+      publish:
+        exchange: ${SEARCH_INDEX_CDC_PUBLISH_EXCHANGE:search.cdc.exchange}
+        routingKey: ${SEARCH_INDEX_CDC_PUBLISH_ROUTING_KEY:post.changed}
+      filter:
+        schema: ${SEARCH_INDEX_CDC_FILTER_SCHEMA:nexus_social}
+        tables: ${SEARCH_INDEX_CDC_FILTER_TABLES:content_post,content_post_type}
   mq:
     concurrency: 2
     prefetch: 20

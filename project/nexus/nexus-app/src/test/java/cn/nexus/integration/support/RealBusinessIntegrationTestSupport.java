@@ -201,12 +201,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         purgeQueueQuietly(RiskMqConfig.DLQ_IMAGE_SCAN);
         purgeQueueQuietly(RiskMqConfig.Q_REVIEW_CASE);
         purgeQueueQuietly(RiskMqConfig.DLQ_REVIEW_CASE);
-        purgeQueueQuietly(SearchIndexMqConfig.Q_POST_PUBLISHED);
-        purgeQueueQuietly(SearchIndexMqConfig.DLQ_POST_PUBLISHED);
-        purgeQueueQuietly(SearchIndexMqConfig.Q_POST_UPDATED);
-        purgeQueueQuietly(SearchIndexMqConfig.DLQ_POST_UPDATED);
-        purgeQueueQuietly(SearchIndexMqConfig.Q_POST_DELETED);
-        purgeQueueQuietly(SearchIndexMqConfig.DLQ_POST_DELETED);
         purgeQueueQuietly(SearchIndexMqConfig.Q_USER_NICKNAME_CHANGED);
         purgeQueueQuietly(SearchIndexMqConfig.DLQ_USER_NICKNAME_CHANGED);
         ensureSearchIndexReady();

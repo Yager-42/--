@@ -7,6 +7,10 @@ services:
       MYSQL_DATABASE: nexus_social
       TZ: Asia/Shanghai
     command:
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     ports:
@@ -122,6 +126,48 @@ services:
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
+      timeout: 10s
+      retries: 20
+
+  rabbitmq-init:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      sh -c "
+      set -eu;
+      curl --fail --silent --show-error -u guest:guest -H 'content-type:application/json' -X PUT
+      http://rabbitmq:15672/api/exchanges/%2f/search.cdc.raw.exchange
+      -d '{\"type\":\"direct\",\"durable\":true,\"auto_delete\":false,\"internal\":false,\"arguments\":{}}';
+      curl --fail --silent --show-error -u guest:guest -H 'content-type:application/json' -X PUT
+      http://rabbitmq:15672/api/queues/%2f/search.cdc.raw.queue
+      -d '{\"durable\":true,\"auto_delete\":false,\"arguments\":{}}';
+      curl --fail --silent --show-error -u guest:guest -H 'content-type:application/json' -X POST
+      http://rabbitmq:15672/api/bindings/%2f/e/search.cdc.raw.exchange/q/search.cdc.raw.queue
+      -d '{\"routing_key\":\"search.cdc.raw\",\"arguments\":{}}';
+      curl --fail --silent --show-error -u guest:guest -H 'content-type:application/json' -X POST
+      http://rabbitmq:15672/api/bindings/%2f/e/search.cdc.raw.exchange/q/search.cdc.raw.queue
+      -d '{\"routing_key\":\"search_cdc_raw\",\"arguments\":{}}';
+      "
+    restart: "no"
+
+  canal-server:
+    image: canal/canal-server:v1.1.8
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./docker/canal/conf/canal.properties:/home/admin/canal-server/conf/canal.properties:ro
+      - ./docker/canal/conf/search_cdc_raw/instance.properties:/home/admin/canal-server/conf/search_cdc_raw/instance.properties:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ps -ef | grep -v grep | grep -q canal.deployer.CanalLauncher"]
+      interval: 15s
       timeout: 10s
       retries: 20
 

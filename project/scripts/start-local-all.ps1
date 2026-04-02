@@ -89,6 +89,25 @@ function Wait-ForHttp200 {
     throw "$Name did not return HTTP 200 within $TimeoutSeconds seconds: $Url"
 }
 
+function Wait-ForWslComposeServiceRunning {
+    param(
+        [string]$WslProjectDir,
+        [string]$ServiceName,
+        [int]$TimeoutSeconds = 180
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $command = "cd '$WslProjectDir' && docker compose -f docker-compose.middleware.yml ps --status running --services $ServiceName | grep -qx $ServiceName"
+        wsl.exe -e bash -lc $command *> $null
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw "$ServiceName is not running in WSL docker compose within $TimeoutSeconds seconds."
+}
+
 function Get-ListeningPid {
     param([int]$Port)
 
@@ -135,9 +154,9 @@ function Start-BackendIfNeeded {
     }
 
     if (-not (Test-Path $mavenCmd)) {
-        $command = "Set-Location '$backendDir'; `$env:SPRING_PROFILES_ACTIVE='wsl'; mvn -f nexus-app\pom.xml -am spring-boot:run"
+        $command = "Set-Location '$backendDir'; `$env:SPRING_PROFILES_ACTIVE='wsl'; mvn -pl nexus-app -am -DskipTests install; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; mvn -f nexus-app\pom.xml spring-boot:run"
     } else {
-        $command = "Set-Location '$backendDir'; `$env:SPRING_PROFILES_ACTIVE='wsl'; & '$mavenCmd' -f nexus-app\pom.xml -am spring-boot:run"
+        $command = "Set-Location '$backendDir'; `$env:SPRING_PROFILES_ACTIVE='wsl'; & '$mavenCmd' -pl nexus-app -am -DskipTests install; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }; & '$mavenCmd' -f nexus-app\pom.xml spring-boot:run"
     }
 
     Write-Step 'Starting backend on port 8080.'
@@ -200,6 +219,8 @@ foreach ($service in @(
 )) {
     Wait-ForTcpPort -Name $service.Name -Port $service.Port
 }
+
+Wait-ForWslComposeServiceRunning -WslProjectDir $wslProjectDir -ServiceName 'canal-server'
 
 Start-BackendIfNeeded
 Start-FrontendIfNeeded

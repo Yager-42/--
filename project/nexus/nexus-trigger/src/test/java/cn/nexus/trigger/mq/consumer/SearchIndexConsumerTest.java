@@ -1,15 +1,15 @@
 package cn.nexus.trigger.mq.consumer;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
 import cn.nexus.trigger.search.support.SearchIndexUpsertService;
-import cn.nexus.types.event.PostDeletedEvent;
-import cn.nexus.types.event.PostPublishedEvent;
-import cn.nexus.types.event.PostUpdatedEvent;
+import cn.nexus.types.event.search.PostChangedCdcEvent;
 import cn.nexus.types.event.UserNicknameChangedEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
@@ -28,9 +28,8 @@ class SearchIndexConsumerTest {
 
     @Test
     void onUserNicknameChanged_shouldReloadLatestNicknameFromUserBase() {
-        ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
         SearchIndexUpsertService upsertService = Mockito.mock(SearchIndexUpsertService.class);
-        SearchIndexConsumer consumer = new SearchIndexConsumer(searchEnginePort, upsertService);
+        SearchIndexConsumer consumer = new SearchIndexConsumer(upsertService);
         when(upsertService.updateAuthorNickname(8L)).thenReturn(2L);
 
         UserNicknameChangedEvent event = new UserNicknameChangedEvent();
@@ -42,58 +41,68 @@ class SearchIndexConsumerTest {
     }
 
     @Test
-    void onPostPublished_shouldSoftDeleteWhenPostNotIndexable() {
-        ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
+    void onPostChanged_shouldSoftDeleteWhenPostNotIndexable() {
         SearchIndexUpsertService upsertService = Mockito.mock(SearchIndexUpsertService.class);
-        SearchIndexConsumer consumer = new SearchIndexConsumer(searchEnginePort, upsertService);
+        ReliableMqConsumerRecordService recordService = mock(ReliableMqConsumerRecordService.class);
+        when(recordService.start(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenReturn(true);
+        SearchIndexCdcConsumer consumer = new SearchIndexCdcConsumer(
+                upsertService,
+                recordService,
+                new ObjectMapper());
         when(upsertService.upsertPost(101L))
                 .thenReturn(new SearchIndexUpsertService.SearchIndexAction(101L, false, true, "NOT_INDEXABLE"));
 
-        PostPublishedEvent event = new PostPublishedEvent();
+        PostChangedCdcEvent event = new PostChangedCdcEvent();
         event.setPostId(101L);
-        event.setAuthorId(9L);
-        event.setPublishTimeMs(10L);
-        consumer.onPostPublished(event);
+        event.setTsMs(10L);
+        event.setSource("canal");
+        event.setTable("content_post");
+        event.setEventId("mysql-bin.000001:1:101");
+        consumer.onPostChanged(event);
 
         verify(upsertService).upsertPost(101L);
     }
 
     @Test
-    void onPostUpdated_shouldDelegateToUpsertService() {
-        ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
+    void onPostChanged_shouldDelegateToUpsertService() {
         SearchIndexUpsertService upsertService = Mockito.mock(SearchIndexUpsertService.class);
-        SearchIndexConsumer consumer = new SearchIndexConsumer(searchEnginePort, upsertService);
+        ReliableMqConsumerRecordService recordService = mock(ReliableMqConsumerRecordService.class);
+        when(recordService.start(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenReturn(true);
+        SearchIndexCdcConsumer consumer = new SearchIndexCdcConsumer(
+                upsertService,
+                recordService,
+                new ObjectMapper());
         when(upsertService.upsertPost(202L))
                 .thenReturn(new SearchIndexUpsertService.SearchIndexAction(202L, true, false, null));
 
-        PostUpdatedEvent event = new PostUpdatedEvent();
+        PostChangedCdcEvent event = new PostChangedCdcEvent();
         event.setPostId(202L);
-        event.setOperatorId(20L);
         event.setTsMs(30L);
-        consumer.onPostUpdated(event);
+        event.setSource("canal");
+        event.setTable("content_post");
+        event.setEventId("mysql-bin.000001:1:202");
+        consumer.onPostChanged(event);
 
         verify(upsertService).upsertPost(202L);
     }
 
     @Test
-    void onPostDeleted_shouldSoftDeleteWhenEventValid() {
-        ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
-        SearchIndexConsumer consumer = new SearchIndexConsumer(
-                searchEnginePort,
-                Mockito.mock(SearchIndexUpsertService.class));
+    void onPostChanged_shouldRejectInvalidEvent() {
+        SearchIndexCdcConsumer consumer = new SearchIndexCdcConsumer(
+                mock(SearchIndexUpsertService.class),
+                mock(ReliableMqConsumerRecordService.class),
+                new ObjectMapper());
 
-        PostDeletedEvent event = new PostDeletedEvent();
+        PostChangedCdcEvent event = new PostChangedCdcEvent();
         event.setPostId(303L);
-        event.setOperatorId(3L);
-        event.setTsMs(30L);
-        consumer.onPostDeleted(event);
 
-        verify(searchEnginePort).softDelete(303L);
+        assertThrows(AmqpRejectAndDontRequeueException.class, () -> consumer.onPostChanged(event));
     }
 
     private SearchIndexConsumer newConsumer() {
         return new SearchIndexConsumer(
-                Mockito.mock(ISearchEnginePort.class),
                 Mockito.mock(SearchIndexUpsertService.class));
     }
 }

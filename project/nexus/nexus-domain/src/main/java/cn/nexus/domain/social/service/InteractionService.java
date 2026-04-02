@@ -71,20 +71,9 @@ public class InteractionService implements IInteractionService {
         if (actionEnum == null) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
         }
-        ReactionResultVO res = reactionLikeService.applyReaction(userId, target, actionEnum, requestId);
+        return reactionLikeService.applyReaction(userId, target, actionEnum, requestId);
 
         // 评论点赞的计数不是同步写回主表，而是发事件让聚合链路最终一致收敛。
-        if (target != null && target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT) {
-            Integer delta = res == null ? null : res.getDelta();
-            if (delta != null && delta != 0 && targetId != null) {
-                CommentBriefVO c = commentRepository.getBrief(targetId);
-                if (c != null && c.getPostId() != null) {
-                    publishLikeCountChanged(targetId, c.getPostId(), (long) delta, socialIdPort.now());
-                }
-            }
-        }
-
-        return res;
     }
 
     /**
@@ -642,19 +631,6 @@ public class InteractionService implements IInteractionService {
             commentEventPort.publish(changed);
         } catch (Exception e) {
             log.warn("publish RootReplyCountChangedEvent failed, rootCommentId={}, postId={}, delta={}", rootCommentId, postId, delta, e);
-        }
-    }
-
-    private void publishLikeCountChanged(Long rootCommentId, Long postId, Long delta, Long nowMs) {
-        try {
-            cn.nexus.types.event.interaction.CommentLikeChangedEvent changed = new cn.nexus.types.event.interaction.CommentLikeChangedEvent();
-            changed.setRootCommentId(rootCommentId);
-            changed.setPostId(postId);
-            changed.setDelta(delta);
-            changed.setTsMs(nowMs);
-            commentEventPort.publish(changed);
-        } catch (Exception e) {
-            log.warn("publish CommentLikeChangedEvent failed, rootCommentId={}, postId={}, delta={}", rootCommentId, postId, delta, e);
         }
     }
 

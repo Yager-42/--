@@ -1,6 +1,7 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IInteractionNotifyEventPort;
+import cn.nexus.domain.social.adapter.port.ICommentEventPort;
 import cn.nexus.domain.social.adapter.port.ILikeUnlikeEventPort;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.domain.social.adapter.port.IPostLikeCachePort;
@@ -8,9 +9,12 @@ import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionDelayPort;
 import cn.nexus.domain.social.adapter.port.IRecommendFeedbackEventPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
+import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.valobj.ReactionActionEnumVO;
+import cn.nexus.domain.social.model.valobj.ReactionApplyResultVO;
+import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.ReactionLikerVO;
 import cn.nexus.domain.social.model.valobj.ReactionLikersVO;
 import cn.nexus.domain.social.model.valobj.ReactionResultVO;
@@ -20,11 +24,9 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionUserEdgeVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
-import cn.nexus.domain.social.model.valobj.like.PostLikeApplyResultVO;
-import cn.nexus.domain.social.model.valobj.like.PostLikeApplyStatusEnumVO;
-import cn.nexus.domain.social.model.valobj.like.PostLikeCacheStateVO;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.event.interaction.EventType;
+import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
 import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import cn.nexus.types.event.recommend.RecommendFeedbackEvent;
@@ -56,11 +58,14 @@ public class ReactionLikeService implements IReactionLikeService {
 
     private static final int SYNC_TTL_SEC = 600;
     private static final long DEFAULT_WINDOW_MS = 300_000L;
+    private static final long COMMENT_WINDOW_MS = 1_000L;
 
     private final IReactionCachePort reactionCachePort;
     private final IReactionDelayPort reactionDelayPort;
+    private final ICommentRepository commentRepository;
     private final IReactionRepository reactionRepository;
     private final ISocialIdPort socialIdPort;
+    private final ICommentEventPort commentEventPort;
     private final IInteractionNotifyEventPort interactionNotifyEventPort;
     private final IRecommendFeedbackEventPort recommendFeedbackEventPort;
     private final IPostLikeCachePort postLikeCachePort;
@@ -84,139 +89,30 @@ public class ReactionLikeService implements IReactionLikeService {
         requireTarget(target);
         requireNonNull(action, "action");
         requireLikeOnly(target);
-
-        // `POST` 和 `COMMENT` 走不同的一致性策略：前者偏缓存，后者偏数据库真相。
-        if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
-            return applyPostLike(userId, target, action, requestId);
-        }
-        return applyCommentLike(userId, target, action, requestId);
+        return applyUnifiedLike(userId, target, action, requestId);
     }
 
-    private ReactionResultVO applyPostLike(Long userId, ReactionTargetVO target, ReactionActionEnumVO action, String requestId) {
-        String rid = (requestId == null || requestId.isBlank()) ? ("rid-" + socialIdPort.nextId()) : requestId.trim();
-        long nowMs = socialIdPort.now();
-        Long postId = target == null ? null : target.getTargetId();
-        Long creatorId = postId == null ? null : postAuthorPort.getPostAuthorId(postId);
-        if (postId == null || creatorId == null) {
-            throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
-        }
-
-        // 先把帖子和作者的计数缓存预热出来，后面的增减才能尽量走热路径。
-        try {
-            ReactionTargetVO cntTarget = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(postId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            reactionCachePort.getCountFromRedis(cntTarget);
-        } catch (Exception ignored) {
-        }
-        try {
-            ReactionTargetVO creatorTarget = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.USER)
-                    .targetId(creatorId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            reactionCachePort.getCountFromRedis(creatorTarget);
-        } catch (Exception ignored) {
-        }
-
-        PostLikeApplyResultVO apply;
-        if (action.desiredState() == 1) {
-            apply = postLikeCachePort.tryLike(userId, postId, nowMs);
-            if (apply != null && apply.getStatus() != null && apply.getStatus() == PostLikeApplyStatusEnumVO.NEED_DB_CHECK.getCode()) {
-                boolean exists = reactionRepository.exists(target, userId);
-                if (!exists) {
-                    apply = postLikeCachePort.forceLike(userId, postId, nowMs);
-                } else {
-                    apply = PostLikeApplyResultVO.builder().status(PostLikeApplyStatusEnumVO.ALREADY.getCode()).delta(0).currentCount(apply.getCurrentCount()).build();
-                }
-            }
-        } else {
-            apply = postLikeCachePort.tryUnlike(userId, postId, nowMs);
-            if (apply != null && apply.getStatus() != null && apply.getStatus() == PostLikeApplyStatusEnumVO.NEED_DB_CHECK.getCode()) {
-                boolean exists = reactionRepository.exists(target, userId);
-                if (exists) {
-                    apply = postLikeCachePort.forceUnlike(userId, postId, nowMs);
-                } else {
-                    apply = PostLikeApplyResultVO.builder().status(PostLikeApplyStatusEnumVO.ALREADY.getCode()).delta(0).currentCount(apply.getCurrentCount()).build();
-                }
-            }
-        }
-
-        int delta = apply == null || apply.getDelta() == null ? 0 : apply.getDelta();
-        long currentCount = apply == null || apply.getCurrentCount() == null ? 0L : apply.getCurrentCount();
-
-        if (delta != 0) {
-            // 作者维度的获赞总数和帖子点赞数不是一张表，这里顺手把作者侧缓存也推进去。
-            try {
-                postLikeCachePort.applyCreatorLikeDelta(creatorId, delta);
-            } catch (Exception ignored) {
-            }
-        }
-
-        if (delta == 1) {
-            LikeUnlikePostEvent event = new LikeUnlikePostEvent();
-            event.setEventId(rid);
-            event.setUserId(userId);
-            event.setPostId(postId);
-            event.setPostCreatorId(creatorId == null ? 0L : creatorId);
-            event.setType(1);
-            event.setCreateTime(nowMs);
-            likeUnlikeEventPort.publishLike(event);
-            publishNotifyLikeAdded(rid, userId, target);
-        }
-
-        if (delta == -1) {
-            LikeUnlikePostEvent event = new LikeUnlikePostEvent();
-            event.setEventId(rid);
-            event.setUserId(userId);
-            event.setPostId(postId);
-            event.setPostCreatorId(creatorId == null ? 0L : creatorId);
-            event.setType(0);
-            event.setCreateTime(nowMs);
-            likeUnlikeEventPort.publishUnlike(event);
-            publishRecommendUnlike(rid, userId, target);
-        }
-
-        log.info(buildEventJson(rid, userId, target, action, action.desiredState(), delta, currentCount, false));
-        return ReactionResultVO.builder()
-                .requestId(rid)
-                .currentCount(currentCount)
-                .delta(delta)
-                .success(true)
-                .build();
-    }
-
-    private ReactionResultVO applyCommentLike(Long userId, ReactionTargetVO target, ReactionActionEnumVO action, String requestId) {
+    private ReactionResultVO applyUnifiedLike(Long userId, ReactionTargetVO target, ReactionActionEnumVO action, String requestId) {
         String rid = (requestId == null || requestId.isBlank()) ? ("rid-" + socialIdPort.nextId()) : requestId.trim();
         int desiredState = action.desiredState();
-        // 评论点赞以数据库为真相：先落边，再改聚合计数，最后事务后刷新缓存。
-        int affected = desiredState == 1 ? reactionRepository.insertIgnore(target, userId) : reactionRepository.deleteOne(target, userId);
-        int delta = desiredState == 1 ? (affected > 0 ? 1 : 0) : (affected > 0 ? -1 : 0);
-        if (delta != 0) {
-            reactionRepository.incrCount(target, (long) delta);
-        }
-        long currentCount = reactionRepository.getCount(target);
+        ReactionApplyResultVO apply = reactionCachePort.applyAtomic(userId, target, desiredState, SYNC_TTL_SEC);
+        int delta = apply == null || apply.getDelta() == null ? 0 : apply.getDelta();
+        long currentCount = apply == null || apply.getCurrentCount() == null ? 0L : apply.getCurrentCount();
+        boolean firstPending = apply != null && apply.isFirstPending();
 
-        afterCommit(() -> {
-            try {
-                if (delta == 1) {
-                    reactionCachePort.setState(userId, target, true);
-                } else if (delta == -1 && reactionCachePort.bitmapShardExists(userId, target)) {
-                    reactionCachePort.setState(userId, target, false);
-                }
-                reactionCachePort.setCount(target, currentCount);
-            } catch (Exception e) {
-                log.warn("comment reaction redis refresh failed, userId={}, target={}", userId, target, e);
-            }
-        });
-
-        if (delta == 1) {
-            publishNotifyLikeAdded(rid, userId, target);
+        if (firstPending) {
+            long delayMs = reactionCachePort.getWindowMs(target, defaultWindowMs(target));
+            reactionDelayPort.sendDelay(target, delayMs);
         }
 
-        log.info(buildEventJson(rid, userId, target, action, desiredState, delta, currentCount, false));
+        long nowMs = socialIdPort.now();
+        if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
+            publishPostSideEffects(rid, userId, target, delta, nowMs);
+        } else if (target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT) {
+            publishCommentSideEffects(rid, userId, target, delta, nowMs);
+        }
+
+        log.info(buildEventJson(rid, userId, target, action, desiredState, delta, currentCount, firstPending));
         return ReactionResultVO.builder()
                 .requestId(rid)
                 .currentCount(currentCount)
@@ -238,28 +134,59 @@ public class ReactionLikeService implements IReactionLikeService {
         requireTarget(target);
         requireLikeOnly(target);
 
-        if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
-            PostLikeCacheStateVO cache = postLikeCachePort.cacheState(userId, target.getTargetId());
-            if (cache != null && cache.getLiked() != null) {
-                long cnt = cache.getCurrentCount() == null ? 0L : cache.getCurrentCount();
-                return ReactionStateVO.builder().state(Boolean.TRUE.equals(cache.getLiked())).currentCount(Math.max(0L, cnt)).build();
-            }
-            boolean exists = reactionRepository.exists(target, userId);
-            long cnt = cache == null || cache.getCurrentCount() == null ? 0L : cache.getCurrentCount();
-            return ReactionStateVO.builder().state(exists).currentCount(Math.max(0L, cnt)).build();
-        }
-
         boolean state;
         if (reactionCachePort.bitmapShardExists(userId, target)) {
             state = reactionCachePort.getState(userId, target);
         } else {
             state = reactionRepository.exists(target, userId);
-            if (state) {
-                reactionCachePort.setState(userId, target, true);
-            }
+            reactionCachePort.setState(userId, target, state);
         }
         long cnt = reactionCachePort.getCount(target);
         return ReactionStateVO.builder().state(state).currentCount(cnt).build();
+    }
+
+    private void publishPostSideEffects(String requestId, Long userId, ReactionTargetVO target, int delta, long nowMs) {
+        Long postId = target == null ? null : target.getTargetId();
+        Long creatorId = postId == null ? null : postAuthorPort.getPostAuthorId(postId);
+        if (postId == null || creatorId == null || delta == 0) {
+            return;
+        }
+        try {
+            postLikeCachePort.applyCreatorLikeDelta(creatorId, delta);
+        } catch (Exception ignored) {
+        }
+
+        LikeUnlikePostEvent event = new LikeUnlikePostEvent();
+        event.setEventId(requestId);
+        event.setUserId(userId);
+        event.setPostId(postId);
+        event.setPostCreatorId(creatorId);
+        event.setCreateTime(nowMs);
+
+        if (delta > 0) {
+            event.setType(1);
+            likeUnlikeEventPort.publishLike(event);
+            publishNotifyLikeAdded(requestId, userId, target);
+            return;
+        }
+
+        event.setType(0);
+        likeUnlikeEventPort.publishUnlike(event);
+        publishRecommendUnlike(requestId, userId, target);
+    }
+
+    private void publishCommentSideEffects(String requestId, Long userId, ReactionTargetVO target, int delta, long nowMs) {
+        if (target == null || target.getTargetId() == null || delta == 0) {
+            return;
+        }
+        Long rootCommentId = target.getTargetId();
+        Long postId = loadCommentPostId(rootCommentId);
+        if (postId != null) {
+            publishCommentLikeChanged(rootCommentId, postId, delta, nowMs);
+        }
+        if (delta > 0) {
+            publishNotifyLikeAdded(requestId, userId, target);
+        }
     }
 
     /**
@@ -469,6 +396,40 @@ public class ReactionLikeService implements IReactionLikeService {
         } catch (Exception e) {
             log.warn("publish RecommendFeedbackEvent unlike failed, requestId={}, fromUserId={}, target={}", requestId, fromUserId, target, e);
         }
+    }
+
+    private Long loadCommentPostId(Long commentId) {
+        if (commentId == null) {
+            return null;
+        }
+        try {
+            CommentBriefVO brief = commentRepository.getBrief(commentId);
+            if (brief != null) {
+                return brief.getPostId();
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private void publishCommentLikeChanged(Long rootCommentId, Long postId, long delta, long nowMs) {
+        try {
+            CommentLikeChangedEvent event = new CommentLikeChangedEvent();
+            event.setRootCommentId(rootCommentId);
+            event.setPostId(postId);
+            event.setDelta(delta);
+            event.setTsMs(nowMs);
+            commentEventPort.publish(event);
+        } catch (Exception e) {
+            log.warn("publish CommentLikeChangedEvent failed, rootCommentId={}, postId={}, delta={}", rootCommentId, postId, delta, e);
+        }
+    }
+
+    private long defaultWindowMs(ReactionTargetVO target) {
+        if (target != null && target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT) {
+            return COMMENT_WINDOW_MS;
+        }
+        return DEFAULT_WINDOW_MS;
     }
 
     private void afterCommit(Runnable action) {

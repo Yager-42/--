@@ -1,6 +1,7 @@
 package cn.nexus.domain.user.service;
 
-import cn.nexus.domain.social.adapter.port.IRelationCachePort;
+import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
@@ -38,7 +39,7 @@ public class UserProfilePageQueryService {
     private final IUserProfileRepository userProfileRepository;
     private final IUserStatusRepository userStatusRepository;
     private final IRelationRepository relationRepository;
-    private final IRelationCachePort relationCachePort;
+    private final IUserCounterPort userCounterPort;
     private final IRelationPolicyPort relationPolicyPort;
     private final IRiskService riskService;
     private final Executor aggregationExecutor;
@@ -46,14 +47,14 @@ public class UserProfilePageQueryService {
     public UserProfilePageQueryService(IUserProfileRepository userProfileRepository,
                                       IUserStatusRepository userStatusRepository,
                                       IRelationRepository relationRepository,
-                                      IRelationCachePort relationCachePort,
+                                      IUserCounterPort userCounterPort,
                                       IRelationPolicyPort relationPolicyPort,
                                       IRiskService riskService,
                                       @Qualifier("aggregationExecutor") Executor aggregationExecutor) {
         this.userProfileRepository = userProfileRepository;
         this.userStatusRepository = userStatusRepository;
         this.relationRepository = relationRepository;
-        this.relationCachePort = relationCachePort;
+        this.userCounterPort = userCounterPort;
         this.relationPolicyPort = relationPolicyPort;
         this.riskService = riskService;
         this.aggregationExecutor = aggregationExecutor;
@@ -87,10 +88,10 @@ public class UserProfilePageQueryService {
                 () -> userStatusRepository.getStatus(targetUserId),
                 aggregationExecutor);
         CompletableFuture<Long> followCountFuture = CompletableFuture.supplyAsync(
-                () -> relationCachePort.getFollowingCount(targetUserId),
+                () -> userCounterPort.getCount(targetUserId, UserCounterType.FOLLOWING),
                 aggregationExecutor);
         CompletableFuture<Long> followerCountFuture = CompletableFuture.supplyAsync(
-                () -> relationCachePort.getFollowerCount(targetUserId),
+                () -> userCounterPort.getCount(targetUserId, UserCounterType.FOLLOWER),
                 aggregationExecutor);
         CompletableFuture<Boolean> isFollowFuture = viewerId.equals(targetUserId)
                 ? CompletableFuture.completedFuture(false)

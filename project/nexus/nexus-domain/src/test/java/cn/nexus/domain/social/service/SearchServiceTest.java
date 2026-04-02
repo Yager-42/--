@@ -6,10 +6,14 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineQueryVO;
@@ -29,6 +33,7 @@ class SearchServiceTest {
 
     private ISearchEnginePort searchEnginePort;
     private IFeedCardStatRepository feedCardStatRepository;
+    private IObjectCounterPort objectCounterPort;
     private IReactionRepository reactionRepository;
     private SearchService searchService;
 
@@ -36,8 +41,9 @@ class SearchServiceTest {
     void setUp() {
         searchEnginePort = Mockito.mock(ISearchEnginePort.class);
         feedCardStatRepository = Mockito.mock(IFeedCardStatRepository.class);
+        objectCounterPort = Mockito.mock(IObjectCounterPort.class);
         reactionRepository = Mockito.mock(IReactionRepository.class);
-        searchService = new SearchService(searchEnginePort, feedCardStatRepository, reactionRepository);
+        searchService = new SearchService(searchEnginePort, feedCardStatRepository, objectCounterPort, reactionRepository);
     }
 
     @Test
@@ -87,7 +93,7 @@ class SearchServiceTest {
                 .hits(List.of(SearchEngineResultVO.SearchHitVO.builder().source(doc).build()))
                 .build());
         when(feedCardStatRepository.getBatch(List.of(101L))).thenReturn(Map.of());
-        when(reactionRepository.getCount(any())).thenReturn(12L);
+        when(objectCounterPort.getCount(target(101L))).thenReturn(12L);
 
         SearchResultVO result = searchService.search(null, "keyword", null, null, null);
 
@@ -107,5 +113,13 @@ class SearchServiceTest {
     @Test
     void search_shouldRejectInvalidSize() {
         assertThrows(AppException.class, () -> searchService.search(1L, "ok", 0, null, null));
+    }
+
+    private ObjectCounterTarget target(Long postId) {
+        return ObjectCounterTarget.builder()
+                .targetType(ReactionTargetTypeEnumVO.POST)
+                .targetId(postId)
+                .counterType(ObjectCounterType.LIKE)
+                .build();
     }
 }

@@ -1,22 +1,9 @@
 package cn.nexus.domain.social.adapter.port;
 
-import cn.nexus.domain.social.model.valobj.like.PostLikeApplyResultVO;
-import cn.nexus.domain.social.model.valobj.like.PostLikeCacheStateVO;
-
 /**
  * Post-like cache port (Bloom + ZSet).
  */
 public interface IPostLikeCachePort {
-
-    PostLikeApplyResultVO tryLike(Long userId, Long postId, long nowMs);
-
-    PostLikeApplyResultVO forceLike(Long userId, Long postId, long nowMs);
-
-    PostLikeApplyResultVO tryUnlike(Long userId, Long postId, long nowMs);
-
-    PostLikeApplyResultVO forceUnlike(Long userId, Long postId, long nowMs);
-
-    PostLikeCacheStateVO cacheState(Long userId, Long postId);
 
     /**
      * 更新“作者收到的点赞数”计数（最终一致，允许短暂偏差）。

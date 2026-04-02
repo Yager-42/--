@@ -1,6 +1,8 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
@@ -10,8 +12,8 @@ import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.ArrayList;
@@ -36,7 +38,7 @@ import org.springframework.stereotype.Service;
 public class FeedCardAssembleService {
 
     private final IFeedCardRepository feedCardRepository;
-    private final IReactionCachePort reactionCachePort;
+    private final IObjectCounterPort objectCounterPort;
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
     private final IReactionRepository reactionRepository;
@@ -158,21 +160,21 @@ public class FeedCardAssembleService {
             return Map.of();
         }
 
-        List<ReactionTargetVO> targets = new ArrayList<>(candidateIds.size());
+        List<ObjectCounterTarget> targets = new ArrayList<>(candidateIds.size());
         for (Long postId : candidateIds) {
             if (postId == null) {
                 continue;
             }
-            targets.add(ReactionTargetVO.builder()
+            targets.add(ObjectCounterTarget.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(postId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .counterType(ObjectCounterType.LIKE)
                     .build());
         }
 
-        Map<String, Long> countByTag = reactionCachePort.batchGetCount(targets);
+        Map<String, Long> countByTag = objectCounterPort.batchGetCount(targets);
         Map<Long, Long> likeCountMap = new HashMap<>(candidateIds.size());
-        for (ReactionTargetVO target : targets) {
+        for (ObjectCounterTarget target : targets) {
             Long count = countByTag.get(target.hashTag());
             likeCountMap.put(target.getTargetId(), count == null ? 0L : count);
         }

@@ -7,10 +7,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.nexus.api.social.content.dto.ContentDetailResponseDTO;
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -23,12 +26,12 @@ class ContentDetailQueryServiceTest {
     void query_shouldReuseFindPostAndCacheLocalSnapshot() {
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
+        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
         Executor aggregationExecutor = Runnable::run;
         ContentDetailQueryService service = new ContentDetailQueryService(
                 contentRepository,
                 userBaseRepository,
-                reactionCachePort,
+                objectCounterPort,
                 aggregationExecutor
         );
 
@@ -42,7 +45,7 @@ class ContentDetailQueryServiceTest {
                 .build());
         when(userBaseRepository.listByUserIds(List.of(11L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(11L).nickname("u").avatarUrl("a").build()));
-        when(reactionCachePort.getCount(any())).thenReturn(9L);
+        when(objectCounterPort.getCount(any())).thenReturn(9L);
 
         ContentDetailResponseDTO first = service.query(101L);
         ContentDetailResponseDTO second = service.query(101L);
@@ -57,12 +60,12 @@ class ContentDetailQueryServiceTest {
     void query_shouldNotFailWhenAuthorLoadFailed() {
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
+        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
         Executor aggregationExecutor = Runnable::run;
         ContentDetailQueryService service = new ContentDetailQueryService(
                 contentRepository,
                 userBaseRepository,
-                reactionCachePort,
+                objectCounterPort,
                 aggregationExecutor
         );
 
@@ -75,7 +78,7 @@ class ContentDetailQueryServiceTest {
                 .status(2)
                 .build());
         when(userBaseRepository.listByUserIds(List.of(11L))).thenThrow(new RuntimeException("boom"));
-        when(reactionCachePort.getCount(any())).thenReturn(9L);
+        when(objectCounterPort.getCount(any())).thenReturn(9L);
 
         ContentDetailResponseDTO response = service.query(101L);
 

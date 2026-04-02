@@ -259,6 +259,21 @@ public abstract class RealBusinessIntegrationTestSupport {
         stringRedisTemplate.opsForHash().delete(key, field);
     }
 
+    protected long readRedisLong(String key) {
+        if (key == null || key.isBlank()) {
+            return 0L;
+        }
+        try {
+            String raw = stringRedisTemplate.opsForValue().get(key);
+            if (raw == null || raw.isBlank()) {
+                return 0L;
+            }
+            return Math.max(0L, Long.parseLong(raw.trim()));
+        } catch (Exception e) {
+            throw new IllegalStateException("read redis value failed, key=" + key, e);
+        }
+    }
+
     protected void clearFeedKeys(long authorId, long... inboxUserIds) {
         deleteRedisKey("feed:outbox:" + authorId);
         for (long userId : inboxUserIds) {

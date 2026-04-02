@@ -1,7 +1,8 @@
 package cn.nexus.domain.social.service;
 
+import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
-import cn.nexus.domain.social.adapter.port.IRelationCachePort;
 import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IRelationEventOutboxRepository;
@@ -41,7 +42,7 @@ public class RelationService implements IRelationService {
     private final IRelationEventOutboxRepository relationEventOutboxRepository;
     private final IRelationPolicyPort relationPolicyPort;
     private final IRelationAdjacencyCachePort adjacencyCachePort;
-    private final IRelationCachePort relationCachePort;
+    private final IUserCounterPort userCounterPort;
 
     /**
      * 建立关注关系。
@@ -62,7 +63,7 @@ public class RelationService implements IRelationService {
             return FollowResultVO.builder().status("BLOCKED").build();
         }
         // 关注上限走缓存计数，目的是避免每次关注前都去做高成本 COUNT(*)。
-        if (relationCachePort.getFollowingCount(sourceId) >= FOLLOW_LIMIT) {
+        if (userCounterPort.getCount(sourceId, UserCounterType.FOLLOWING) >= FOLLOW_LIMIT) {
             return FollowResultVO.builder().status("LIMIT_REACHED").build();
         }
 
@@ -95,8 +96,8 @@ public class RelationService implements IRelationService {
         // 缓存和邻接门面一定要等事务提交后再碰，避免回滚时出现“库没成功，缓存先脏了”。
         afterCommit(() -> {
             adjacencyCachePort.addFollow(sourceId, targetId, nowMs);
-            relationCachePort.incrFollowing(sourceId, 1);
-            relationCachePort.incrFollower(targetId, 1);
+            userCounterPort.increment(sourceId, UserCounterType.FOLLOWING, 1);
+            userCounterPort.increment(targetId, UserCounterType.FOLLOWER, 1);
         });
         return FollowResultVO.builder().status("ACTIVE").build();
     }
@@ -120,8 +121,10 @@ public class RelationService implements IRelationService {
             // 没关注也顺手清一次残留数据，这是幂等修复，不是额外业务。
             afterCommit(() -> {
                 adjacencyCachePort.removeFollow(sourceId, targetId);
-                relationCachePort.evict(sourceId);
-                relationCachePort.evict(targetId);
+                userCounterPort.evict(sourceId, UserCounterType.FOLLOWING);
+                userCounterPort.evict(sourceId, UserCounterType.FOLLOWER);
+                userCounterPort.evict(targetId, UserCounterType.FOLLOWING);
+                userCounterPort.evict(targetId, UserCounterType.FOLLOWER);
             });
             relationRepository.deleteFollower(targetId, sourceId);
             return FollowResultVO.builder().status("NOT_FOLLOWING").build();
@@ -136,8 +139,8 @@ public class RelationService implements IRelationService {
         // 写侧不精确删除 Feed inbox，而是把“取关立刻生效”的责任交给事件链路和读侧过滤。
         afterCommit(() -> {
             adjacencyCachePort.removeFollow(sourceId, targetId);
-            relationCachePort.incrFollowing(sourceId, -1);
-            relationCachePort.incrFollower(targetId, -1);
+            userCounterPort.increment(sourceId, UserCounterType.FOLLOWING, -1);
+            userCounterPort.increment(targetId, UserCounterType.FOLLOWER, -1);
         });
         return FollowResultVO.builder().status("UNFOLLOWED").build();
     }
@@ -188,12 +191,12 @@ public class RelationService implements IRelationService {
             adjacencyCachePort.removeFollow(sourceId, targetId);
             adjacencyCachePort.removeFollow(targetId, sourceId);
             if (forwardFollow) {
-                relationCachePort.incrFollowing(sourceId, -1);
-                relationCachePort.incrFollower(targetId, -1);
+                userCounterPort.increment(sourceId, UserCounterType.FOLLOWING, -1);
+                userCounterPort.increment(targetId, UserCounterType.FOLLOWER, -1);
             }
             if (reverseFollow) {
-                relationCachePort.incrFollowing(targetId, -1);
-                relationCachePort.incrFollower(sourceId, -1);
+                userCounterPort.increment(targetId, UserCounterType.FOLLOWING, -1);
+                userCounterPort.increment(sourceId, UserCounterType.FOLLOWER, -1);
             }
         });
         return OperationResultVO.builder()

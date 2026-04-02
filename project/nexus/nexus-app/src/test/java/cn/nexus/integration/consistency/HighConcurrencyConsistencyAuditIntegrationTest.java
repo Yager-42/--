@@ -64,8 +64,13 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
                 .reactionType(ReactionTypeEnumVO.LIKE)
                 .build();
 
-        await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
-                assertThat(reactionRepository.getCount(target)).isEqualTo(expected));
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            publishPendingReliableMqMessages();
+            assertThat(queryReactionEdgeCount(postId)).isEqualTo(expected);
+            assertThat(queryReactionAggregateCount(postId)).isEqualTo(expected);
+            assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(expected);
+            assertThat(reactionRepository.exists(target, likers.get(0).userId())).isTrue();
+        });
 
         long edgeCount = queryReactionEdgeCount(postId);
         long aggregateCount = queryReactionAggregateCount(postId);
@@ -226,21 +231,6 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
             }
         } catch (Exception e) {
             throw new IllegalStateException("query content_post status failed, postId=" + postId, e);
-        }
-    }
-
-    private long readRedisLong(String key) {
-        if (key == null || key.isBlank()) {
-            return 0L;
-        }
-        try {
-            String raw = stringRedisTemplate.opsForValue().get(key);
-            if (raw == null || raw.isBlank()) {
-                return 0L;
-            }
-            return Math.max(0L, Long.parseLong(raw.trim()));
-        } catch (Exception e) {
-            throw new IllegalStateException("read redis value failed, key=" + key, e);
         }
     }
 

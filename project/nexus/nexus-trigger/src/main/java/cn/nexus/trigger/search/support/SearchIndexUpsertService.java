@@ -1,13 +1,13 @@
 package cn.nexus.trigger.search.support;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
-import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
@@ -23,7 +23,7 @@ public class SearchIndexUpsertService {
     private final ISearchEnginePort searchEnginePort;
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
-    private final IReactionRepository reactionRepository;
+    private final IObjectCounterPort objectCounterPort;
     private final SearchDocumentAssembler searchDocumentAssembler;
 
     public SearchIndexAction upsertPost(Long postId) {
@@ -82,10 +82,10 @@ public class SearchIndexUpsertService {
             return null;
         }
         UserBriefVO author = resolveAuthor(post.getUserId());
-        long likeCount = likeCountOverride == null ? reactionRepository.getCount(ReactionTargetVO.builder()
+        long likeCount = likeCountOverride == null ? objectCounterPort.getCount(ObjectCounterTarget.builder()
                 .targetType(ReactionTargetTypeEnumVO.POST)
                 .targetId(post.getPostId())
-                .reactionType(ReactionTypeEnumVO.LIKE)
+                .counterType(ObjectCounterType.LIKE)
                 .build()) : likeCountOverride;
         return searchDocumentAssembler.assemble(
                 post.getPostId(),

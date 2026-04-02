@@ -69,7 +69,7 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             assertThat(reactionRepository.exists(postLikeTarget, liker.userId())).isTrue();
-            assertThat(reactionRepository.getCount(postLikeTarget)).isEqualTo(1L);
+            assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(1L);
         });
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
@@ -135,7 +135,7 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             assertThat(reactionRepository.exists(commentLikeTarget, liker.userId())).isTrue();
-            assertThat(reactionRepository.getCount(commentLikeTarget)).isEqualTo(1L);
+            assertThat(readRedisLong("interact:reaction:cnt:{COMMENT:" + rootCommentId + ":LIKE}")).isEqualTo(1L);
             assertThat(commentHotRankRepository.topIds(postId, 10)).contains(rootCommentId);
             assertThat(commentDao.selectBriefById(rootCommentId).getLikeCount()).isEqualTo(1L);
         });
@@ -331,13 +331,13 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             publishPendingReliableMqMessages();
             assertThat(reactionRepository.exists(postLikeTarget, liker.userId())).isTrue();
-            assertThat(reactionRepository.getCount(postLikeTarget)).isEqualTo(1L);
+            assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(1L);
             assertThat(notificationUnreadCount(author.userId(), "POST_LIKED", "POST", postId)).isGreaterThanOrEqualTo(1L);
         });
 
         assertThat(result.failure()).isEqualTo(0);
         assertThat(result.success()).isEqualTo(result.totalRequests());
-        assertThat(reactionRepository.getCount(postLikeTarget)).isEqualTo(1L);
+        assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(1L);
     }
 
     private long seedPublishedPost(long authorId) {

@@ -1,5 +1,8 @@
 package cn.nexus.domain.social.service;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
 import cn.nexus.domain.social.adapter.repository.IReactionRepository;
@@ -35,6 +38,7 @@ public class SearchService implements ISearchService {
 
     private final ISearchEnginePort searchEnginePort;
     private final IFeedCardStatRepository feedCardStatRepository;
+    private final IObjectCounterPort objectCounterPort;
     private final IReactionRepository reactionRepository;
 
     /**
@@ -171,10 +175,10 @@ public class SearchService implements ISearchService {
                 continue;
             }
             // 这里只有缓存 miss 才回真相源，避免每次搜索命中都把互动库打成热点。
-            long count = reactionRepository.getCount(ReactionTargetVO.builder()
+            long count = objectCounterPort.getCount(ObjectCounterTarget.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(contentId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .counterType(ObjectCounterType.LIKE)
                     .build());
             FeedCardStatVO stat = FeedCardStatVO.builder()
                     .postId(contentId)

@@ -1,11 +1,11 @@
 package cn.nexus.infrastructure.adapter.social.repository;
 
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +25,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 @RequiredArgsConstructor
 public class FeedCardStatRepository implements IFeedCardStatRepository {
-    private final IReactionCachePort reactionCachePort;
+    private final IObjectCounterPort objectCounterPort;
     private final SingleFlight singleFlight = new SingleFlight();
 
     /**
@@ -40,24 +40,24 @@ public class FeedCardStatRepository implements IFeedCardStatRepository {
             return Map.of();
         }
 
-        List<ReactionTargetVO> targets = new java.util.ArrayList<>(postIds.size());
+        List<ObjectCounterTarget> targets = new java.util.ArrayList<>(postIds.size());
         for (Long postId : postIds) {
             if (postId == null) {
                 continue;
             }
-            targets.add(ReactionTargetVO.builder()
+            targets.add(ObjectCounterTarget.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(postId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .counterType(ObjectCounterType.LIKE)
                     .build());
         }
         if (targets.isEmpty()) {
             return Map.of();
         }
 
-        Map<String, Long> countByTag = reactionCachePort.batchGetCount(targets);
+        Map<String, Long> countByTag = objectCounterPort.batchGetCount(targets);
         Map<Long, FeedCardStatVO> result = new HashMap<>(targets.size());
-        for (ReactionTargetVO target : targets) {
+        for (ObjectCounterTarget target : targets) {
             Long count = countByTag.get(target.hashTag());
             result.put(target.getTargetId(), FeedCardStatVO.builder()
                     .postId(target.getTargetId())
@@ -95,7 +95,7 @@ public class FeedCardStatRepository implements IFeedCardStatRepository {
      */
     @Override
     public void saveBatch(List<FeedCardStatVO> stats) {
-        // 点赞计数由 ReactionCachePort 统一维护。
+        // 点赞计数由统一对象计数端口维护。
     }
 
     /**

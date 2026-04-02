@@ -1,11 +1,11 @@
 package cn.nexus.config;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
-import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
 import cn.nexus.infrastructure.dao.social.IContentPostTypeDao;
@@ -71,7 +71,7 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
     private final IContentPostTypeDao contentPostTypeDao;
     private final IUserBaseDao userBaseDao;
     private final IPostContentKvPort postContentKvPort;
-    private final IReactionRepository reactionRepository;
+    private final IObjectCounterPort objectCounterPort;
     private final ISearchEnginePort searchEnginePort;
     private final SearchDocumentAssembler searchDocumentAssembler;
     private final RestClient searchRestClient;
@@ -200,10 +200,10 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
         if (uuid != null && !uuid.isBlank()) {
             contentText = contentByUuid.getOrDefault(uuid.trim(), "");
         }
-        long likeCount = reactionRepository.getCount(ReactionTargetVO.builder()
+        long likeCount = objectCounterPort.getCount(ObjectCounterTarget.builder()
                 .targetType(ReactionTargetTypeEnumVO.POST)
                 .targetId(po.getPostId())
-                .reactionType(ReactionTypeEnumVO.LIKE)
+                .counterType(ObjectCounterType.LIKE)
                 .build());
         return searchDocumentAssembler.assemble(
                 po.getPostId(),

@@ -122,8 +122,6 @@ public class RelationService implements IRelationService {
             afterCommit(() -> {
                 adjacencyCachePort.removeFollow(sourceId, targetId);
                 userCounterPort.evict(sourceId, UserCounterType.FOLLOWING);
-                userCounterPort.evict(sourceId, UserCounterType.FOLLOWER);
-                userCounterPort.evict(targetId, UserCounterType.FOLLOWING);
                 userCounterPort.evict(targetId, UserCounterType.FOLLOWER);
             });
             relationRepository.deleteFollower(targetId, sourceId);

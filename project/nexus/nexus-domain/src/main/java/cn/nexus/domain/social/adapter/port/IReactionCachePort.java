@@ -68,7 +68,9 @@ public interface IReactionCachePort {
     Map<String, Long> batchGetCount(List<ReactionTargetVO> targets);
 
     /**
-     * 仅从 Redis 获取计数（不做回源补偿）。
+     * 从 Redis 获取计数：miss 会回源 DB 并回填（用于保证异步落库/聚合链路拿到真值）。
+     *
+     * <p>注意：该方法名历史原因保留，语义与 {@link #getCount(ReactionTargetVO)} 类似，但不走热点 L1 缓存。</p>
      *
      * @param target 点赞目标 {@link ReactionTargetVO}
      * @return 点赞数量 {@code long}

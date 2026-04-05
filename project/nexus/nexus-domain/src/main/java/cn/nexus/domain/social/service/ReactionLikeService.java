@@ -59,6 +59,7 @@ public class ReactionLikeService implements IReactionLikeService {
     private static final int SYNC_TTL_SEC = 600;
     private static final long DEFAULT_WINDOW_MS = 300_000L;
     private static final long COMMENT_WINDOW_MS = 1_000L;
+    private static final String EVT_COMMENT_LIKE_CHANGED_PREFIX = "comment_like_changed:";
 
     private final IReactionCachePort reactionCachePort;
     private final IReactionDelayPort reactionDelayPort;
@@ -153,7 +154,11 @@ public class ReactionLikeService implements IReactionLikeService {
         }
         try {
             postLikeCachePort.applyCreatorLikeDelta(creatorId, delta);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            // Best-effort side effect: failure should not block the main like/unlike path.
+            if (log.isDebugEnabled()) {
+                log.debug("apply creator like delta failed, requestId={}, creatorId={}, delta={}", requestId, creatorId, delta, e);
+            }
         }
 
         LikeUnlikePostEvent event = new LikeUnlikePostEvent();
@@ -182,7 +187,7 @@ public class ReactionLikeService implements IReactionLikeService {
         Long rootCommentId = target.getTargetId();
         Long postId = loadCommentPostId(rootCommentId);
         if (postId != null) {
-            publishCommentLikeChanged(rootCommentId, postId, delta, nowMs);
+            publishCommentLikeChanged(requestId, rootCommentId, postId, delta, nowMs);
         }
         if (delta > 0) {
             publishNotifyLikeAdded(requestId, userId, target);
@@ -300,7 +305,7 @@ public class ReactionLikeService implements IReactionLikeService {
 
         // 快照清完后如果窗口里又进了新操作，就重新挂一次延迟任务继续收敛。
         reactionCachePort.setSyncPending(target, SYNC_TTL_SEC);
-        long delayMs = reactionCachePort.getWindowMs(target, DEFAULT_WINDOW_MS);
+        long delayMs = reactionCachePort.getWindowMs(target, defaultWindowMs(target));
         reactionDelayPort.sendDelay(target, delayMs);
     }
 
@@ -407,14 +412,23 @@ public class ReactionLikeService implements IReactionLikeService {
             if (brief != null) {
                 return brief.getPostId();
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            // Best-effort lookup: comment might be deleted/hidden or DAO might transiently fail.
+            if (log.isDebugEnabled()) {
+                log.debug("load comment postId failed, commentId={}", commentId, e);
+            }
         }
         return null;
     }
 
-    private void publishCommentLikeChanged(Long rootCommentId, Long postId, long delta, long nowMs) {
+    private void publishCommentLikeChanged(String requestId, Long rootCommentId, Long postId, long delta, long nowMs) {
         try {
+            String rid = requestId == null ? "" : requestId.trim();
+            String eventId = rid.isBlank()
+                    ? (EVT_COMMENT_LIKE_CHANGED_PREFIX + "gen:" + socialIdPort.nextId())
+                    : (EVT_COMMENT_LIKE_CHANGED_PREFIX + rid);
             CommentLikeChangedEvent event = new CommentLikeChangedEvent();
+            event.setEventId(eventId);
             event.setRootCommentId(rootCommentId);
             event.setPostId(postId);
             event.setDelta(delta);

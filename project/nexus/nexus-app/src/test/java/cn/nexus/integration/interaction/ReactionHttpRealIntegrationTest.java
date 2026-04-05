@@ -9,6 +9,7 @@ import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.ICommentDao;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
+import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
 import cn.nexus.trigger.mq.config.InteractionNotifyMqConfig;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
@@ -107,6 +108,7 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     @Test
     void commentLike_shouldUpdateHotRankSupportLikersAndCreateNotification() throws Exception {
         ensureNotifyConsumersReady();
+        ensureCommentConsumersReady();
         TestSession author = registerAndLoginSession("commentlike-author");
         TestSession commenter = registerAndLoginSession("commenter");
         TestSession liker = registerAndLoginSession("comment-liker");
@@ -439,6 +441,14 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         startRabbitListenerContainers();
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(queueConsumerCount(InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY)).isGreaterThan(0));
+    }
+
+    private void ensureCommentConsumersReady() {
+        startRabbitListenerContainers();
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            assertThat(queueConsumerCount(InteractionCommentMqConfig.Q_COMMENT_LIKE_CHANGED)).isGreaterThan(0);
+            assertThat(queueConsumerCount(InteractionCommentMqConfig.Q_REPLY_COUNT_CHANGED)).isGreaterThan(0);
+        });
     }
 
     private void startRabbitListenerContainers() {

@@ -259,7 +259,7 @@ public class ReactionCachePort implements IReactionCachePort {
     }
 
     /**
-     * 从 Redis 读取计数。
+     * 从 Redis 读取计数（miss 会回源 DB 并回填）。
      *
      * @param target target 参数。类型：{@link ReactionTargetVO}
      * @return 处理结果。类型：{@code long}

@@ -145,6 +145,10 @@ class ReactionLikeServiceTest {
         verify(reactionRepository, never()).insertIgnore(any(), any());
         verify(reactionRepository, never()).incrCount(any(), anyLong());
         verify(postLikeCachePort, never()).applyCreatorLikeDelta(Mockito.anyLong(), Mockito.anyInt());
-        verify(commentEventPort).publish(any(CommentLikeChangedEvent.class));
+        verify(commentEventPort).publish(org.mockito.ArgumentMatchers.<CommentLikeChangedEvent>argThat(e -> e != null
+                && e.getEventId() != null
+                && !e.getEventId().isBlank()
+                && e.getEventId().startsWith("comment_like_changed:")
+                && e.getEventId().contains(result.getRequestId())));
     }
 }

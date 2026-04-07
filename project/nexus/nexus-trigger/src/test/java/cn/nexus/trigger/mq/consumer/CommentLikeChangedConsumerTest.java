@@ -84,6 +84,41 @@ class CommentLikeChangedConsumerTest {
         verify(hotRankRepository, never()).upsert(Mockito.anyLong(), Mockito.anyLong(), Mockito.anyDouble());
     }
 
+    @Test
+    void onMessage_shouldBeIdempotentForSameEventId() {
+        IInteractionCommentInboxPort inboxPort = Mockito.mock(IInteractionCommentInboxPort.class);
+        ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
+        ICommentHotRankRepository hotRankRepository = Mockito.mock(ICommentHotRankRepository.class);
+        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        CommentLikeChangedConsumer consumer = new CommentLikeChangedConsumer(
+                inboxPort,
+                commentRepository,
+                hotRankRepository,
+                objectCounterPort);
+
+        CommentLikeChangedEvent event = new CommentLikeChangedEvent();
+        event.setEventId("evt-like-idem");
+        event.setRootCommentId(101L);
+        event.setPostId(88L);
+        event.setDelta(1L);
+
+        when(inboxPort.save("evt-like-idem", "COMMENT_LIKE_CHANGED", null)).thenReturn(true, false);
+        when(objectCounterPort.increment(target(101L, ObjectCounterType.LIKE), 1L)).thenReturn(6L);
+        when(objectCounterPort.getCount(target(101L, ObjectCounterType.REPLY))).thenReturn(4L);
+        when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder()
+                .commentId(101L)
+                .postId(88L)
+                .status(1)
+                .build());
+
+        consumer.onMessage(event);
+        consumer.onMessage(event);
+
+        verify(objectCounterPort, Mockito.times(1)).increment(target(101L, ObjectCounterType.LIKE), 1L);
+        verify(commentRepository, Mockito.times(1)).addLikeCount(101L, 1L);
+        verify(hotRankRepository, Mockito.times(1)).upsert(88L, 101L, 140D);
+    }
+
     private ObjectCounterTarget target(Long commentId, ObjectCounterType counterType) {
         return ObjectCounterTarget.builder()
                 .targetType(ReactionTargetTypeEnumVO.COMMENT)

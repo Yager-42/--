@@ -28,6 +28,7 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 class ReactionLikeServiceTest {
@@ -150,5 +151,63 @@ class ReactionLikeServiceTest {
                 && !e.getEventId().isBlank()
                 && e.getEventId().startsWith("comment_like_changed:")
                 && e.getEventId().contains(result.getRequestId())));
+    }
+
+    @Test
+    void applyReaction_commentLike_withRequestId_shouldPublishDeterministicEventId() {
+        IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
+        IReactionDelayPort reactionDelayPort = Mockito.mock(IReactionDelayPort.class);
+        ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
+        IReactionRepository reactionRepository = Mockito.mock(IReactionRepository.class);
+        ISocialIdPort socialIdPort = Mockito.mock(ISocialIdPort.class);
+        ICommentEventPort commentEventPort = Mockito.mock(ICommentEventPort.class);
+        IInteractionNotifyEventPort interactionNotifyEventPort = Mockito.mock(IInteractionNotifyEventPort.class);
+        IRecommendFeedbackEventPort recommendFeedbackEventPort = Mockito.mock(IRecommendFeedbackEventPort.class);
+        IPostLikeCachePort postLikeCachePort = Mockito.mock(IPostLikeCachePort.class);
+        ILikeUnlikeEventPort likeUnlikeEventPort = Mockito.mock(ILikeUnlikeEventPort.class);
+        IPostAuthorPort postAuthorPort = Mockito.mock(IPostAuthorPort.class);
+        IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
+
+        ReactionLikeService service = new ReactionLikeService(
+                reactionCachePort,
+                reactionDelayPort,
+                commentRepository,
+                reactionRepository,
+                socialIdPort,
+                commentEventPort,
+                interactionNotifyEventPort,
+                recommendFeedbackEventPort,
+                postLikeCachePort,
+                likeUnlikeEventPort,
+                postAuthorPort,
+                userBaseRepository
+        );
+
+        ReactionTargetVO target = ReactionTargetVO.builder()
+                .targetType(ReactionTargetTypeEnumVO.COMMENT)
+                .targetId(201L)
+                .reactionType(ReactionTypeEnumVO.LIKE)
+                .build();
+
+        when(socialIdPort.now()).thenReturn(2000L);
+        when(commentRepository.getBrief(201L))
+                .thenReturn(CommentBriefVO.builder().commentId(201L).postId(301L).build());
+        when(reactionCachePort.applyAtomic(2L, target, 1, 600))
+                .thenReturn(ReactionApplyResultVO.builder()
+                        .currentCount(3L)
+                        .delta(1)
+                        .firstPending(false)
+                        .build());
+
+        ReactionResultVO result = service.applyReaction(2L, target, ReactionActionEnumVO.ADD, "  req-123  ");
+
+        assertEquals("req-123", result.getRequestId());
+        ArgumentCaptor<CommentLikeChangedEvent> captor = ArgumentCaptor.forClass(CommentLikeChangedEvent.class);
+        verify(commentEventPort).publish(captor.capture());
+        assertEquals("comment_like_changed:req-123", captor.getValue().getEventId());
+        assertEquals(201L, captor.getValue().getRootCommentId());
+        assertEquals(301L, captor.getValue().getPostId());
+        assertEquals(1L, captor.getValue().getDelta());
+        assertEquals(2000L, captor.getValue().getTsMs());
     }
 }

@@ -25,11 +25,6 @@ spring:
     port: 5672
     username: guest
     password: guest
-  kafka:
-    bootstrap-servers: 127.0.0.1:9092
-    consumer:
-      group-id: nexus-like-pipeline
-      auto-offset-reset: earliest
   ai:
     dashscope:
       api-key: ${AI_DASHSCOPE_API_KEY:}

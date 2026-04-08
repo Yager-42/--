@@ -1,5 +1,5 @@
-<script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+﻿<script setup lang="ts">
+import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchSearch, type SearchResultCardViewModel } from '@/api/search'
 import TheNavBar from '@/components/TheNavBar.vue'
@@ -9,62 +9,72 @@ import PostCard from '@/components/PostCard.vue'
 const route = useRoute()
 const router = useRouter()
 
-const keyword = ref(route.query.q as string || '')
+const keyword = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const results = ref<SearchResultCardViewModel[]>([])
-const loading = ref(true)
+const loading = ref(false)
+const error = ref('')
 
 const performSearch = async () => {
-  if (!keyword.value) {
+  if (!keyword.value.trim()) {
     results.value = []
-    loading.value = false
+    error.value = ''
     return
   }
 
   loading.value = true
+  error.value = ''
   try {
-    const res = await fetchSearch({ q: keyword.value })
+    const res = await fetchSearch({ q: keyword.value.trim(), size: 20 })
     results.value = res.items
-  } catch (err) {
-    console.error('Search failed', err)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '搜索失败，请稍后重试'
+    results.value = []
   } finally {
     loading.value = false
   }
 }
 
-onMounted(performSearch)
-watch(() => route.query.q, (newVal) => {
-  keyword.value = typeof newVal === 'string' ? newVal : ''
-  performSearch()
-})
+watch(
+  () => route.query.q,
+  (val) => {
+    keyword.value = typeof val === 'string' ? val : ''
+    void performSearch()
+  },
+  { immediate: true }
+)
 
-const onSelectPost = (post: SearchResultCardViewModel) => {
-  router.push(`/content/${post.id}`)
+const openPost = (post: SearchResultCardViewModel) => {
+  void router.push(`/content/${post.id}`)
 }
 </script>
 
 <template>
-  <div class="search-results-page">
+  <div class="page-shell with-full-nav">
     <TheNavBar />
-    
-    <div class="content-wrapper">
-      <div class="page-header">
+
+    <main class="page-content results-page">
+      <header class="results-header">
         <h1 class="text-large-title">搜索结果</h1>
-        <p class="text-secondary">“{{ keyword }}” 的相关内容</p>
-      </div>
-      
-      <div v-if="loading" class="loading-state">
+        <p class="text-secondary">关键词：{{ keyword || '未输入' }}</p>
+      </header>
+
+      <section v-if="loading" class="state-card">
         <div class="spinner"></div>
-      </div>
-      
-      <div v-else-if="results.length === 0" class="empty-state">
-        <p class="text-secondary">没有找到相关内容</p>
-      </div>
-      
-      <div v-else class="results-list">
-        <!-- 这里可以根据后端返回的类型区分展示用户或帖子 -->
-        <PostCard 
-          v-for="item in results" 
-          :key="item.id" 
+        <span>正在搜索...</span>
+      </section>
+
+      <section v-else-if="error" class="state-card error">
+        {{ error }}
+      </section>
+
+      <section v-else-if="results.length === 0" class="state-card">
+        没有找到相关内容
+      </section>
+
+      <section v-else class="results-grid">
+        <PostCard
+          v-for="item in results"
+          :key="item.id"
           :post="{
             id: item.id,
             title: item.title,
@@ -73,48 +83,46 @@ const onSelectPost = (post: SearchResultCardViewModel) => {
             image: item.image,
             isLiked: item.isLiked,
             reactionCount: item.reactionCount
-          }" 
-          @click="onSelectPost(item)"
+          }"
+          @click="openPost(item)"
         />
-      </div>
-    </div>
-    
+      </section>
+    </main>
+
     <TheDock />
   </div>
 </template>
 
 <style scoped>
-.search-results-page {
-  height: 100vh;
-  padding-top: 44px;
-  background-color: var(--apple-bg);
-  overflow-y: auto;
+.results-page {
+  display: grid;
+  gap: 14px;
 }
 
-.content-wrapper {
-  padding: 24px 0 120px;
+.results-header {
+  padding: 8px 2px;
 }
 
-.page-header {
-  padding: 0 16px;
-  margin-bottom: 24px;
+.results-grid {
+  display: grid;
+  gap: 14px;
 }
 
-.loading-state, .empty-state {
-  padding: 100px 0;
-  text-align: center;
+.state-card {
+  min-height: 120px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
 }
 
-.spinner {
-  width: 24px;
-  height: 24px;
-  border: 2px solid rgba(0,0,0,0.1);
-  border-top-color: var(--apple-accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.error {
+  color: var(--brand-danger);
 }
 </style>
+
+

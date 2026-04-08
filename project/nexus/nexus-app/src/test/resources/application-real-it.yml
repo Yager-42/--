@@ -26,10 +26,6 @@ spring:
     port: 5672
     username: guest
     password: guest
-  kafka:
-    bootstrap-servers: 127.0.0.1:9092
-    listener:
-      auto-startup: false
   sql:
     init:
       mode: never

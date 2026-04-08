@@ -7,6 +7,7 @@ export const useFeedStore = defineStore('feed', () => {
   const nextCursor = ref<string | null>(null)
   const loading = ref(false)
   const hasMore = ref(true)
+  const error = ref<string | null>(null)
 
   const mergePosts = (incoming: FeedCardViewModel[]) => {
     const seen = new Set(posts.value.map((post) => post.postId))
@@ -24,6 +25,7 @@ export const useFeedStore = defineStore('feed', () => {
     if (loading.value || !hasMore.value) return
 
     loading.value = true
+    error.value = null
     try {
       const res = await fetchTimeline({
         cursor: nextCursor.value || undefined,
@@ -39,6 +41,7 @@ export const useFeedStore = defineStore('feed', () => {
       }
     } catch (err) {
       console.error('Failed to fetch timeline', err)
+      error.value = err instanceof Error ? err.message : '内容加载失败，请稍后重试'
     } finally {
       loading.value = false
     }
@@ -55,6 +58,7 @@ export const useFeedStore = defineStore('feed', () => {
     posts,
     loading,
     hasMore,
+    error,
     fetchNextPage,
     refresh
   }

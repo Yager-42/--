@@ -1,31 +1,41 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { submitAppeal } from '@/api/risk'
-import TheNavBar from '@/components/TheNavBar.vue'
 
 const router = useRouter()
 const route = useRoute()
+
 const appealContent = ref('')
 const loading = ref(false)
+const error = ref('')
+const success = ref('')
 
-const decisionId = route.query.decisionId as string || 'default'
-const punishId = route.query.punishId as string || 'default'
+const decisionId = typeof route.query.decisionId === 'string' ? route.query.decisionId : 'unknown'
+const punishId = typeof route.query.punishId === 'string' ? route.query.punishId : 'unknown'
 
 const handleSubmit = async () => {
-  if (!appealContent.value) return
-  
+  if (!appealContent.value.trim()) {
+    error.value = '请填写申诉内容'
+    return
+  }
+
   loading.value = true
+  error.value = ''
+  success.value = ''
+
   try {
     await submitAppeal({
       decisionId,
       punishId,
-      content: appealContent.value
+      content: appealContent.value.trim()
     })
-    alert('申诉已提交，我们将尽快审核。')
-    router.back()
-  } catch (err) {
-    console.error('Appeal failed', err)
+    success.value = '申诉已提交，我们会尽快处理。'
+    setTimeout(() => {
+      void router.back()
+    }, 900)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '提交失败，请稍后重试'
   } finally {
     loading.value = false
   }
@@ -33,113 +43,100 @@ const handleSubmit = async () => {
 </script>
 
 <template>
-  <div class="risk-center">
-    <TheNavBar />
-    
-    <div class="content-wrapper">
-      <h1 class="text-large-title">申诉中心</h1>
-      <p class="text-body text-secondary desc">如果你认为我们的安全系统存在误判，请在下方说明理由。</p>
-      
-      <div class="case-info">
-        <div class="info-row">
-          <span>事件编号</span>
-          <span class="value">{{ decisionId }}</span>
-        </div>
-        <div class="info-row">
-          <span>处罚类型</span>
-          <span class="value">账号禁言</span>
-        </div>
-      </div>
+  <div class="page-shell with-top-nav risk-page">
+    <main class="page-content surface-card risk-card">
+      <header>
+        <h1 class="text-large-title">申诉中心</h1>
+        <p class="text-secondary">如果你认为处罚存在误判，请完整描述实际情况。</p>
+      </header>
 
-      <div class="input-section">
-        <label class="text-headline">申诉理由</label>
-        <textarea 
-          v-model="appealContent" 
-          placeholder="请详细描述你的申诉理由..." 
-          class="apple-textarea"
-        ></textarea>
-      </div>
+      <section class="info-box">
+        <p><span>事件编号：</span><strong>{{ decisionId }}</strong></p>
+        <p><span>处罚编号：</span><strong>{{ punishId }}</strong></p>
+      </section>
 
-      <button 
-        class="apple-btn" 
-        :disabled="!appealContent || loading"
-        @click="handleSubmit"
-      >
-        提交申诉
-      </button>
-    </div>
+      <label class="field">
+        <span>申诉理由</span>
+        <textarea v-model="appealContent" placeholder="请详细说明申诉理由和补充证据" />
+      </label>
+
+      <p v-if="error" class="msg error">{{ error }}</p>
+      <p v-if="success" class="msg success">{{ success }}</p>
+
+      <div class="actions">
+        <button class="secondary-btn" type="button" @click="router.back()">返回</button>
+        <button class="primary-btn" type="button" :disabled="loading || !appealContent.trim()" @click="handleSubmit">
+          {{ loading ? '提交中...' : '提交申诉' }}
+        </button>
+      </div>
+    </main>
   </div>
 </template>
 
 <style scoped>
-.risk-center {
-  min-height: 100vh;
-  padding-top: 44px;
-  background-color: var(--apple-bg);
+.risk-page {
+  display: grid;
 }
 
-.content-wrapper {
-  padding: 32px 24px;
-}
-
-.desc {
-  margin: 12px 0 32px;
-}
-
-.case-info {
-  background: #f5f5f7;
-  border-radius: 16px;
-  padding: 16px;
-  margin-bottom: 32px;
-}
-
-.info-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 8px 0;
-  font-size: 15px;
-}
-
-.value {
-  font-weight: 600;
-}
-
-.input-section {
-  display: flex;
-  flex-direction: column;
+.risk-card {
+  padding: 20px;
+  display: grid;
   gap: 12px;
-  margin-bottom: 40px;
 }
 
-.apple-textarea {
-  width: 100%;
-  height: 160px;
-  background: white;
-  border: 1px solid #d2d2d7;
+.info-box {
+  border: 1px solid #facc15;
+  background: #fffbeb;
   border-radius: 12px;
-  padding: 16px;
-  font-size: 16px;
+  padding: 10px 12px;
+  color: #854d0e;
+  display: grid;
+  gap: 4px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field span {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+textarea {
+  min-height: 180px;
+  resize: vertical;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: #fff;
+  padding: 10px 12px;
   outline: none;
-  resize: none;
 }
 
-.apple-textarea:focus {
-  border-color: var(--apple-accent);
+.msg {
+  font-size: 0.9rem;
 }
 
-.apple-btn {
-  width: 100%;
-  height: 52px;
-  background-color: var(--apple-accent);
-  color: white;
-  border: none;
-  border-radius: 12px;
-  font-size: 17px;
-  font-weight: 600;
-  cursor: pointer;
+.msg.error {
+  color: var(--brand-danger);
 }
 
-.apple-btn:disabled {
-  opacity: 0.4;
+.msg.success {
+  color: #15803d;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.actions .secondary-btn,
+.actions .primary-btn {
+  min-width: 100px;
+  padding: 0 14px;
 }
 </style>
+
+

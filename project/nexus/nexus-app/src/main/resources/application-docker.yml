@@ -25,11 +25,6 @@ spring:
     port: ${SPRING_RABBITMQ_PORT:5672}
     username: ${SPRING_RABBITMQ_USERNAME:guest}
     password: ${SPRING_RABBITMQ_PASSWORD:guest}
-  kafka:
-    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
-    consumer:
-      group-id: ${SPRING_KAFKA_CONSUMER_GROUP_ID:nexus-like-pipeline}
-      auto-offset-reset: earliest
     listener:
       missing-topics-fatal: false
   ai:

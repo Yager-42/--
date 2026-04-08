@@ -89,10 +89,19 @@ const router = createRouter({
 // Global Navigation Guard
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
-  
+
+  const forceAuth = to.query?.forceAuth === '1'
+  const authPages = to.path === '/login' || to.path === '/register'
+
+  if (authPages && forceAuth) {
+    authStore.clearAuth()
+    next()
+    return
+  }
+
   if (to.meta.requiresAuth && !authStore.isLoggedIn()) {
     next('/login')
-  } else if ((to.path === '/login' || to.path === '/register') && authStore.isLoggedIn()) {
+  } else if (authPages && authStore.isLoggedIn() && !forceAuth) {
     next('/')
   } else {
     next()

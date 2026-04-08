@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, watch } from 'vue'
 import { Motion } from '@motionone/vue'
 import { fetchComments, postComment, type RootCommentDisplayItem } from '@/api/interact'
@@ -6,16 +6,18 @@ import CommentItem from './CommentItem.vue'
 
 const props = defineProps<{
   post: {
-    id: string;
-    title: string;
-    body: string;
-    author: string;
-    image: string;
-  } | null;
-  isOpen: boolean;
+    id: string
+    title: string
+    body: string
+    author: string
+    image: string
+  } | null
+  isOpen: boolean
 }>()
 
-const emit = defineEmits(['close'])
+const emit = defineEmits<{
+  (event: 'close'): void
+}>()
 
 const comments = ref<RootCommentDisplayItem[]>([])
 const commentContent = ref('')
@@ -33,8 +35,8 @@ const loadComments = async () => {
       preloadReplyLimit: 2
     })
     comments.value = res.pinned ? [res.pinned, ...res.items] : res.items
-  } catch (err) {
-    console.error('Fetch comments failed', err)
+  } catch (error) {
+    console.error('fetch comments failed', error)
   } finally {
     loading.value = false
   }
@@ -67,13 +69,10 @@ const handlePostComment = async () => {
   commentContent.value = ''
 
   try {
-    await postComment({
-      postId: props.post.id,
-      content
-    })
+    await postComment({ postId: props.post.id, content })
     await loadComments()
-  } catch (err) {
-    console.error('Post comment failed', err)
+  } catch (error) {
+    console.error('post comment failed', error)
     comments.value = comments.value.filter((item) => item.commentId !== optimisticCommentId)
     commentContent.value = content
   } finally {
@@ -81,11 +80,14 @@ const handlePostComment = async () => {
   }
 }
 
-watch(() => props.isOpen, (newVal) => {
-  if (newVal) {
-    loadComments()
+watch(
+  () => props.isOpen,
+  (open) => {
+    if (open) {
+      void loadComments()
+    }
   }
-})
+)
 </script>
 
 <template>
@@ -96,48 +98,41 @@ watch(() => props.isOpen, (newVal) => {
       :animate="{ y: 0, opacity: 1, scale: 1 }"
       :exit="{ y: 100, opacity: 0, scale: 0.9 }"
     >
-      <div class="close-btn" @click="emit('close')">✕</div>
+      <button class="close-btn" type="button" @click="emit('close')">×</button>
       <div class="detail-image-wrapper">
-        <img :src="post.image" class="detail-image" />
+        <img :src="post.image" class="detail-image" alt="cover">
       </div>
       <div class="detail-content">
         <h1 class="text-large-title">{{ post.title }}</h1>
-        <p class="author-tag">By {{ post.author }}</p>
+        <p class="author-tag text-secondary">作者：{{ post.author }}</p>
         <div class="rich-text">
           <p class="text-body">{{ post.body }}</p>
         </div>
-        
+
         <div class="comment-section">
           <h3 class="text-headline">评论</h3>
-          
+
           <div class="comment-input-wrapper">
-            <input 
-              v-model="commentContent" 
-              placeholder="添加评论..." 
-              class="apple-input"
+            <input
+              v-model="commentContent"
+              placeholder="添加评论..."
+              class="comment-input"
               @keyup.enter="handlePostComment"
-            />
-            <button 
-              class="post-btn" 
-              :disabled="!commentContent.trim() || sending" 
+            >
+            <button
+              class="post-btn"
+              type="button"
+              :disabled="!commentContent.trim() || sending"
               @click="handlePostComment"
             >
-              {{ sending ? '发布中' : '发布' }}
+              {{ sending ? '发送中...' : '发送' }}
             </button>
           </div>
 
-          <div v-if="loading" class="loading-comments">
-            加载评论中...
-          </div>
-          <div v-else-if="comments.length === 0" class="empty-comments">
-            暂无评论，来发表第一条见解。
-          </div>
+          <div v-if="loading" class="loading-comments">评论加载中...</div>
+          <div v-else-if="comments.length === 0" class="empty-comments">还没有评论，来发布第一条吧。</div>
           <div v-else class="comment-list">
-            <CommentItem 
-              v-for="c in comments" 
-              :key="c.commentId" 
-              :comment="c" 
-            />
+            <CommentItem v-for="item in comments" :key="item.commentId" :comment="item" />
           </div>
         </div>
       </div>
@@ -148,12 +143,9 @@ watch(() => props.isOpen, (newVal) => {
 <style scoped>
 .detail-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   z-index: 2000;
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(20, 10, 18, 0.32);
   backdrop-filter: blur(10px);
   display: flex;
   justify-content: center;
@@ -161,33 +153,30 @@ watch(() => props.isOpen, (newVal) => {
 }
 
 .detail-card {
-  width: 100%;
-  height: 94vh;
-  background: white;
-  border-radius: 32px 32px 0 0;
+  width: min(940px, 100%);
+  height: 92dvh;
+  background: #fff;
+  border-radius: 28px 28px 0 0;
   overflow-y: auto;
   position: relative;
 }
 
 .close-btn {
   position: absolute;
-  top: 20px;
-  right: 20px;
-  width: 32px;
-  height: 32px;
-  background: rgba(0,0,0,0.5);
-  color: white;
+  right: 16px;
+  top: 16px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: rgba(0, 0, 0, 0.52);
+  color: #fff;
+  font-size: 20px;
   z-index: 10;
-  font-size: 14px;
 }
 
 .detail-image-wrapper {
   width: 100%;
-  height: 45vh;
+  height: 40dvh;
 }
 
 .detail-image {
@@ -197,54 +186,65 @@ watch(() => props.isOpen, (newVal) => {
 }
 
 .detail-content {
-  padding: 32px 24px;
+  padding: 24px 20px;
+}
+
+.author-tag {
+  margin-top: 6px;
 }
 
 .comment-section {
-  border-top: 0.5px solid #eee;
-  padding-top: 24px;
-  margin-top: 24px;
+  border-top: 1px solid #f8e3ea;
+  padding-top: 18px;
+  margin-top: 18px;
 }
 
 .comment-input-wrapper {
-  margin: 16px 0 24px;
-  display: flex;
-  gap: 12px;
+  margin: 14px 0 18px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
 }
 
-.apple-input {
-  flex: 1;
-  height: 44px;
-  background: #f5f5f7;
-  border: none;
-  border-radius: 22px;
-  padding: 0 20px;
-  font-size: 15px;
-  outline: none;
+.comment-input {
+  min-height: 42px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 0 12px;
 }
 
 .post-btn {
-  background: none;
-  border: none;
-  color: var(--apple-accent);
-  font-weight: 600;
-  font-size: 15px;
-  cursor: pointer;
+  min-width: 88px;
+  border-radius: 999px;
+  background: var(--brand-primary);
+  color: #fff;
+  font-weight: 700;
 }
 
 .post-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .comment-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  gap: 8px;
 }
 
-.loading-comments, .empty-comments {
+.loading-comments,
+.empty-comments {
   text-align: center;
-  padding: 40px 0;
-  color: var(--apple-text-secondary);
-  font-size: 15px;
+  padding: 34px 0;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 700px) {
+  .comment-input-wrapper {
+    grid-template-columns: 1fr;
+  }
+
+  .post-btn {
+    min-height: 42px;
+  }
 }
 </style>

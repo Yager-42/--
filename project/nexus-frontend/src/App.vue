@@ -1,10 +1,8 @@
-<script setup lang="ts">
-// Welcome to Nexus Frontend - Apple Style
-</script>
+﻿<script setup lang="ts"></script>
 
 <template>
   <router-view v-slot="{ Component }">
-    <transition name="apple-fade" mode="out-in">
+    <transition name="route-fade" mode="out-in">
       <component :is="Component" />
     </transition>
   </router-view>
@@ -13,13 +11,13 @@
 <style>
 @import './assets/main.css';
 
-.apple-fade-enter-active,
-.apple-fade-leave-active {
-  transition: opacity 0.4s var(--spring-easing);
+.route-fade-enter-active,
+.route-fade-leave-active {
+  transition: opacity 180ms ease;
 }
 
-.apple-fade-enter-from,
-.apple-fade-leave-to {
+.route-fade-enter-from,
+.route-fade-leave-to {
   opacity: 0;
 }
 </style>

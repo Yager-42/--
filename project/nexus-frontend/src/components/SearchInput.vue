@@ -1,179 +1,237 @@
-<script setup lang="ts">
-import { ref, watch } from 'vue'
-import { Motion } from '@motionone/vue'
+﻿<script setup lang="ts">
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { fetchSuggest } from '@/api/search'
 
 const props = defineProps<{
-  isExpanded: boolean;
-}>();
+  isExpanded: boolean
+}>()
 
-const emit = defineEmits(['expand', 'collapse', 'search']);
-const keyword = ref('');
-const suggestions = ref<string[]>([]);
-const showSuggestions = ref(false);
-let debounceTimer: any = null;
+const emit = defineEmits<{
+  (event: 'expand'): void
+  (event: 'collapse'): void
+  (event: 'search', keyword: string): void
+}>()
+
+const keyword = ref('')
+const loading = ref(false)
+const suggestions = ref<string[]>([])
+const showPanel = ref(false)
+let timer: ReturnType<typeof setTimeout> | null = null
+
+const closePanel = () => {
+  showPanel.value = false
+  suggestions.value = []
+}
+
+const submit = () => {
+  const value = keyword.value.trim()
+  if (!value) return
+  emit('search', value)
+  closePanel()
+}
 
 const onFocus = () => {
-  emit('expand');
-  if (keyword.value) showSuggestions.value = true;
+  emit('expand')
+  if (suggestions.value.length > 0) {
+    showPanel.value = true
+  }
 }
 
 const onBlur = () => {
   setTimeout(() => {
-    showSuggestions.value = false;
-    if (!keyword.value) {
-      emit('collapse');
+    closePanel()
+    if (!keyword.value.trim()) {
+      emit('collapse')
     }
-  }, 200);
+  }, 120)
 }
 
-const onInput = () => {
-  if (debounceTimer) clearTimeout(debounceTimer);
-  
-  if (!keyword.value) {
-    suggestions.value = [];
-    showSuggestions.value = false;
-    return;
+const choose = (item: string) => {
+  keyword.value = item
+  submit()
+}
+
+const searchSuggest = async () => {
+  const q = keyword.value.trim()
+  if (!q) {
+    closePanel()
+    return
   }
-  
-  debounceTimer = setTimeout(async () => {
-    try {
-      const res: any = await fetchSuggest(keyword.value);
-      suggestions.value = res.suggestions || [];
-      showSuggestions.value = suggestions.value.length > 0;
-    } catch (err) {
-      console.error('Fetch suggestions failed', err);
-    }
-  }, 300);
+
+  loading.value = true
+  try {
+    const res = await fetchSuggest(q)
+    suggestions.value = Array.isArray(res.items) ? res.items : []
+    showPanel.value = suggestions.value.length > 0
+  } catch (error) {
+    console.error('load suggestions failed', error)
+    closePanel()
+  } finally {
+    loading.value = false
+  }
 }
 
-const selectSuggest = (s: string) => {
-  keyword.value = s;
-  showSuggestions.value = false;
-  emit('search', s);
-}
+watch(keyword, () => {
+  if (timer) clearTimeout(timer)
+  timer = setTimeout(searchSuggest, 220)
+})
+
+onBeforeUnmount(() => {
+  if (timer) clearTimeout(timer)
+})
+
+watch(
+  () => props.isExpanded,
+  (expanded) => {
+    if (!expanded) {
+      closePanel()
+    }
+  }
+)
 </script>
 
 <template>
-  <div class="search-outer-container">
-    <Motion
-      class="search-container"
-      :animate="{ width: isExpanded ? 'calc(100vw - 32px)' : '32px' }"
-      :transition="{ duration: 0.4, easing: [0.32, 0.72, 0, 1] }"
-    >
-      <div class="search-box" :class="{ 'expanded': isExpanded }">
-        <span class="search-icon">🔍</span>
-        <input 
-          v-model="keyword"
-          type="text" 
-          placeholder="搜索" 
-          class="search-input"
-          @focus="onFocus"
-          @blur="onBlur"
-          @input="onInput"
-        />
-      </div>
-    </Motion>
-
-    <div v-if="showSuggestions && isExpanded" class="suggestions-overlay">
-      <div 
-        v-for="(s, i) in suggestions" 
-        :key="i" 
-        class="suggest-item"
-        @click="selectSuggest(s)"
+  <div class="search-box" :class="{ expanded: isExpanded }">
+    <label class="input-wrap" aria-label="搜索内容">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M11 4a7 7 0 1 0 4.6 12.3L20 20.7 21.3 19l-4.4-4.4A7 7 0 0 0 11 4Z" fill="currentColor" />
+      </svg>
+      <input
+        v-model="keyword"
+        type="search"
+        inputmode="search"
+        placeholder="搜索帖子、作者、关键词"
+        @focus="onFocus"
+        @blur="onBlur"
+        @keydown.enter.prevent="submit"
       >
-        <span class="suggest-icon">🔍</span>
-        <span class="suggest-text">{{ s }}</span>
-      </div>
+    </label>
+
+    <button
+      v-if="isExpanded"
+      class="go-btn"
+      type="button"
+      :disabled="!keyword.trim()"
+      @mousedown.prevent
+      @click="submit"
+    >
+      搜索
+    </button>
+
+    <div v-if="showPanel" class="suggestion-panel" role="listbox">
+      <div v-if="loading" class="suggestion-item muted">正在加载建议...</div>
+      <button
+        v-for="item in suggestions"
+        v-else
+        :key="item"
+        type="button"
+        class="suggestion-item"
+        @mousedown.prevent
+        @click="choose(item)"
+      >
+        {{ item }}
+      </button>
     </div>
   </div>
 </template>
 
 <style scoped>
-.search-outer-container {
-  position: relative;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.search-container {
-  height: 32px;
-  position: relative;
-  z-index: 100;
-}
-
 .search-box {
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.05);
-  border-radius: 16px;
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  transition: background 0.3s ease;
+  position: relative;
+  width: 240px;
+  transition: width 220ms ease;
 }
 
 .search-box.expanded {
-  background: white;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.1);
+  width: min(640px, 100%);
 }
 
-.search-icon {
-  font-size: 14px;
-  margin-right: 6px;
-  opacity: 0.6;
-}
-
-.search-input {
-  flex: 1;
-  border: none;
-  background: none;
-  font-size: 15px;
-  outline: none;
-  width: 0;
-  opacity: 0;
-}
-
-.expanded .search-input {
-  width: 100%;
-  opacity: 1;
-}
-
-.suggestions-overlay {
-  position: absolute;
-  top: 40px;
-  left: 0;
-  width: 100%;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border-radius: 16px;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-  overflow: hidden;
-  z-index: 1000;
-  border: 0.5px solid rgba(0,0,0,0.05);
-}
-
-.suggest-item {
-  padding: 12px 16px;
-  display: flex;
+.input-wrap {
+  min-height: 44px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
+  display: grid;
+  grid-template-columns: 20px 1fr;
   align-items: center;
-  gap: 12px;
-  cursor: pointer;
-  border-bottom: 0.5px solid rgba(0,0,0,0.05);
+  gap: 8px;
+  padding: 0 14px;
 }
 
-.suggest-item:active {
-  background: rgba(0,0,0,0.02);
+.input-wrap svg {
+  width: 18px;
+  height: 18px;
+  color: var(--text-secondary);
 }
 
-.suggest-icon {
-  opacity: 0.4;
-  font-size: 12px;
+input {
+  border: none;
+  outline: none;
+  background: transparent;
+  width: 100%;
+  color: var(--text-primary);
 }
 
-.suggest-text {
-  font-size: 15px;
-  font-weight: 500;
+input::placeholder {
+  color: var(--text-muted);
+}
+
+.go-btn {
+  position: absolute;
+  right: 8px;
+  top: 6px;
+  height: 32px;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: var(--brand-primary);
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.go-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.suggestion-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 8px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+  z-index: 40;
+}
+
+.suggestion-item {
+  width: 100%;
+  min-height: 44px;
+  text-align: left;
+  padding: 0 14px;
+  border-bottom: 1px solid #fbe5ea;
+  background: transparent;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-item:hover {
+  background: #fff4f7;
+}
+
+.muted {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 900px) {
+  .search-box,
+  .search-box.expanded {
+    width: 100%;
+  }
 }
 </style>

@@ -90,7 +90,7 @@ Stop-ProcessesByPattern -Pattern '*nexus-app\pom.xml*spring-boot:run*' -Name 'Ba
 
 Write-Step 'Stopping WSL middleware.'
 $wslProjectDir = Convert-ToWslPath -WindowsPath $projectDir
-wsl.exe -e bash -lc "cd '$wslProjectDir' && docker compose -f docker-compose.middleware.yml down"
+wsl.exe -e bash -lc "cd '$wslProjectDir' && docker compose -f docker-compose.middleware.yml down --remove-orphans"
 
 Write-Host ''
 Write-Host 'All local services have been stopped.'

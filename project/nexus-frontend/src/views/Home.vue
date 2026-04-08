@@ -1,56 +1,27 @@
-<script setup lang="ts">
-import { ref } from 'vue'
+﻿<script setup lang="ts">
+import { useRouter } from 'vue-router'
 import FeedContainer from '@/components/FeedContainer.vue'
 import TheNavBar from '@/components/TheNavBar.vue'
 import TheDock from '@/components/TheDock.vue'
-import PostDetailOverlay from '@/components/PostDetailOverlay.vue'
+import type { FeedCardViewModel } from '@/api/feed'
 
-const selectedPost = ref<any>(null)
-const isDetailOpen = ref(false)
+const router = useRouter()
 
-const openDetail = (post: any) => {
-  selectedPost.value = post
-  isDetailOpen.value = true
-}
-
-const closeDetail = () => {
-  isDetailOpen.value = false
+const openDetail = (post: FeedCardViewModel) => {
+  void router.push(`/content/${post.postId}`)
 }
 </script>
 
 <template>
-  <div class="home-view">
+  <div class="page-shell with-full-nav">
     <TheNavBar />
-    <FeedContainer @select="openDetail" />
-    <TheDock v-show="!isDetailOpen" />
-    
-    <transition>
-      <PostDetailOverlay 
-        :post="selectedPost" 
-        :is-open="isDetailOpen" 
-        @close="closeDetail" 
-      />
-    </transition>
+
+    <main class="page-content">
+      <FeedContainer @select="openDetail" />
+    </main>
+
+    <TheDock />
   </div>
 </template>
 
-<style scoped>
-.home-view {
-  height: 100vh;
-  width: 100%;
-  position: relative;
-  overflow: hidden;
-  background: white;
-}
 
-/* Detail overlay transition */
-.v-enter-active,
-.v-leave-active {
-  transition: opacity 0.4s ease;
-}
-
-.v-enter-from,
-.v-leave-to {
-  opacity: 0;
-}
-</style>

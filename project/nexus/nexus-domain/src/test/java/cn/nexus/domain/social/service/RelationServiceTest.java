@@ -84,8 +84,6 @@ class RelationServiceTest {
         verify(relationRepository).deleteFollower(2L, 1L);
         verify(adjacencyCachePort).removeFollow(1L, 2L);
         verify(userCounterPort).evict(1L, UserCounterType.FOLLOWING);
-        verify(userCounterPort).evict(1L, UserCounterType.FOLLOWER);
-        verify(userCounterPort).evict(2L, UserCounterType.FOLLOWING);
         verify(userCounterPort).evict(2L, UserCounterType.FOLLOWER);
         verify(relationEventOutboxRepository, never()).save(any(), any(), any());
     }

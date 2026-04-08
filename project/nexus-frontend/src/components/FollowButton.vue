@@ -1,117 +1,90 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { followUser, unfollowUser } from '@/api/relation'
 import { useAuthStore } from '@/store/auth'
 import type { RelationState } from '@/api/types'
 
 const props = defineProps<{
-  userId: string;
-  relationState?: RelationState;
-}>();
+  userId: string
+  relationState?: RelationState
+}>()
 
-const authStore = useAuthStore();
-const currentState = ref<RelationState>(props.relationState ?? 'UNKNOWN');
-const loading = ref(false);
-const isDisabled = computed(() => {
-  return loading.value || currentState.value === 'UNKNOWN' || !authStore.userId;
-});
-const buttonText = computed(() => {
-  if (currentState.value === 'UNKNOWN') {
-    return '状态未知';
-  }
-  return currentState.value === 'FOLLOWING' ? '已关注' : '关注';
-});
+const authStore = useAuthStore()
+const state = ref<RelationState>(props.relationState ?? 'UNKNOWN')
+const loading = ref(false)
 
 watch(
   () => props.relationState,
   (value) => {
-    currentState.value = value ?? 'UNKNOWN';
+    state.value = value ?? 'UNKNOWN'
   }
-);
+)
 
-const toggleFollow = async () => {
-  if (isDisabled.value || !authStore.userId) return;
-  
-  loading.value = true;
+const disabled = computed(() => !authStore.userId || loading.value || state.value === 'UNKNOWN')
+const text = computed(() => {
+  if (state.value === 'UNKNOWN') return '状态未知'
+  return state.value === 'FOLLOWING' ? '已关注' : '关注'
+})
+
+const onToggle = async () => {
+  if (disabled.value || !authStore.userId) return
+
+  loading.value = true
   try {
-    const payload = {
-      sourceId: authStore.userId,
-      targetId: props.userId
-    };
-
-    if (currentState.value === 'FOLLOWING') {
-      await unfollowUser(payload);
-      currentState.value = 'NOT_FOLLOWING';
+    const payload = { sourceId: authStore.userId, targetId: props.userId }
+    if (state.value === 'FOLLOWING') {
+      await unfollowUser(payload)
+      state.value = 'NOT_FOLLOWING'
     } else {
-      await followUser(payload);
-      currentState.value = 'FOLLOWING';
+      await followUser(payload)
+      state.value = 'FOLLOWING'
     }
-  } catch (err) {
-    console.error('Follow operation failed', err);
+  } catch (error) {
+    console.error('follow action failed', error)
   } finally {
-    loading.value = false;
+    loading.value = false
   }
 }
 </script>
 
 <template>
-  <button 
-    class="follow-btn" 
-    :class="{ 'following': currentState === 'FOLLOWING', 'disabled': currentState === 'UNKNOWN' }"
-    :disabled="isDisabled"
-    @click="toggleFollow"
+  <button
+    class="follow-btn"
+    :class="{ following: state === 'FOLLOWING', unknown: state === 'UNKNOWN' }"
+    type="button"
+    :disabled="disabled"
+    @click="onToggle"
   >
-    <span v-if="loading" class="spinner-small"></span>
-    <span v-else>{{ buttonText }}</span>
+    <span v-if="loading">处理中...</span>
+    <span v-else>{{ text }}</span>
   </button>
 </template>
 
 <style scoped>
 .follow-btn {
-  width: 120px;
-  height: 36px;
-  border: none;
-  border-radius: 18px;
-  font-size: 15px;
-  font-weight: 600;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  cursor: pointer;
-  transition: all 0.2s var(--spring-easing);
-  background-color: var(--apple-accent);
-  color: white;
+  min-width: 92px;
+  min-height: 36px;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: var(--brand-primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.84rem;
 }
 
-.follow-btn:active {
-  transform: scale(0.96);
+.follow-btn.following {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-soft);
+}
+
+.follow-btn.unknown {
+  background: #e6e6e6;
+  color: #666;
 }
 
 .follow-btn:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.follow-btn.following {
-  background-color: #e5e5ea;
-  color: var(--apple-text);
-}
-
-.spinner-small {
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid rgba(255,255,255,0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.follow-btn.following .spinner-small {
-  border-color: rgba(0,0,0,0.1);
-  border-top-color: var(--apple-text);
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
+  opacity: 0.7;
 }
 </style>

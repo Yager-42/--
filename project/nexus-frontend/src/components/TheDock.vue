@@ -1,106 +1,106 @@
-<script setup lang="ts">
-import { useRouter, useRoute } from 'vue-router'
+﻿<script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
-const router = useRouter()
 const route = useRoute()
+const router = useRouter()
 
-const navTo = (path: string) => {
-  router.push(path)
+const items = [
+  { path: '/', label: '首页', icon: 'home' },
+  { path: '/search', label: '搜索', icon: 'search' },
+  { path: '/publish', label: '发布', icon: 'plus' },
+  { path: '/notifications', label: '通知', icon: 'bell' },
+  { path: '/profile', label: '我的', icon: 'user' }
+] as const
+
+const isActive = (path: string) => {
+  if (path === '/') return route.path === '/'
+  return route.path.startsWith(path)
 }
+
+const iconPath = computed(() => ({
+  home: 'M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4.7v-5.5h-4.6V21H5a1 1 0 0 1-1-1v-8.5Z',
+  search: 'M11 4a7 7 0 1 0 4.6 12.3L20 20.7 21.3 19l-4.4-4.4A7 7 0 0 0 11 4Z',
+  plus: 'M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z',
+  bell: 'M12 3a5.5 5.5 0 0 0-5.5 5.5v3.2l-1.8 2.7A1 1 0 0 0 5.5 16h13a1 1 0 0 0 .8-1.6l-1.8-2.7V8.5A5.5 5.5 0 0 0 12 3Zm0 18a2.6 2.6 0 0 0 2.3-1.4H9.7A2.6 2.6 0 0 0 12 21Z',
+  user: 'M12 3a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Zm0 11c-4.1 0-7.5 2-7.5 4.6V20A2 2 0 0 0 6.5 22h11a2 2 0 0 0 2-2v-1.4C19.5 16 16.1 14 12 14Z'
+}))
 </script>
 
 <template>
-  <div class="dock-wrapper">
-    <div class="dock-container">
-      <div 
-        class="dock-item" 
-        :class="{ 'active': route.path === '/' }"
-        @click="navTo('/')"
-      >🏠</div>
-      <div 
-        class="dock-item" 
-        :class="{ 'active': route.path === '/search' }"
-        @click="navTo('/search')"
-      >🧭</div>
-      <div 
-        class="dock-item publish-item" 
-        @click="navTo('/publish')"
-      >+</div>
-      <div 
-        class="dock-item" 
-        :class="{ 'active': route.path === '/notifications' }"
-        @click="navTo('/notifications')"
-      >🔔</div>
-      <div 
-        class="dock-item" 
-        :class="{ 'active': route.path === '/profile' }"
-        @click="navTo('/profile')"
-      >👤</div>
+  <nav class="dock" aria-label="主导航">
+    <div class="dock-inner">
+      <button
+        v-for="item in items"
+        :key="item.path"
+        class="dock-item"
+        :class="{ active: isActive(item.path), publish: item.path === '/publish' }"
+        type="button"
+        :aria-current="isActive(item.path) ? 'page' : undefined"
+        @click="router.push(item.path)"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path :d="iconPath[item.icon]" fill="currentColor" />
+        </svg>
+        <span>{{ item.label }}</span>
+      </button>
     </div>
-  </div>
+  </nav>
 </template>
 
 <style scoped>
-.dock-wrapper {
+.dock {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  padding-bottom: calc(24px + var(--safe-area-inset-bottom, 20px));
-  z-index: 1000;
+  inset: auto 0 0 0;
+  padding: 0 12px calc(var(--safe-bottom) + 10px);
+  z-index: 28;
   pointer-events: none;
 }
 
-.dock-container {
-  background: var(--apple-blur-bg);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  padding: 10px 20px;
-  border-radius: 36px;
-  display: flex;
-  gap: 24px;
-  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.08);
-  border: 0.5px solid rgba(0, 0, 0, 0.05);
+.dock-inner {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  height: var(--dock-height);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(16px);
+  border-radius: 20px;
+  box-shadow: var(--shadow-elevated);
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
   pointer-events: auto;
-  align-items: center;
-}
-
-.publish-item {
-  font-size: 32px !important;
-  font-weight: 300;
-  color: var(--apple-accent);
-  opacity: 1 !important;
 }
 
 .dock-item {
-  font-size: 24px;
-  opacity: 0.6;
-  cursor: pointer;
-  transition: transform 0.2s var(--spring-easing), opacity 0.2s ease;
-  user-select: none;
+  min-height: 56px;
+  margin: 8px 6px;
+  border-radius: 14px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  transition: color 180ms ease, background 180ms ease, transform 180ms ease;
 }
 
-.dock-item:active {
-  transform: scale(0.85);
-  opacity: 0.3;
+.dock-item svg {
+  width: 20px;
+  height: 20px;
 }
 
 .dock-item.active {
-  opacity: 1;
-  position: relative;
+  color: var(--brand-primary);
+  background: rgba(225, 29, 72, 0.08);
 }
 
-.dock-item.active::after {
-  content: "";
-  position: absolute;
-  bottom: -6px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  background: var(--apple-text);
-  border-radius: 50%;
+.dock-item.publish {
+  color: var(--brand-accent);
+}
+
+.dock-item:active {
+  transform: translateY(1px);
 }
 </style>

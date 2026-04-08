@@ -1,96 +1,129 @@
-<script setup lang="ts">
-import { ref } from 'vue'
+﻿<script setup lang="ts">
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import SearchInput from './SearchInput.vue'
 
 const router = useRouter()
-const isSearchExpanded = ref(false)
+const searchOpen = ref(false)
 
-const onSearchExpand = () => {
-  isSearchExpanded.value = true
-}
-
-const onSearchCollapse = () => {
-  isSearchExpanded.value = false
-}
+const title = computed(() => (searchOpen.value ? '搜索' : 'Nexus'))
 
 const onSearch = (keyword: string) => {
   router.push({ path: '/search', query: { q: keyword } })
-  isSearchExpanded.value = false
+  searchOpen.value = false
 }
 </script>
 
 <template>
-  <nav class="nav-bar">
-    <div class="nav-content">
-      <div v-show="!isSearchExpanded" class="logo" @click="router.push('/')">Nexus</div>
-      <div class="search-wrapper">
-        <SearchInput 
-          :is-expanded="isSearchExpanded"
-          @expand="onSearchExpand"
-          @collapse="onSearchCollapse"
-          @search="onSearch"
-        />
-      </div>
-      <div v-show="!isSearchExpanded" class="actions">
-        <div class="icon-btn" @click="router.push('/notifications')">🔔</div>
-        <div class="icon-btn" @click="router.push('/profile')">👤</div>
+  <header class="top-nav" role="banner">
+    <div class="nav-inner">
+      <button
+        v-if="!searchOpen"
+        class="brand-btn"
+        type="button"
+        aria-label="回到首页"
+        @click="router.push('/')"
+      >
+        {{ title }}
+      </button>
+      <span v-else class="search-title">{{ title }}</span>
+
+      <SearchInput
+        :is-expanded="searchOpen"
+        @expand="searchOpen = true"
+        @collapse="searchOpen = false"
+        @search="onSearch"
+      />
+
+      <div v-if="!searchOpen" class="actions" aria-label="快捷操作">
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="通知"
+          @click="router.push('/notifications')"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a6 6 0 0 0-6 6v3.8l-1.5 2.3A1 1 0 0 0 5.3 17h13.4a1 1 0 0 0 .8-1.6L18 12.8V9a6 6 0 0 0-6-6Zm0 19a2.7 2.7 0 0 0 2.45-1.5h-4.9A2.7 2.7 0 0 0 12 22Z" fill="currentColor" />
+          </svg>
+        </button>
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="个人主页"
+          @click="router.push('/profile')"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 12c-4.42 0-8 2.24-8 5v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1c0-2.76-3.58-5-8-5Z" fill="currentColor" />
+          </svg>
+        </button>
       </div>
     </div>
-  </nav>
+  </header>
 </template>
 
 <style scoped>
-.nav-bar {
+.top-nav {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 44px;
-  background: var(--apple-blur-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  z-index: 1000;
-  border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
+  inset: 0 0 auto 0;
+  height: calc(var(--header-height) + var(--safe-top));
+  padding-top: var(--safe-top);
+  background: var(--bg-overlay);
+  border-bottom: 1px solid var(--border-soft);
+  backdrop-filter: blur(14px);
+  z-index: 30;
 }
 
-.nav-content {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
+.nav-inner {
+  height: var(--header-height);
+  display: grid;
+  grid-template-columns: 1fr auto auto;
   align-items: center;
-  position: relative;
+  gap: 12px;
+  width: min(1080px, 100% - 24px);
+  margin: 0 auto;
 }
 
-.logo {
-  font-size: 19px;
-  font-weight: 600;
-  letter-spacing: -0.5px;
-  cursor: pointer;
+.brand-btn {
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: 'Manrope', 'Noto Sans SC', sans-serif;
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-align: left;
+  min-height: 44px;
 }
 
-.search-wrapper {
-  position: absolute;
-  right: 0;
-  display: flex;
-  align-items: center;
+.search-title {
+  font-weight: 700;
 }
 
 .actions {
   display: flex;
-  gap: 16px;
+  gap: 8px;
 }
 
 .icon-btn {
-  font-size: 20px;
-  cursor: pointer;
-  transition: opacity 0.2s ease;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--text-primary);
+  border: 1px solid transparent;
+  transition: background 180ms ease;
+}
+
+.icon-btn:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-soft);
 }
 
 .icon-btn:active {
-  opacity: 0.5;
+  transform: translateY(1px);
+}
+
+.icon-btn svg {
+  width: 22px;
+  height: 22px;
 }
 </style>

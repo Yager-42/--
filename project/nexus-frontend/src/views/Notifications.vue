@@ -1,5 +1,5 @@
-<script setup lang="ts">
-import { ref, onMounted } from 'vue'
+﻿<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { fetchNotifications, markAllAsRead, type NotificationDTO } from '@/api/notification'
 import { useAuthStore } from '@/store/auth'
 import NotificationItem from '@/components/NotificationItem.vue'
@@ -8,17 +8,18 @@ import TheDock from '@/components/TheDock.vue'
 
 const authStore = useAuthStore()
 const notifications = ref<NotificationDTO[]>([])
-const loading = ref(true)
+const loading = ref(false)
+const error = ref('')
 const nextCursor = ref<string | null>(null)
 const hasMore = ref(true)
 
+const hasUnread = computed(() => notifications.value.some((item) => !item.isRead))
+
 const loadNotifications = async () => {
-  if (!authStore.userId || loading.value || !hasMore.value) {
-    loading.value = false
-    return
-  }
+  if (!authStore.userId || loading.value || !hasMore.value) return
 
   loading.value = true
+  error.value = ''
   try {
     const res = await fetchNotifications({
       userId: authStore.userId,
@@ -27,8 +28,8 @@ const loadNotifications = async () => {
     notifications.value = [...notifications.value, ...res.notifications]
     nextCursor.value = res.page.nextCursor
     hasMore.value = res.page.hasMore
-  } catch (err) {
-    console.error('Fetch notifications failed', err)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '通知加载失败'
   } finally {
     loading.value = false
   }
@@ -42,88 +43,93 @@ const handleReadAll = async () => {
       isRead: true,
       hasUnread: false
     }))
-  } catch (err) {
-    console.error('Mark all as read failed', err)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '全部已读失败'
   }
 }
 
-onMounted(loadNotifications)
+onMounted(() => {
+  void loadNotifications()
+})
 </script>
 
 <template>
-  <div class="notifications-page">
+  <div class="page-shell with-full-nav">
     <TheNavBar />
-    
-    <div class="content-wrapper">
-      <div class="page-header">
+
+    <main class="page-content notifications-page">
+      <header class="page-header">
         <h1 class="text-large-title">通知中心</h1>
-        <button v-if="notifications.some(n => !n.isRead)" class="read-all-btn" @click="handleReadAll">全部已读</button>
-      </div>
-      
-      <div v-if="loading && notifications.length === 0" class="loading-state">
+        <button v-if="hasUnread" class="secondary-btn read-all-btn" type="button" @click="handleReadAll">
+          全部已读
+        </button>
+      </header>
+
+      <section v-if="error" class="state-card error">
+        {{ error }}
+      </section>
+
+      <section v-else-if="loading && notifications.length === 0" class="state-card">
         <div class="spinner"></div>
-      </div>
-      
-      <div v-else-if="notifications.length === 0" class="empty-state">
-        <p class="text-secondary">暂无通知</p>
-      </div>
-      
-      <div v-else class="notification-list">
-        <NotificationItem 
-          v-for="n in notifications" 
-          :key="n.notificationId" 
-          :notification="n" 
-        />
-      </div>
-    </div>
-    
+        正在加载通知...
+      </section>
+
+      <section v-else-if="notifications.length === 0" class="state-card">
+        暂无通知
+      </section>
+
+      <section v-else class="list">
+        <NotificationItem v-for="item in notifications" :key="item.notificationId" :notification="item" />
+
+        <button v-if="hasMore" class="secondary-btn more-btn" type="button" :disabled="loading" @click="loadNotifications">
+          {{ loading ? '加载中...' : '加载更多' }}
+        </button>
+      </section>
+    </main>
+
     <TheDock />
   </div>
 </template>
 
 <style scoped>
 .notifications-page {
-  height: 100vh;
-  padding-top: 44px;
-  background-color: var(--apple-bg);
-  overflow-y: auto;
-}
-
-.content-wrapper {
-  padding: 24px 16px 120px;
+  display: grid;
+  gap: 14px;
 }
 
 .page-header {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 24px;
+  gap: 12px;
 }
 
-.read-all-btn {
-  background: none;
-  border: none;
-  color: var(--apple-accent);
-  font-size: 15px;
-  font-weight: 500;
-  cursor: pointer;
+.read-all-btn,
+.more-btn {
+  min-width: 110px;
+  padding: 0 14px;
 }
 
-.loading-state, .empty-state {
-  padding: 100px 0;
-  text-align: center;
+.list {
+  display: grid;
+  gap: 10px;
 }
 
-.spinner {
-  width: 24px;
-  height: 24px;
-  border: 2px solid rgba(0,0,0,0.1);
-  border-top-color: var(--apple-accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+.state-card {
+  min-height: 120px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.error {
+  color: var(--brand-danger);
 }
 </style>
+
+

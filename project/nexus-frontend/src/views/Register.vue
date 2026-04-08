@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { registerAccount, sendSmsCode } from '@/api/auth'
@@ -11,27 +11,27 @@ const password = ref('')
 const nickname = ref('')
 const loading = ref(false)
 const sendingCode = ref(false)
-const errorMsg = ref('')
-const successMsg = ref('')
+const error = ref('')
+const success = ref('')
 
 const handleSendCode = async () => {
   if (!phone.value.trim()) {
-    errorMsg.value = '请先输入手机号'
+    error.value = '请先输入手机号'
     return
   }
 
   sendingCode.value = true
-  errorMsg.value = ''
-  successMsg.value = ''
+  error.value = ''
+  success.value = ''
 
   try {
     await sendSmsCode({
       phone: phone.value.trim(),
       bizType: 'REGISTER'
     })
-    successMsg.value = '验证码已发送，请注意查收'
-  } catch (err: any) {
-    errorMsg.value = err.message || '验证码发送失败，请稍后再试'
+    success.value = '验证码已发送，请注意查收。'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '验证码发送失败'
   } finally {
     sendingCode.value = false
   }
@@ -39,13 +39,13 @@ const handleSendCode = async () => {
 
 const handleRegister = async () => {
   if (!phone.value.trim() || !smsCode.value.trim() || !password.value.trim() || !nickname.value.trim()) {
-    errorMsg.value = '请把手机号、验证码、昵称和密码填完整'
+    error.value = '请完整填写手机号、验证码、昵称和密码'
     return
   }
 
   loading.value = true
-  errorMsg.value = ''
-  successMsg.value = ''
+  error.value = ''
+  success.value = ''
 
   try {
     await registerAccount({
@@ -55,15 +55,16 @@ const handleRegister = async () => {
       nickname: nickname.value.trim(),
       avatarUrl: ''
     })
-    router.push({
+
+    void router.push({
       path: '/login',
       query: {
         phone: phone.value.trim(),
         registered: '1'
       }
     })
-  } catch (err: any) {
-    errorMsg.value = err.message || '注册失败，请检查输入信息'
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '注册失败'
   } finally {
     loading.value = false
   }
@@ -71,175 +72,113 @@ const handleRegister = async () => {
 </script>
 
 <template>
-  <div class="register-page">
-    <div class="register-container">
-      <button class="back-link" @click="router.push('/login')">返回登录</button>
-      <h1 class="text-large-title">创建你的 Nexus 账号</h1>
-      <p class="text-body text-secondary">先完成注册，再回到登录页继续使用。</p>
+  <div class="auth-page">
+    <section class="auth-card surface-card">
+      <button class="back-btn" type="button" @click="router.push('/login')">返回登录</button>
+      <h1 class="text-large-title">创建账号</h1>
+      <p class="text-secondary">完成注册后即可进入 Nexus</p>
 
-      <div class="form-section">
-        <div class="input-group">
-          <input
-            v-model="phone"
-            type="text"
-            placeholder="手机号"
-            class="apple-input"
-          />
-        </div>
+      <label class="field">
+        <span>手机号</span>
+        <input v-model="phone" type="text" placeholder="请输入手机号">
+      </label>
 
-        <div class="input-row">
-          <input
-            v-model="smsCode"
-            type="text"
-            placeholder="短信验证码"
-            class="apple-input"
-          />
-          <button class="apple-btn-secondary code-btn" :disabled="sendingCode" @click="handleSendCode">
-            <span v-if="!sendingCode">发送验证码</span>
-            <span v-else>发送中...</span>
-          </button>
-        </div>
-
-        <div class="input-group">
-          <input
-            v-model="nickname"
-            type="text"
-            placeholder="昵称"
-            class="apple-input"
-          />
-        </div>
-
-        <div class="input-group">
-          <input
-            v-model="password"
-            type="password"
-            placeholder="密码"
-            class="apple-input"
-            @keyup.enter="handleRegister"
-          />
-        </div>
-
-        <p v-if="errorMsg" class="error-text">{{ errorMsg }}</p>
-        <p v-if="successMsg" class="success-text">{{ successMsg }}</p>
-
-        <button class="apple-btn" :disabled="loading" @click="handleRegister">
-          <span v-if="!loading">立即注册</span>
-          <span v-else class="loading-text">注册中...</span>
+      <div class="row">
+        <label class="field">
+          <span>验证码</span>
+          <input v-model="smsCode" type="text" placeholder="短信验证码">
+        </label>
+        <button class="secondary-btn code-btn" type="button" :disabled="sendingCode" @click="handleSendCode">
+          {{ sendingCode ? '发送中...' : '发送验证码' }}
         </button>
       </div>
-    </div>
+
+      <label class="field">
+        <span>昵称</span>
+        <input v-model="nickname" type="text" placeholder="你的昵称">
+      </label>
+
+      <label class="field">
+        <span>密码</span>
+        <input v-model="password" type="password" placeholder="请输入密码" @keyup.enter="handleRegister">
+      </label>
+
+      <p v-if="error" class="msg error">{{ error }}</p>
+      <p v-if="success" class="msg success">{{ success }}</p>
+
+      <button class="primary-btn" type="button" :disabled="loading" @click="handleRegister">
+        {{ loading ? '注册中...' : '立即注册' }}
+      </button>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.register-page {
-  min-height: 100vh;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background-color: var(--apple-bg);
-  padding: 24px;
-}
-
-.register-container {
-  width: 100%;
-  max-width: 440px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.back-link {
-  width: fit-content;
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--apple-accent);
-  font-size: 15px;
-  cursor: pointer;
-}
-
-.form-section {
-  width: 100%;
-  margin-top: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.input-group {
-  width: 100%;
-}
-
-.input-row {
+.auth-page {
+  min-height: 100dvh;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px;
+  place-items: center;
+  padding: 16px;
+}
+
+.auth-card {
+  width: min(460px, 100%);
+  padding: 20px;
+  display: grid;
   gap: 12px;
 }
 
-.apple-input {
-  width: 100%;
-  height: 52px;
-  background-color: var(--apple-bg);
-  border: 1.5px solid #d2d2d7;
+.back-btn {
+  justify-self: start;
+  color: var(--brand-primary);
+  font-weight: 700;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field span {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.field input {
+  min-height: 44px;
   border-radius: 12px;
-  padding: 0 16px;
-  font-size: 17px;
+  border: 1px solid var(--border-soft);
+  background: #fff;
+  padding: 0 12px;
   outline: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.apple-input:focus {
-  border-color: var(--apple-accent);
-  box-shadow: 0 0 0 4px rgba(0, 102, 204, 0.1);
-}
-
-.apple-btn,
-.apple-btn-secondary {
-  height: 52px;
-  border: none;
-  border-radius: 12px;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.apple-btn {
-  background-color: var(--apple-accent);
-  color: white;
-}
-
-.apple-btn-secondary {
-  background: #f5f5f7;
-  color: var(--apple-text);
-}
-
-.apple-btn:disabled,
-.apple-btn-secondary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .code-btn {
-  width: 132px;
+  min-width: 110px;
+  padding: 0 12px;
 }
 
-.error-text {
-  color: #ff3b30;
-  font-size: 14px;
+.msg {
+  font-size: 0.9rem;
 }
 
-.success-text {
-  color: #34c759;
-  font-size: 14px;
+.msg.error {
+  color: var(--brand-danger);
 }
 
-.loading-text {
-  display: inline-block;
+.msg.success {
+  color: #15803d;
 }
 
-@media (max-width: 480px) {
-  .input-row {
+@media (max-width: 520px) {
+  .row {
     grid-template-columns: 1fr;
   }
 

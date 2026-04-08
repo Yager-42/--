@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
@@ -41,20 +41,12 @@ const liked = ref(false)
 const likeCount = ref(0)
 
 const postId = computed(() => String(route.params.postId || ''))
+const heroImage = computed(() => detail.value?.mediaUrls[0] || 'https://via.placeholder.com/1200x900?text=Nexus')
 
-const heroImage = computed(() => {
-  return detail.value?.mediaUrls[0] || 'https://via.placeholder.com/1200x900?text=Nexus'
-})
-
-const mergeRootComments = (
-  currentItems: RootCommentDisplayItem[],
-  incomingItems: RootCommentDisplayItem[]
-) => {
+const mergeRootComments = (currentItems: RootCommentDisplayItem[], incomingItems: RootCommentDisplayItem[]) => {
   const seen = new Set(currentItems.map((item) => item.commentId))
   const nextItems = incomingItems.filter((item) => {
-    if (seen.has(item.commentId)) {
-      return false
-    }
+    if (seen.has(item.commentId)) return false
     seen.add(item.commentId)
     return true
   })
@@ -64,9 +56,7 @@ const mergeRootComments = (
 const mergeReplies = (currentItems: CommentDisplayItem[], incomingItems: CommentDisplayItem[]) => {
   const seen = new Set(currentItems.map((item) => item.commentId))
   const nextItems = incomingItems.filter((item) => {
-    if (seen.has(item.commentId)) {
-      return false
-    }
+    if (seen.has(item.commentId)) return false
     seen.add(item.commentId)
     return true
   })
@@ -89,7 +79,7 @@ const ensureReplyThread = (root: RootCommentDisplayItem): ReplyThreadState => {
 
 const loadDetail = async () => {
   if (!postId.value) {
-    errorMsg.value = '缺少内容标识，无法加载内容'
+    errorMsg.value = '缺少内容标识，无法加载详情'
     detail.value = null
     loading.value = false
     return
@@ -102,8 +92,8 @@ const loadDetail = async () => {
     detail.value = res
     likeCount.value = res.likeCount
     liked.value = false
-  } catch (err: unknown) {
-    errorMsg.value = err instanceof Error ? err.message : '内容加载失败'
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '内容加载失败'
     detail.value = null
   } finally {
     loading.value = false
@@ -130,8 +120,8 @@ const loadComments = async (reset = true) => {
     if (reset) {
       replyThreads.value = {}
     }
-  } catch (err) {
-    console.error('Fetch comments failed', err)
+  } catch (error) {
+    console.error('fetch comments failed', error)
     if (reset) {
       pinnedComment.value = null
       comments.value = []
@@ -146,8 +136,7 @@ const loadComments = async (reset = true) => {
 
 const loadReplies = async (root: RootCommentDisplayItem, append = false) => {
   const thread = ensureReplyThread(root)
-  if (thread.loading) return
-  if (append && !thread.hasMore) return
+  if (thread.loading || (append && !thread.hasMore)) return
 
   thread.loading = true
   try {
@@ -163,8 +152,8 @@ const loadReplies = async (root: RootCommentDisplayItem, append = false) => {
     thread.nextCursor = res.page.nextCursor
     thread.hasMore = res.page.hasMore
     thread.loaded = true
-  } catch (err) {
-    console.error('Fetch replies failed', err)
+  } catch (error) {
+    console.error('fetch replies failed', error)
   } finally {
     thread.loading = false
   }
@@ -185,10 +174,10 @@ const handleLike = async () => {
       type: 'LIKE',
       action: liked.value ? 'ADD' : 'REMOVE'
     })
-  } catch (err) {
+  } catch (error) {
     liked.value = previousLiked
     likeCount.value = previousCount
-    console.error('Like failed', err)
+    console.error('like failed', error)
   }
 }
 
@@ -200,9 +189,7 @@ const toggleReplies = async (root: RootCommentDisplayItem) => {
   }
 }
 
-const getReplyThread = (root: RootCommentDisplayItem) => {
-  return ensureReplyThread(root)
-}
+const getReplyThread = (root: RootCommentDisplayItem) => ensureReplyThread(root)
 
 const handlePostComment = async () => {
   const content = commentContent.value.trim()
@@ -231,13 +218,10 @@ const handlePostComment = async () => {
   commentContent.value = ''
 
   try {
-    await postComment({
-      postId: postId.value,
-      content
-    })
+    await postComment({ postId: postId.value, content })
     await loadComments(true)
-  } catch (err) {
-    console.error('Post comment failed', err)
+  } catch (error) {
+    console.error('post comment failed', error)
     comments.value = comments.value.filter((item) => item.commentId !== optimisticCommentId)
     commentContent.value = content
   } finally {
@@ -249,68 +233,79 @@ const loadAll = async () => {
   await Promise.all([loadDetail(), loadComments(true)])
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  void loadAll()
+})
 
-watch(() => route.params.postId, loadAll)
+watch(() => route.params.postId, () => {
+  void loadAll()
+})
 </script>
 
 <template>
-  <div class="detail-page">
-    <div class="top-bar">
-      <button class="back-btn" @click="router.back()">返回</button>
-      <button class="like-btn" @click="handleLike">{{ liked ? '已赞' : '点赞' }} {{ likeCount }}</button>
-    </div>
+  <div class="page-shell with-top-nav detail-page">
+    <main class="page-content detail-content">
+      <header class="bar surface-card">
+        <button class="secondary-btn" type="button" @click="router.back()">返回</button>
+        <button class="primary-btn" type="button" @click="handleLike">
+          {{ liked ? '已赞' : '点赞' }} {{ likeCount }}
+        </button>
+      </header>
 
-    <div v-if="loading" class="state-block">内容加载中...</div>
-    <div v-else-if="errorMsg" class="state-block error-text">{{ errorMsg }}</div>
-    <div v-else-if="detail" class="detail-content">
-      <div class="hero-card">
-        <img :src="heroImage" class="hero-image" />
-      </div>
+      <section v-if="loading" class="state-card">
+        <div class="spinner"></div>
+        正在加载内容...
+      </section>
 
-      <div class="content-card">
-        <div class="author-row">
-          <img :src="detail.authorAvatar || 'https://via.placeholder.com/80'" class="author-avatar" />
-          <div>
-            <p class="author-name">{{ detail.authorName }}</p>
-            <p class="text-secondary">帖子 ID: {{ detail.postId }}</p>
-          </div>
+      <section v-else-if="errorMsg" class="state-card error">
+        {{ errorMsg }}
+      </section>
+
+      <section v-else-if="detail" class="surface-card article">
+        <img :src="heroImage" class="hero-image" alt="cover">
+
+        <div class="main-block">
+          <p class="text-secondary">作者：{{ detail.authorName }}</p>
+          <h1 class="text-large-title">{{ detail.title }}</h1>
+          <p class="text-body body">{{ detail.content || '暂无正文' }}</p>
         </div>
 
-        <h1 class="text-large-title">{{ detail.title }}</h1>
-        <p class="text-body content-text">{{ detail.content || '暂无正文' }}</p>
-
-        <div class="comment-section">
+        <div class="comment-block">
           <h2 class="text-headline">评论</h2>
-          <div class="comment-editor">
+
+          <div class="editor">
             <input
               v-model="commentContent"
-              class="comment-input"
+              class="input"
               placeholder="写下你的评论"
               @keyup.enter="handlePostComment"
-            />
-            <button class="send-btn" :disabled="sending || !commentContent.trim()" @click="handlePostComment">
-              {{ sending ? '发送中' : '发送' }}
+            >
+            <button class="primary-btn send-btn" type="button" :disabled="sending || !commentContent.trim()" @click="handlePostComment">
+              {{ sending ? '发送中...' : '发送' }}
             </button>
           </div>
 
-          <div v-if="commentLoading" class="state-block">评论加载中...</div>
-          <div v-else-if="!pinnedComment && comments.length === 0" class="state-block">还没有评论</div>
+          <div v-if="commentLoading" class="state-card small">
+            正在加载评论...
+          </div>
+
+          <div v-else-if="!pinnedComment && comments.length === 0" class="state-card small">
+            还没有评论
+          </div>
+
           <div v-else class="comment-list">
-            <div v-if="pinnedComment" class="pinned-section">
-              <p class="section-label">置顶评论</p>
+            <div v-if="pinnedComment" class="pin-block">
+              <p class="text-secondary pin-title">置顶评论</p>
               <CommentItem :comment="pinnedComment" />
             </div>
 
-            <div
-              v-for="item in comments"
-              :key="item.commentId"
-              class="root-comment-block"
-            >
+            <div v-for="item in comments" :key="item.commentId" class="root-row">
               <CommentItem :comment="item" />
+
               <button
                 v-if="item.replyCount > 0"
-                class="reply-toggle-btn"
+                class="reply-btn"
+                type="button"
                 @click="toggleReplies(item)"
               >
                 {{ getReplyThread(item).expanded ? '收起回复' : `查看回复（${item.replyCount}）` }}
@@ -323,9 +318,11 @@ watch(() => route.params.postId, loadAll)
                   :comment="reply"
                   compact
                 />
+
                 <button
                   v-if="getReplyThread(item).hasMore"
-                  class="load-more-btn"
+                  class="reply-btn"
+                  type="button"
                   :disabled="getReplyThread(item).loading"
                   @click="loadReplies(item, true)"
                 >
@@ -336,7 +333,8 @@ watch(() => route.params.postId, loadAll)
 
             <button
               v-if="hasMoreComments"
-              class="load-more-btn"
+              class="reply-btn"
+              type="button"
               :disabled="commentLoading"
               @click="loadComments(false)"
             >
@@ -344,183 +342,129 @@ watch(() => route.params.postId, loadAll)
             </button>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   </div>
 </template>
 
 <style scoped>
-.detail-page {
-  min-height: 100vh;
-  background: var(--apple-bg);
-  padding: 20px 16px 40px;
+.detail-content {
+  display: grid;
+  gap: 12px;
 }
 
-.top-bar {
+.bar {
+  padding: 8px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
 }
 
-.back-btn,
-.like-btn,
-.send-btn {
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
+.bar .secondary-btn,
+.bar .primary-btn {
+  min-width: 88px;
+  padding: 0 14px;
 }
 
-.back-btn,
-.send-btn {
-  padding: 10px 16px;
-  background: #f5f5f7;
-  color: var(--apple-text);
-}
-
-.like-btn {
-  padding: 10px 18px;
-  background: var(--apple-accent);
-  color: white;
-}
-
-.hero-card,
-.content-card {
-  max-width: 840px;
-  margin: 0 auto;
-}
-
-.hero-card {
-  border-radius: 28px;
+.article {
   overflow: hidden;
-  background: var(--apple-card-bg);
-  margin-bottom: 20px;
 }
 
 .hero-image {
   width: 100%;
-  max-height: 420px;
-  object-fit: cover;
-  display: block;
-}
-
-.content-card {
-  background: white;
-  border-radius: 28px;
-  padding: 24px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.06);
-}
-
-.author-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-.author-avatar {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
+  max-height: 320px;
   object-fit: cover;
 }
 
-.author-name {
-  font-size: 16px;
-  font-weight: 600;
+.main-block,
+.comment-block {
+  padding: 14px;
 }
 
-.content-text {
-  margin-top: 16px;
+.body {
+  margin-top: 10px;
   white-space: pre-wrap;
-  line-height: 1.7;
 }
 
-.comment-section {
-  margin-top: 28px;
-  padding-top: 24px;
-  border-top: 1px solid #ececf0;
+.comment-block {
+  border-top: 1px solid #f8e3ea;
+  display: grid;
+  gap: 10px;
 }
 
-.comment-editor {
-  display: flex;
-  gap: 12px;
-  margin: 16px 0 20px;
+.editor {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
 }
 
-.comment-input {
-  flex: 1;
-  height: 44px;
-  border: 1px solid #d2d2d7;
-  border-radius: 22px;
-  padding: 0 16px;
-  font-size: 15px;
+.input {
+  min-height: 42px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  padding: 0 12px;
   outline: none;
 }
 
+.send-btn {
+  min-width: 88px;
+  padding: 0 12px;
+}
+
 .comment-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  gap: 8px;
 }
 
-.pinned-section,
-.root-comment-block {
-  display: flex;
-  flex-direction: column;
+.pin-title {
+  margin-bottom: 6px;
+  font-size: 0.84rem;
 }
 
-.section-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--apple-text-secondary);
-  margin-bottom: 8px;
+.reply-btn {
+  color: var(--brand-primary);
+  font-weight: 700;
+  font-size: 0.84rem;
+  text-align: left;
+  padding: 2px 4px;
 }
 
 .reply-thread {
-  margin-left: 24px;
-  padding-left: 12px;
-  border-left: 2px solid #ececf0;
+  margin-left: 22px;
+  border-left: 2px solid #f9dde6;
+  padding-left: 8px;
+  display: grid;
+  gap: 6px;
 }
 
-.reply-toggle-btn,
-.load-more-btn {
-  border: none;
-  background: none;
-  color: var(--apple-accent);
-  font-size: 14px;
-  font-weight: 500;
-  text-align: left;
-  padding: 4px 0 8px 52px;
+.state-card {
+  min-height: 120px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
 }
 
-.state-block {
-  max-width: 840px;
-  margin: 40px auto;
-  padding: 24px;
-  border-radius: 20px;
-  background: #f5f5f7;
-  color: var(--apple-text-secondary);
-  text-align: center;
+.state-card.small {
+  min-height: 80px;
 }
 
-.error-text {
-  color: #ff3b30;
+.error {
+  color: var(--brand-danger);
 }
 
-@media (max-width: 640px) {
-  .detail-page {
-    padding: 16px 12px 32px;
+@media (max-width: 700px) {
+  .editor {
+    grid-template-columns: 1fr;
   }
 
-  .content-card {
-    padding: 18px;
-  }
-
-  .comment-editor {
-    flex-direction: column;
+  .send-btn {
+    width: 100%;
   }
 }
 </style>
+
+

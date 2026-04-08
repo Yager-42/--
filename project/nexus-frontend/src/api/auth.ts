@@ -29,6 +29,7 @@ export interface RegisterResponseDTO {
 
 const normalizeAuthTokenResponse = (data: RawAuthTokenResponseDTO): AuthTokenResponseDTO => ({
   token: data.token,
+  refreshToken: data.refreshToken,
   userId: String(data.userId)
 });
 
@@ -52,4 +53,15 @@ export const registerAccount = async (
   return {
     userId: String(response.userId)
   };
+};
+
+export interface RefreshTokenRequestDTO {
+  refreshToken: string;
+}
+
+export const refreshAccessToken = async (
+  data: RefreshTokenRequestDTO
+): Promise<AuthTokenResponseDTO> => {
+  const response = await http.post<RawAuthTokenResponseDTO>('/auth/refresh', data);
+  return normalizeAuthTokenResponse(response);
 };

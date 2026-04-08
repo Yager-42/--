@@ -9,10 +9,12 @@ export interface RawAuthTokenResponseDTO {
   tokenName: string;
   tokenPrefix: string;
   token: string;
+  refreshToken: string;
 }
 
 export interface AuthTokenResponseDTO {
   token: string;
+  refreshToken: string;
   userId: string;
 }
 

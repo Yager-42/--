@@ -5,6 +5,7 @@ import cn.nexus.api.auth.dto.AuthChangePasswordRequestDTO;
 import cn.nexus.api.auth.dto.AuthGrantAdminRequestDTO;
 import cn.nexus.api.auth.dto.AuthMeResponseDTO;
 import cn.nexus.api.auth.dto.AuthPasswordLoginRequestDTO;
+import cn.nexus.api.auth.dto.AuthRefreshRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterResponseDTO;
 import cn.nexus.api.auth.dto.AuthSmsLoginRequestDTO;
@@ -25,6 +26,8 @@ public interface IAuthApi {
     Response<AuthTokenResponseDTO> passwordLogin(AuthPasswordLoginRequestDTO requestDTO);
 
     Response<AuthTokenResponseDTO> smsLogin(AuthSmsLoginRequestDTO requestDTO);
+
+    Response<AuthTokenResponseDTO> refresh(AuthRefreshRequestDTO requestDTO);
 
     Response<Void> changePassword(AuthChangePasswordRequestDTO requestDTO);
 

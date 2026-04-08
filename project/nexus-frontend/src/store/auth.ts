@@ -3,9 +3,14 @@ import { ref } from 'vue'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('nexus_auth_token'))
+  const refreshToken = ref<string | null>(localStorage.getItem('nexus_refresh_token'))
   const userId = ref<string | null>(localStorage.getItem('nexus_auth_user_id'))
   
-  const setToken = (newToken: string, newUserId?: string | null) => {
+  const setToken = (
+    newToken: string,
+    newUserId?: string | null,
+    newRefreshToken?: string | null
+  ) => {
     token.value = newToken
     localStorage.setItem('nexus_auth_token', newToken)
 
@@ -15,6 +20,15 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.setItem('nexus_auth_user_id', newUserId)
       } else {
         localStorage.removeItem('nexus_auth_user_id')
+      }
+    }
+
+    if (newRefreshToken !== undefined) {
+      refreshToken.value = newRefreshToken
+      if (newRefreshToken) {
+        localStorage.setItem('nexus_refresh_token', newRefreshToken)
+      } else {
+        localStorage.removeItem('nexus_refresh_token')
       }
     }
   }
@@ -30,8 +44,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   const clearAuth = () => {
     token.value = null
+    refreshToken.value = null
     userId.value = null
     localStorage.removeItem('nexus_auth_token')
+    localStorage.removeItem('nexus_refresh_token')
     localStorage.removeItem('nexus_auth_user_id')
   }
 
@@ -41,6 +57,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     token,
+    refreshToken,
     userId,
     setToken,
     setUserId,

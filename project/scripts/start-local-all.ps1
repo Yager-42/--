@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$Rebuild,
-    [switch]$CleanOrphans
+    [switch]$CleanOrphans,
+    [string]$WslDistro = 'Ubuntu-22.04'
 )
 
 Set-StrictMode -Version Latest
@@ -34,9 +35,9 @@ function Invoke-WslBash {
     $ErrorActionPreference = 'Continue'
     try {
         if ($SuppressOutput) {
-            $output = & wsl.exe -e bash -lc $Command 1>$null 2>$null
+            $output = & wsl.exe -d $WslDistro -e bash -lc $Command 1>$null 2>$null
         } else {
-            $output = & wsl.exe -e bash -lc $Command 2>$null
+            $output = & wsl.exe -d $WslDistro -e bash -lc $Command 2>$null
         }
         $exitCode = $LASTEXITCODE
     } finally {
@@ -96,6 +97,83 @@ function Wait-ForTcpPort {
     throw "$Name is not ready on 127.0.0.1:$Port within $TimeoutSeconds seconds."
 }
 
+function Wait-ForWslTcpPort {
+    param(
+        [string]$Name,
+        [int]$Port,
+        [int]$TimeoutSeconds = 180
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $result = Invoke-WslBash -Command "python3 - <<'PY'
+import socket, sys
+s = socket.socket()
+s.settimeout(1)
+try:
+    s.connect(('127.0.0.1', $Port))
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+PY" -SuppressOutput
+        if ($result.ExitCode -eq 0) {
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw "$Name is not ready on WSL 127.0.0.1:$Port within $TimeoutSeconds seconds."
+}
+
+function Test-HttpEndpoint {
+    param(
+        [string]$Url,
+        [int]$TimeoutSec = 5
+    )
+
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec $TimeoutSec
+        return $response.StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
+function Test-RedisWindowsEndpoint {
+    param(
+        [string]$HostName = '127.0.0.1',
+        [int]$Port = 6379,
+        [int]$TimeoutMilliseconds = 1000
+    )
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $async = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne($TimeoutMilliseconds, $false)) {
+            return $false
+        }
+        $client.EndConnect($async) | Out-Null
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = $TimeoutMilliseconds
+        $stream.WriteTimeout = $TimeoutMilliseconds
+        $payload = [System.Text.Encoding]::ASCII.GetBytes("*1`r`n`$4`r`nPING`r`n")
+        $stream.Write($payload, 0, $payload.Length)
+        $stream.Flush()
+        $buffer = New-Object byte[] 64
+        $read = $stream.Read($buffer, 0, $buffer.Length)
+        if ($read -le 0) {
+            return $false
+        }
+        $reply = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $read)
+        return $reply.Contains('+PONG')
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
 function Wait-ForHttp200 {
     param(
         [string]$Name,
@@ -105,12 +183,8 @@ function Wait-ForHttp200 {
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
-        try {
-            $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 5
-            if ($response.StatusCode -eq 200) {
-                return
-            }
-        } catch {
+        if (Test-HttpEndpoint -Url $Url) {
+            return
         }
         Start-Sleep -Seconds 2
     }
@@ -132,12 +206,8 @@ function Wait-ForHttp200OrProcessExit {
             throw "$Name failed because process PID $ProcessId exited before returning HTTP 200: $Url"
         }
 
-        try {
-            $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 5
-            if ($response.StatusCode -eq 200) {
-                return
-            }
-        } catch {
+        if (Test-HttpEndpoint -Url $Url) {
+            return
         }
         Start-Sleep -Seconds 2
     }
@@ -274,13 +344,9 @@ function Ensure-Directory {
 
 function Start-BackendIfNeeded {
     $healthUrl = 'http://127.0.0.1:8080/api/v1/health'
-    try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 5
-        if ($response.StatusCode -eq 200) {
-            Write-Step 'Backend already healthy on port 8080.'
-            return
-        }
-    } catch {
+    if (Test-HttpEndpoint -Url $healthUrl) {
+        Write-Step 'Backend already healthy on port 8080.'
+        return
     }
 
     $existingProcessId = Get-ListeningPid -Port 8080
@@ -327,13 +393,9 @@ function Start-BackendIfNeeded {
 
 function Start-FrontendIfNeeded {
     $frontendUrl = 'http://127.0.0.1:3000'
-    try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $frontendUrl -TimeoutSec 5
-        if ($response.StatusCode -eq 200) {
-            Write-Step 'Frontend already available on port 3000.'
-            return
-        }
-    } catch {
+    if (Test-HttpEndpoint -Url $frontendUrl) {
+        Write-Step 'Frontend already available on port 3000.'
+        return
     }
 
     $existingProcessId = Get-ListeningPid -Port 3000
@@ -382,6 +444,21 @@ foreach ($service in @(
     @{ Name = 'Gorse API'; Port = 8087 },
     @{ Name = 'HotKey Dashboard'; Port = 9901 }
 )) {
+    Wait-ForWslTcpPort -Name $service.Name -Port $service.Port
+}
+
+foreach ($service in @(
+    @{ Name = 'MySQL'; Port = 3306 },
+    @{ Name = 'Redis'; Port = 6379 },
+    @{ Name = 'RabbitMQ'; Port = 5672 },
+    @{ Name = 'Zookeeper'; Port = 2181 },
+    @{ Name = 'Cassandra'; Port = 9042 },
+    @{ Name = 'Elasticsearch'; Port = 9200 },
+    @{ Name = 'MinIO'; Port = 9000 },
+    @{ Name = 'etcd'; Port = 2379 },
+    @{ Name = 'Gorse API'; Port = 8087 },
+    @{ Name = 'HotKey Dashboard'; Port = 9901 }
+)) {
     Wait-ForTcpPort -Name $service.Name -Port $service.Port
 }
 
@@ -395,6 +472,10 @@ if (-not (Test-CassandraReady -WslProjectDir $wslProjectDir -TimeoutSeconds 240)
 Write-Step 'Waiting Redis health and PING readiness.'
 if (-not (Test-RedisReady -WslProjectDir $wslProjectDir -TimeoutSeconds 180)) {
     throw 'Redis did not become healthy and queryable in time.'
+}
+
+if (-not (Test-RedisWindowsEndpoint)) {
+    throw 'Redis is healthy inside WSL, but Windows localhost forwarding for 127.0.0.1:6379 is not responding to PING.'
 }
 
 Start-BackendIfNeeded

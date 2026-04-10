@@ -25,7 +25,6 @@ import cn.nexus.infrastructure.adapter.social.port.RelationFollowEvent;
 import cn.nexus.trigger.job.social.CommentSoftDeleteCleanupJob;
 import cn.nexus.trigger.job.social.ContentEventOutboxRetryJob;
 import cn.nexus.trigger.job.social.ContentSoftDeleteCleanupJob;
-import cn.nexus.trigger.job.social.ReactionSyncZsetWorker;
 import cn.nexus.trigger.job.social.RelationEventOutboxPublishJob;
 import cn.nexus.trigger.job.social.RelationEventRetryJob;
 import cn.nexus.trigger.job.social.ReliableMqOutboxRetryJob;
@@ -48,16 +47,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
 
 @TestPropertySource(properties = {
-        "reaction.sync.mode=redis",
         "content.cleanup.softDeleteRetentionDays=1",
         "comment.cleanup.softDeleteRetentionDays=1"
 })
 class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSupport {
-
-    private static final String REACTION_DELAY_KEY = "interact:reaction:sync:{rs}:delay";
-    private static final String REACTION_PROCESSING_KEY = "interact:reaction:sync:{rs}:processing";
-    private static final String REACTION_ATTEMPT_KEY = "interact:reaction:sync:{rs}:attempt";
-    private static final String REACTION_DLQ_KEY = "interact:reaction:sync:{rs}:dlq";
 
     @Autowired
     private ContentEventOutboxRetryJob contentEventOutboxRetryJob;
@@ -76,9 +69,6 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
 
     @Autowired
     private CommentSoftDeleteCleanupJob commentSoftDeleteCleanupJob;
-
-    @Autowired
-    private ReactionSyncZsetWorker reactionSyncZsetWorker;
 
     @Autowired
     private RelationEventOutboxPublishJob relationEventOutboxPublishJob;
@@ -326,23 +316,6 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                 assertThat(countBySql("SELECT COUNT(1) FROM interaction_comment WHERE comment_id = " + commentId)).isZero());
-    }
-
-    @Test
-    void reactionSyncZsetWorker_shouldMoveInvalidJobToDlq() {
-        deleteRedisKey(REACTION_DELAY_KEY);
-        deleteRedisKey(REACTION_PROCESSING_KEY);
-        deleteRedisKey(REACTION_ATTEMPT_KEY);
-        deleteRedisKey(REACTION_DLQ_KEY);
-        stringRedisTemplate.opsForZSet().add(REACTION_DELAY_KEY, "bad-job", System.currentTimeMillis() - 1000);
-
-        reactionSyncZsetWorker.pollAndSync();
-
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            assertThat(stringRedisTemplate.opsForList().size(REACTION_DLQ_KEY)).isGreaterThan(0L);
-            String dlq = stringRedisTemplate.opsForList().index(REACTION_DLQ_KEY, 0);
-            assertThat(dlq).contains("bad-job");
-        });
     }
 
     private String contentEventOutboxStatus(String eventId) {

@@ -19,7 +19,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * 点赞数变更事件消费者：更新一级评论 like_count + 刷新热榜分数（可选）。
+ * 点赞数变更事件消费者：同步一级评论 like_count 派生列并刷新热榜分数。
  *
  * @author rr
  * @author codex
@@ -53,7 +53,7 @@ public class CommentLikeChangedConsumer {
             return;
         }
 
-        long likeCount = objectCounterPort.increment(target(event.getRootCommentId(), ObjectCounterType.LIKE), event.getDelta());
+        long likeCount = objectCounterPort.getCount(target(event.getRootCommentId(), ObjectCounterType.LIKE));
         commentRepository.addLikeCount(event.getRootCommentId(), event.getDelta());
         CommentBriefVO root = commentRepository.getBrief(event.getRootCommentId());
         if (root == null) {

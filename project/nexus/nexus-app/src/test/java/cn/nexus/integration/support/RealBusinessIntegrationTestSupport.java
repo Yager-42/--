@@ -1,5 +1,6 @@
 package cn.nexus.integration.support;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
 import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
@@ -7,12 +8,10 @@ import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.user.adapter.port.IUserEventOutboxPort;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
-import cn.nexus.infrastructure.adapter.id.LeafSnowflakeIdGenerator;
 import cn.nexus.infrastructure.adapter.social.repository.CommentHotRankRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedGlobalLatestRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedOutboxRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedTimelineRepository;
-import cn.nexus.infrastructure.adapter.social.repository.ReactionRepository;
 import cn.nexus.infrastructure.adapter.social.repository.RelationRepository;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.infrastructure.dao.auth.IAuthAccountDao;
@@ -27,9 +26,7 @@ import cn.nexus.infrastructure.dao.social.IUserBaseDao;
 import cn.nexus.infrastructure.dao.social.IUserPrivacyDao;
 import cn.nexus.infrastructure.dao.user.IUserEventOutboxDao;
 import cn.nexus.infrastructure.dao.user.IUserStatusDao;
-import cn.nexus.infrastructure.adapter.id.LeafSnowflakeIdGenerator;
 import cn.nexus.trigger.mq.config.FeedFanoutConfig;
-import cn.nexus.trigger.mq.config.CountPostLikeMqConfig;
 import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendFeedbackMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendItemMqConfig;
@@ -37,6 +34,7 @@ import cn.nexus.trigger.mq.config.FeedRecommendFeedbackAMqConfig;
 import cn.nexus.trigger.mq.config.InteractionNotifyMqConfig;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
 import cn.nexus.trigger.mq.config.LikeUnlikeMqConfig;
+import cn.nexus.trigger.mq.config.ReactionEventLogMqConfig;
 import cn.nexus.trigger.mq.config.RelationMqConfig;
 import cn.nexus.trigger.mq.config.RiskMqConfig;
 import cn.nexus.trigger.mq.config.SearchIndexMqConfig;
@@ -74,9 +72,6 @@ public abstract class RealBusinessIntegrationTestSupport {
     protected ISocialIdPort socialIdPort;
 
     @Autowired
-    protected LeafSnowflakeIdGenerator leafSnowflakeIdGenerator;
-
-    @Autowired
     protected IUserBaseDao userBaseDao;
 
     @Autowired
@@ -107,7 +102,7 @@ public abstract class RealBusinessIntegrationTestSupport {
     protected IContentPostTypeDao contentPostTypeDao;
 
     @Autowired
-    protected ReactionRepository reactionRepository;
+    protected IObjectCounterPort objectCounterPort;
 
     @Autowired
     protected IPostContentKvPort postContentKvPort;
@@ -183,14 +178,12 @@ public abstract class RealBusinessIntegrationTestSupport {
         purgeQueueQuietly(InteractionCommentMqConfig.Q_REPLY_COUNT_CHANGED);
         purgeQueueQuietly(InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY);
         purgeQueueQuietly(InteractionNotifyMqConfig.DLQ_INTERACTION_NOTIFY);
+        purgeQueueQuietly(ReactionEventLogMqConfig.QUEUE);
+        purgeQueueQuietly(ReactionEventLogMqConfig.DLQ);
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.Q_FEED_RECOMMEND_FEEDBACK_A);
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.DLQ_FEED_RECOMMEND_FEEDBACK_A);
-        purgeQueueQuietly(LikeUnlikeMqConfig.QUEUE_PERSIST);
-        purgeQueueQuietly(LikeUnlikeMqConfig.DLQ_PERSIST);
         purgeQueueQuietly(LikeUnlikeMqConfig.QUEUE_COUNT);
         purgeQueueQuietly(LikeUnlikeMqConfig.DLQ_COUNT);
-        purgeQueueQuietly(CountPostLikeMqConfig.QUEUE);
-        purgeQueueQuietly(CountPostLikeMqConfig.DLQ);
         purgeQueueQuietly(CountPostLike2SearchIndexMqConfig.QUEUE);
         purgeQueueQuietly(CountPostLike2SearchIndexMqConfig.DLQ);
         purgeQueueQuietly(RelationMqConfig.Q_FOLLOW);
@@ -211,6 +204,7 @@ public abstract class RealBusinessIntegrationTestSupport {
         execUpdate("DELETE FROM content_event_outbox");
         execUpdate("DELETE FROM relation_event_outbox");
         execUpdate("DELETE FROM relation_event_inbox");
+        execUpdate("DELETE FROM interaction_reaction_event_log");
         execUpdate("DELETE FROM reliable_mq_outbox");
         execUpdate("DELETE FROM reliable_mq_consumer_record");
         execUpdate("DELETE FROM reliable_mq_replay_record");
@@ -271,6 +265,25 @@ public abstract class RealBusinessIntegrationTestSupport {
             return Math.max(0L, Long.parseLong(raw.trim()));
         } catch (Exception e) {
             throw new IllegalStateException("read redis value failed, key=" + key, e);
+        }
+    }
+
+    protected long queryReactionEventLogCount(String targetType, long targetId, String reactionType) {
+        String sql = "SELECT COUNT(1) FROM interaction_reaction_event_log WHERE target_type = ? AND target_id = ? AND reaction_type = ?";
+        try (java.sql.Connection conn = dataSource.getConnection();
+             java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, targetType);
+            ps.setLong(2, targetId);
+            ps.setString(3, reactionType);
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return 0L;
+                }
+                return rs.getLong(1);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("query interaction_reaction_event_log count failed, targetType=" + targetType
+                    + ", targetId=" + targetId + ", reactionType=" + reactionType, e);
         }
     }
 

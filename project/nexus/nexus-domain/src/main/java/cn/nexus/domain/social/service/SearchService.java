@@ -3,9 +3,9 @@ package cn.nexus.domain.social.service;
 import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
+import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
-import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
@@ -39,7 +39,7 @@ public class SearchService implements ISearchService {
     private final ISearchEnginePort searchEnginePort;
     private final IFeedCardStatRepository feedCardStatRepository;
     private final IObjectCounterPort objectCounterPort;
-    private final IReactionRepository reactionRepository;
+    private final IReactionCachePort reactionCachePort;
 
     /**
      * 执行搜索。
@@ -79,12 +79,7 @@ public class SearchService implements ISearchService {
         Map<Long, FeedCardStatVO> statMap = loadLikeStats(contentIds);
         Set<Long> likedSet = Set.of();
         if (userId != null && !contentIds.isEmpty()) {
-            ReactionTargetVO template = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(0L)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            likedSet = reactionRepository.batchExists(template, userId, contentIds);
+            likedSet = loadLikedSet(userId, contentIds);
         }
 
         List<SearchResultVO.SearchItemVO> items = new ArrayList<>(hits.size());
@@ -191,6 +186,27 @@ public class SearchService implements ISearchService {
             feedCardStatRepository.saveBatch(toSave);
         }
         return statMap;
+    }
+
+    private Set<Long> loadLikedSet(Long userId, List<Long> contentIds) {
+        if (userId == null || contentIds == null || contentIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> likedSet = new LinkedHashSet<>();
+        for (Long contentId : contentIds) {
+            if (contentId == null) {
+                continue;
+            }
+            ReactionTargetVO target = ReactionTargetVO.builder()
+                    .targetType(ReactionTargetTypeEnumVO.POST)
+                    .targetId(contentId)
+                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .build();
+            if (reactionCachePort.getState(userId, target)) {
+                likedSet.add(contentId);
+            }
+        }
+        return likedSet;
     }
 
     private List<String> parseTags(String tags) {

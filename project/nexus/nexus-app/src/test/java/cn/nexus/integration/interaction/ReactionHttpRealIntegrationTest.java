@@ -35,7 +35,7 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     private RabbitListenerEndpointRegistry rabbitListenerEndpointRegistry;
 
     @Test
-    void postLike_shouldPersistEdgesAggregateCountsAndCreateNotification() throws Exception {
+    void postLike_shouldWriteRedisTruthEventLogAndCreateNotification() throws Exception {
         ensureNotifyConsumersReady();
         TestSession author = registerAndLoginSession("like-author");
         TestSession liker = registerAndLoginSession("liker");
@@ -62,21 +62,9 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
         publishPendingReliableMqMessages();
 
-        ReactionTargetVO postLikeTarget = ReactionTargetVO.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(postId)
-                .reactionType(ReactionTypeEnumVO.LIKE)
-                .build();
-
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(reactionRepository.exists(postLikeTarget, liker.userId())).isTrue();
             assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(1L);
-        });
-
-        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            publishPendingReliableMqMessages();
-            String outbox = reliableOutboxStatus(notifyEventId);
-            assertThat(outbox).isEqualTo("SENT");
+            assertThat(queryReactionEventLogCount("POST", postId, "LIKE")).isEqualTo(1L);
         });
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
@@ -106,7 +94,7 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     }
 
     @Test
-    void commentLike_shouldUpdateHotRankSupportLikersAndCreateNotification() throws Exception {
+    void commentLike_shouldUpdateHotRankRejectLikersAndCreateNotification() throws Exception {
         ensureNotifyConsumersReady();
         ensureCommentConsumersReady();
         TestSession author = registerAndLoginSession("commentlike-author");
@@ -129,23 +117,12 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
         publishPendingReliableMqMessages();
 
-        ReactionTargetVO commentLikeTarget = ReactionTargetVO.builder()
-                .targetType(ReactionTargetTypeEnumVO.COMMENT)
-                .targetId(rootCommentId)
-                .reactionType(ReactionTypeEnumVO.LIKE)
-                .build();
-
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(reactionRepository.exists(commentLikeTarget, liker.userId())).isTrue();
             assertThat(readRedisLong("interact:reaction:cnt:{COMMENT:" + rootCommentId + ":LIKE}")).isEqualTo(1L);
+            assertThat(queryReactionEventLogCount("COMMENT", rootCommentId, "LIKE")).isEqualTo(1L);
             assertThat(commentHotRankRepository.topIds(postId, 10)).contains(rootCommentId);
             assertThat(commentDao.selectBriefById(rootCommentId).getLikeCount()).isEqualTo(1L);
         });
-
-        JsonNode likers = assertSuccess(getJson("/api/v1/interact/reaction/likers?targetId=" + rootCommentId + "&targetType=COMMENT&type=LIKE&limit=10", liker.token()));
-        assertThat(likers.path("items"))
-                .extracting(JsonNode::toString)
-                .anySatisfy(raw -> assertThat(raw).contains("\"userId\":" + liker.userId()));
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             publishPendingReliableMqMessages();
@@ -332,8 +309,8 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             publishPendingReliableMqMessages();
-            assertThat(reactionRepository.exists(postLikeTarget, liker.userId())).isTrue();
             assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(1L);
+            assertThat(queryReactionEventLogCount("POST", postId, "LIKE")).isEqualTo(1L);
             assertThat(notificationUnreadCount(author.userId(), "POST_LIKED", "POST", postId)).isGreaterThanOrEqualTo(1L);
         });
 

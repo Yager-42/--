@@ -1,7 +1,7 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.trigger.mq.config.LikeUnlikeMqConfig;
-import cn.nexus.trigger.mq.consumer.strategy.PostLikeCountAggregateStrategy;
+import cn.nexus.trigger.mq.consumer.strategy.SnapshotPostLikeCountAggregateStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Message;
@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * ConsumerGroup B: aggregate (1000/1s) and send count snapshots to DB topic.
+ * ConsumerGroup B: aggregate (1000/1s) and send count snapshots to search-index topic.
  *
  * @author m0_52354773
  * @author codex
@@ -22,7 +22,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class PostLikeCountAggregateConsumer {
 
-    private final PostLikeCountAggregateStrategy strategy;
+    private final SnapshotPostLikeCountAggregateStrategy strategy;
 
     /**
      * 批量消费消息。

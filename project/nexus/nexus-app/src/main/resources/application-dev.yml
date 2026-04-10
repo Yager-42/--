@@ -146,11 +146,6 @@ search:
       enabled: true
       redisKey: search:backfill:cursor
 
-reaction:
-  sync:
-    mode: redis
-  count:
-    model: snapshot
 
 storage:
   type: minio
@@ -218,5 +213,3 @@ mq:
 mq-consumer:
   like-unlike:
     rate-limit: 200
-  count-like2db:
-    rate-limit: 50

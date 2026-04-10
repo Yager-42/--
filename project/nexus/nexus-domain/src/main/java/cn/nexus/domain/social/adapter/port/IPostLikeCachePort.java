@@ -8,7 +8,7 @@ public interface IPostLikeCachePort {
     /**
      * 更新“作者收到的点赞数”计数（最终一致，允许短暂偏差）。
      *
-     * <p>注意：这个计数是按 creatorId 聚合的派生值，不参与点赞事实表（interaction_reaction）。</p>
+     * <p>注意：这个计数是按 creatorId 聚合的派生值，不参与 reaction event log 持久化。</p>
      *
      * @param creatorId 作者用户 ID
      * @param delta     +1=收到点赞，-1=取消点赞

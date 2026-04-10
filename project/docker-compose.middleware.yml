@@ -31,6 +31,8 @@ services:
         condition: service_healthy
     volumes:
       - ./docker/mysql/init-extra.sh:/init-extra.sh:ro
+      - ./nexus/docs/nexus_final_mysql_schema.sql:/schema/nexus-final-schema.sql:ro
+      - ./nexus/docs/migrations/20260409_01_drop_legacy_reaction_tables.sql:/schema/20260409_01_drop_legacy_reaction_tables.sql:ro
       - ./docker/hotkey/init/schema.sql:/schema/hotkey-schema.sql:ro
     entrypoint: ["bash", "/init-extra.sh"]
     restart: "no"

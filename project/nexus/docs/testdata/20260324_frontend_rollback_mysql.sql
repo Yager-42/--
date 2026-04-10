@@ -9,22 +9,6 @@ START TRANSACTION;
 DELETE FROM `interaction_notification`
 WHERE `notification_id` IN (950100001, 950100002, 950100003);
 
-DELETE FROM `interaction_reaction`
-WHERE (`target_type`, `target_id`, `reaction_type`, `user_id`) IN (
-    ('POST', 910100001, 'LIKE', 900100001),
-    ('POST', 910100001, 'LIKE', 900100003),
-    ('POST', 910100001, 'LIKE', 900100004),
-    ('POST', 910100002, 'LIKE', 900100001),
-    ('COMMENT', 920100001, 'LIKE', 900100002),
-    ('COMMENT', 920100001, 'LIKE', 900100004)
-);
-
-DELETE FROM `interaction_reaction_count`
-WHERE (`target_type`, `target_id`, `reaction_type`) IN (
-    ('POST', 910100001, 'LIKE'),
-    ('POST', 910100002, 'LIKE'),
-    ('COMMENT', 920100001, 'LIKE')
-);
 
 DELETE FROM `interaction_comment_pin`
 WHERE `post_id` = 910100001;

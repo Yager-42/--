@@ -132,27 +132,6 @@ ON DUPLICATE KEY UPDATE
     `comment_id` = VALUES(`comment_id`),
     `update_time` = VALUES(`update_time`);
 
-INSERT INTO `interaction_reaction`
-    (`target_type`, `target_id`, `reaction_type`, `user_id`, `create_time`, `update_time`)
-VALUES
-    ('POST', 910100001, 'LIKE', 900100001, '2026-03-24 08:50:00', '2026-03-24 08:50:00'),
-    ('POST', 910100001, 'LIKE', 900100003, '2026-03-24 08:51:00', '2026-03-24 08:51:00'),
-    ('POST', 910100001, 'LIKE', 900100004, '2026-03-24 08:52:00', '2026-03-24 08:52:00'),
-    ('POST', 910100002, 'LIKE', 900100001, '2026-03-24 08:53:00', '2026-03-24 08:53:00'),
-    ('COMMENT', 920100001, 'LIKE', 900100002, '2026-03-24 08:54:00', '2026-03-24 08:54:00'),
-    ('COMMENT', 920100001, 'LIKE', 900100004, '2026-03-24 08:55:00', '2026-03-24 08:55:00')
-ON DUPLICATE KEY UPDATE
-    `update_time` = VALUES(`update_time`);
-
-INSERT INTO `interaction_reaction_count`
-    (`target_type`, `target_id`, `reaction_type`, `count`, `update_time`)
-VALUES
-    ('POST', 910100001, 'LIKE', 3, '2026-03-24 08:55:00'),
-    ('POST', 910100002, 'LIKE', 1, '2026-03-24 08:55:00'),
-    ('COMMENT', 920100001, 'LIKE', 2, '2026-03-24 08:55:00')
-ON DUPLICATE KEY UPDATE
-    `count` = VALUES(`count`),
-    `update_time` = VALUES(`update_time`);
 
 INSERT INTO `interaction_notification`
     (`notification_id`, `to_user_id`, `biz_type`, `target_type`, `target_id`, `post_id`, `root_comment_id`, `last_actor_user_id`, `last_comment_id`, `unread_count`, `create_time`, `update_time`)

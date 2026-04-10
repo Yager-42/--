@@ -92,22 +92,6 @@ public class InteractionService implements IInteractionService {
     }
 
     /**
-     * 查询点赞人列表。
-     *
-     * @param targetId 目标 ID，类型：{@link Long}
-     * @param targetType 目标类型，类型：{@link String}
-     * @param type 互动类型，类型：{@link String}
-     * @param cursor 翻页游标，类型：{@link String}
-     * @param limit 页大小，类型：{@link Integer}
-     * @return 点赞人分页结果，类型：{@link ReactionLikersVO}
-     */
-    @Override
-    public ReactionLikersVO reactionLikers(Long targetId, String targetType, String type, String cursor, Integer limit) {
-        ReactionTargetVO target = parseTarget(targetId, targetType, type);
-        return reactionLikeService.queryLikers(target, cursor, limit);
-    }
-
-    /**
      * 创建评论或楼内回复。
      *
      * @param userId 评论人 ID，类型：{@link Long}

@@ -5,7 +5,6 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
-import cn.nexus.trigger.mq.config.CountPostLikeMqConfig;
 import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import cn.nexus.types.event.interaction.ReactionCountSnapshotEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,13 +22,12 @@ import java.util.List;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class SnapshotPostLikeCountAggregateStrategy implements PostLikeCountAggregateStrategy {
+public class SnapshotPostLikeCountAggregateStrategy {
 
     private final IReactionCachePort reactionCachePort;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
 
-    @Override
     public void handle(List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
             return;
@@ -81,7 +79,6 @@ public class SnapshotPostLikeCountAggregateStrategy implements PostLikeCountAggr
             return;
         }
 
-        rabbitTemplate.convertAndSend(CountPostLikeMqConfig.EXCHANGE, CountPostLikeMqConfig.ROUTING_KEY, snapshots);
         rabbitTemplate.convertAndSend(CountPostLike2SearchIndexMqConfig.EXCHANGE,
                 CountPostLike2SearchIndexMqConfig.ROUTING_KEY,
                 snapshots);

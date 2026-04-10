@@ -4,6 +4,7 @@ import cn.nexus.Application;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurationPackage;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 
@@ -14,7 +15,8 @@ import org.springframework.context.annotation.FilterType;
 @EnableAutoConfiguration
 @AutoConfigurationPackage(basePackageClasses = Application.class)
 @ComponentScan(basePackages = "cn.nexus", excludeFilters = {
-    @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = Application.class)
+    @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = Application.class),
+    @ComponentScan.Filter(type = FilterType.ANNOTATION, classes = TestConfiguration.class)
 })
 public class TestNoSchedulingApplication {
 }

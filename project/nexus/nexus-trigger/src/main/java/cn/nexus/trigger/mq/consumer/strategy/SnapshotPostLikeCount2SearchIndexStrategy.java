@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
-public class SnapshotPostLikeCount2SearchIndexStrategy implements PostLikeCount2SearchIndexStrategy {
+public class SnapshotPostLikeCount2SearchIndexStrategy {
 
     private static final TypeReference<List<ReactionCountSnapshotEvent>> LIST_TYPE = new TypeReference<>() {
     };
@@ -28,7 +28,6 @@ public class SnapshotPostLikeCount2SearchIndexStrategy implements PostLikeCount2
         this.searchIndexUpsertService = searchIndexUpsertService;
     }
 
-    @Override
     public void handle(List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
             return;

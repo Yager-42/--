@@ -1,7 +1,7 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
-import cn.nexus.trigger.mq.consumer.strategy.PostLikeCount2SearchIndexStrategy;
+import cn.nexus.trigger.mq.consumer.strategy.SnapshotPostLikeCount2SearchIndexStrategy;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class PostLikeCount2SearchIndexConsumer {
 
-    private final PostLikeCount2SearchIndexStrategy strategy;
+    private final SnapshotPostLikeCount2SearchIndexStrategy strategy;
 
     @RabbitListener(queues = CountPostLike2SearchIndexMqConfig.QUEUE, containerFactory = "likeUnlikeBatchListenerContainerFactory")
     public void onMessages(List<Message> messages) {

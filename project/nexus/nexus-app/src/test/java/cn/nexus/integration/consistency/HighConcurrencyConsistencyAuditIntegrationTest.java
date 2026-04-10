@@ -3,9 +3,6 @@ package cn.nexus.integration.consistency;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
@@ -31,7 +28,7 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
     private RabbitListenerEndpointRegistry rabbitListenerEndpointRegistry;
 
     @Test
-    void postLike_highConcurrencyAudit_shouldAlignRedisMysqlAndAggregate() throws Exception {
+    void postLike_highConcurrencyAudit_shouldAlignRedisEventLogAndApiState() throws Exception {
         ensureAllConsumersStarted();
         TestSession author = registerAndLoginSession("audit-like-author");
         List<TestSession> likers = new ArrayList<>();
@@ -58,27 +55,17 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
         publishPendingReliableMqMessages();
 
         int expected = likers.size();
-        ReactionTargetVO target = ReactionTargetVO.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(postId)
-                .reactionType(ReactionTypeEnumVO.LIKE)
-                .build();
-
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             publishPendingReliableMqMessages();
-            assertThat(queryReactionEdgeCount(postId)).isEqualTo(expected);
-            assertThat(queryReactionAggregateCount(postId)).isEqualTo(expected);
             assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(expected);
-            assertThat(reactionRepository.exists(target, likers.get(0).userId())).isTrue();
+            assertThat(queryReactionEventLogCount("POST", postId, "LIKE")).isEqualTo(expected);
         });
 
-        long edgeCount = queryReactionEdgeCount(postId);
-        long aggregateCount = queryReactionAggregateCount(postId);
         long redisCount = readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}");
+        long eventLogCount = queryReactionEventLogCount("POST", postId, "LIKE");
 
-        assertThat(edgeCount).isEqualTo(expected);
-        assertThat(aggregateCount).isEqualTo(expected);
         assertThat(redisCount).isEqualTo(expected);
+        assertThat(eventLogCount).isEqualTo(expected);
 
         JsonNode state = assertSuccess(getJson(
                 "/api/v1/interact/reaction/state?targetId=" + postId + "&targetType=POST&type=LIKE", likers.get(0).token()));
@@ -167,38 +154,6 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
         contentPostDao.insert(post);
         postContentKvPort.add(post.getContentUuid(), body);
         return postId;
-    }
-
-    private long queryReactionEdgeCount(long postId) {
-        String sql = "SELECT COUNT(1) FROM interaction_reaction WHERE target_type = 'POST' AND target_id = ? AND reaction_type = 'LIKE'";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setLong(1, postId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    return 0L;
-                }
-                return rs.getLong(1);
-            }
-        } catch (Exception e) {
-            throw new IllegalStateException("query interaction_reaction failed, postId=" + postId, e);
-        }
-    }
-
-    private long queryReactionAggregateCount(long postId) {
-        String sql = "SELECT count FROM interaction_reaction_count WHERE target_type = 'POST' AND target_id = ? AND reaction_type = 'LIKE'";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setLong(1, postId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    return 0L;
-                }
-                return rs.getLong(1);
-            }
-        } catch (Exception e) {
-            throw new IllegalStateException("query interaction_reaction_count failed, postId=" + postId, e);
-        }
     }
 
     private long queryActiveFollowEdgeCount(long sourceId, long targetId) {

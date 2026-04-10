@@ -1,29 +1,24 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.adapter.port.IInteractionNotifyEventPort;
-import cn.nexus.domain.social.adapter.port.ICommentEventPort;
-import cn.nexus.domain.social.adapter.port.ILikeUnlikeEventPort;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.domain.social.adapter.port.IPostLikeCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
-import cn.nexus.domain.social.adapter.port.IReactionDelayPort;
-import cn.nexus.domain.social.adapter.port.IRecommendFeedbackEventPort;
+import cn.nexus.domain.social.adapter.port.IReactionCommentLikeChangedMqPort;
+import cn.nexus.domain.social.adapter.port.IReactionEventLogMqPort;
+import cn.nexus.domain.social.adapter.port.IReactionLikeUnlikeMqPort;
+import cn.nexus.domain.social.adapter.port.IReactionNotifyMqPort;
+import cn.nexus.domain.social.adapter.port.IReactionRecommendFeedbackMqPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
-import cn.nexus.domain.social.adapter.repository.IReactionRepository;
-import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.valobj.ReactionActionEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionApplyResultVO;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
-import cn.nexus.domain.social.model.valobj.ReactionLikerVO;
-import cn.nexus.domain.social.model.valobj.ReactionLikersVO;
 import cn.nexus.domain.social.model.valobj.ReactionResultVO;
 import cn.nexus.domain.social.model.valobj.ReactionStateVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionUserEdgeVO;
-import cn.nexus.domain.social.model.valobj.UserBriefVO;
+import cn.nexus.domain.social.model.valobj.ReactionEventLogRecordVO;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.event.interaction.EventType;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
@@ -31,18 +26,10 @@ import cn.nexus.types.event.interaction.InteractionNotifyEvent;
 import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import cn.nexus.types.event.recommend.RecommendFeedbackEvent;
 import cn.nexus.types.exception.AppException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 点赞子域服务。
@@ -56,23 +43,18 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @RequiredArgsConstructor
 public class ReactionLikeService implements IReactionLikeService {
 
-    private static final int SYNC_TTL_SEC = 600;
-    private static final long DEFAULT_WINDOW_MS = 300_000L;
-    private static final long COMMENT_WINDOW_MS = 1_000L;
     private static final String EVT_COMMENT_LIKE_CHANGED_PREFIX = "comment_like_changed:";
 
     private final IReactionCachePort reactionCachePort;
-    private final IReactionDelayPort reactionDelayPort;
     private final ICommentRepository commentRepository;
-    private final IReactionRepository reactionRepository;
     private final ISocialIdPort socialIdPort;
-    private final ICommentEventPort commentEventPort;
-    private final IInteractionNotifyEventPort interactionNotifyEventPort;
-    private final IRecommendFeedbackEventPort recommendFeedbackEventPort;
+    private final IReactionCommentLikeChangedMqPort reactionCommentLikeChangedMqPort;
+    private final IReactionNotifyMqPort reactionNotifyMqPort;
+    private final IReactionRecommendFeedbackMqPort reactionRecommendFeedbackMqPort;
     private final IPostLikeCachePort postLikeCachePort;
-    private final ILikeUnlikeEventPort likeUnlikeEventPort;
+    private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort;
     private final IPostAuthorPort postAuthorPort;
-    private final IUserBaseRepository userBaseRepository;
+    private final IReactionEventLogMqPort reactionEventLogMqPort;
 
     /**
      * 统一点赞/取消点赞入口。
@@ -84,7 +66,6 @@ public class ReactionLikeService implements IReactionLikeService {
      * @return 点赞执行结果，类型：{@link ReactionResultVO}
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public ReactionResultVO applyReaction(Long userId, ReactionTargetVO target, ReactionActionEnumVO action, String requestId) {
         requireNonNull(userId, "userId");
         requireTarget(target);
@@ -95,18 +76,18 @@ public class ReactionLikeService implements IReactionLikeService {
 
     private ReactionResultVO applyUnifiedLike(Long userId, ReactionTargetVO target, ReactionActionEnumVO action, String requestId) {
         String rid = (requestId == null || requestId.isBlank()) ? ("rid-" + socialIdPort.nextId()) : requestId.trim();
-        int desiredState = action.desiredState();
-        ReactionApplyResultVO apply = reactionCachePort.applyAtomic(userId, target, desiredState, SYNC_TTL_SEC);
-        int delta = apply == null || apply.getDelta() == null ? 0 : apply.getDelta();
-        long currentCount = apply == null || apply.getCurrentCount() == null ? 0L : apply.getCurrentCount();
-        boolean firstPending = apply != null && apply.isFirstPending();
-
-        if (firstPending) {
-            long delayMs = reactionCachePort.getWindowMs(target, defaultWindowMs(target));
-            reactionDelayPort.sendDelay(target, delayMs);
-        }
-
         long nowMs = socialIdPort.now();
+        int desiredState = action.desiredState();
+        ReactionApplyResultVO apply = reactionCachePort.applyAtomic(userId, target, desiredState);
+        if (apply == null || apply.getDelta() == null || apply.getCurrentCount() == null) {
+            throw new AppException(ResponseCode.UN_ERROR.getCode(), "reaction cache apply failed");
+        }
+        int delta = apply.getDelta();
+        long currentCount = apply.getCurrentCount();
+        boolean firstPending = apply.isFirstPending();
+
+        publishEventLogBestEffort(rid, userId, target, desiredState, delta, nowMs);
+
         if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
             publishPostSideEffects(rid, userId, target, delta, nowMs);
         } else if (target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT) {
@@ -135,13 +116,7 @@ public class ReactionLikeService implements IReactionLikeService {
         requireTarget(target);
         requireLikeOnly(target);
 
-        boolean state;
-        if (reactionCachePort.bitmapShardExists(userId, target)) {
-            state = reactionCachePort.getState(userId, target);
-        } else {
-            state = reactionRepository.exists(target, userId);
-            reactionCachePort.setState(userId, target, state);
-        }
+        boolean state = reactionCachePort.getState(userId, target);
         long cnt = reactionCachePort.getCount(target);
         return ReactionStateVO.builder().state(state).currentCount(cnt).build();
     }
@@ -170,13 +145,13 @@ public class ReactionLikeService implements IReactionLikeService {
 
         if (delta > 0) {
             event.setType(1);
-            likeUnlikeEventPort.publishLike(event);
+            reactionLikeUnlikeMqPort.publishLike(event);
             publishNotifyLikeAdded(requestId, userId, target);
             return;
         }
 
         event.setType(0);
-        likeUnlikeEventPort.publishUnlike(event);
+        reactionLikeUnlikeMqPort.publishUnlike(event);
         publishRecommendUnlike(requestId, userId, target);
     }
 
@@ -194,121 +169,6 @@ public class ReactionLikeService implements IReactionLikeService {
         }
     }
 
-    /**
-     * 查询点赞人列表。
-     *
-     * @param target 点赞目标，类型：{@link ReactionTargetVO}
-     * @param cursor 翻页游标，类型：{@link String}
-     * @param limit 页大小，类型：{@link Integer}
-     * @return 点赞人分页结果，类型：{@link ReactionLikersVO}
-     */
-    @Override
-    public ReactionLikersVO queryLikers(ReactionTargetVO target, String cursor, Integer limit) {
-        requireTarget(target);
-        requireLikeOnly(target);
-        if (target.getTargetType() != ReactionTargetTypeEnumVO.COMMENT) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "点赞列表当前仅支持 COMMENT");
-        }
-        int normalizedLimit = limit == null || limit <= 0 ? 20 : Math.min(limit, 50);
-        List<ReactionUserEdgeVO> edges = reactionRepository.pageUserEdgesByTarget(target, cursor, normalizedLimit);
-        if (edges == null || edges.isEmpty()) {
-            return ReactionLikersVO.builder().items(List.of()).nextCursor(null).build();
-        }
-
-        Set<Long> userIds = new LinkedHashSet<>();
-        for (ReactionUserEdgeVO edge : edges) {
-            if (edge != null && edge.getUserId() != null) {
-                userIds.add(edge.getUserId());
-            }
-        }
-        Map<Long, UserBriefVO> briefMap = new HashMap<>();
-        for (UserBriefVO brief : userBaseRepository.listByUserIds(new ArrayList<>(userIds))) {
-            if (brief != null && brief.getUserId() != null) {
-                briefMap.put(brief.getUserId(), brief);
-            }
-        }
-
-        List<ReactionLikerVO> items = new ArrayList<>(edges.size());
-        for (ReactionUserEdgeVO edge : edges) {
-            if (edge == null || edge.getUserId() == null) {
-                continue;
-            }
-            UserBriefVO brief = briefMap.get(edge.getUserId());
-            items.add(ReactionLikerVO.builder()
-                    .userId(edge.getUserId())
-                    .nickname(brief == null ? null : brief.getNickname())
-                    .avatarUrl(brief == null ? null : brief.getAvatarUrl())
-                    .likedAt(edge.getLikedAt())
-                    .build());
-        }
-        ReactionLikerVO last = items.isEmpty() ? null : items.get(items.size() - 1);
-        String nextCursor = last == null || last.getLikedAt() == null || last.getUserId() == null
-                ? null
-                : last.getLikedAt() + ":" + last.getUserId();
-        return ReactionLikersVO.builder().items(items).nextCursor(nextCursor).build();
-    }
-
-    /**
-     * 兼容保留：收口旧的评论点赞延迟同步链路。
-     *
-     * @param target 同步目标，类型：{@link ReactionTargetVO}
-     */
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void syncTarget(ReactionTargetVO target) {
-        requireTarget(target);
-        requireLikeOnly(target);
-
-        // 没有快照就直接清标记返回，避免空转调度。
-        boolean hasSnapshot = reactionCachePort.snapshotOps(target);
-        if (!hasSnapshot) {
-            reactionCachePort.clearSyncFlag(target);
-            return;
-        }
-
-        Map<Long, Integer> ops = reactionCachePort.readOpsSnapshot(target);
-        List<Long> addUserIds = new ArrayList<>();
-        List<Long> removeUserIds = new ArrayList<>();
-        if (ops != null && !ops.isEmpty()) {
-            for (Map.Entry<Long, Integer> e : ops.entrySet()) {
-                Long userId = e.getKey();
-                Integer desired = e.getValue();
-                if (userId == null || desired == null) {
-                    continue;
-                }
-                if (desired == 1) {
-                    addUserIds.add(userId);
-                } else {
-                    removeUserIds.add(userId);
-                }
-            }
-        }
-
-        // 先按快照回放增删边，再把计数总值刷回数据库。
-        if (!addUserIds.isEmpty()) {
-            reactionRepository.batchUpsert(target, addUserIds);
-        }
-        if (!removeUserIds.isEmpty()) {
-            reactionRepository.batchDelete(target, removeUserIds);
-        }
-
-        long cnt = reactionCachePort.getCountFromRedis(target);
-        reactionRepository.upsertCount(target, cnt);
-
-        reactionCachePort.clearOpsSnapshot(target);
-        reactionCachePort.setLastSyncTime(target, socialIdPort.now());
-        reactionCachePort.clearSyncFlag(target);
-
-        if (!reactionCachePort.existsOps(target)) {
-            return;
-        }
-
-        // 快照清完后如果窗口里又进了新操作，就重新挂一次延迟任务继续收敛。
-        reactionCachePort.setSyncPending(target, SYNC_TTL_SEC);
-        long delayMs = reactionCachePort.getWindowMs(target, defaultWindowMs(target));
-        reactionDelayPort.sendDelay(target, delayMs);
-    }
-
     private void requireTarget(ReactionTargetVO target) {
         requireNonNull(target, "target");
         requireNonNull(target.getTargetType(), "targetType");
@@ -318,13 +178,13 @@ public class ReactionLikeService implements IReactionLikeService {
 
     private void requireLikeOnly(ReactionTargetVO target) {
         if (target.getReactionType() != ReactionTypeEnumVO.LIKE) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "当前仅支持 LIKE");
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "only LIKE is supported");
         }
     }
 
     private void requireNonNull(Object v, String name) {
         if (v == null) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "非法参数：" + name);
+            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "illegal parameter: " + name);
         }
     }
 
@@ -362,8 +222,8 @@ public class ReactionLikeService implements IReactionLikeService {
 
     private void publishNotifyLikeAdded(String requestId, Long fromUserId, ReactionTargetVO target) {
         try {
-            // ReliableMqOutbox 的 event_id 是全局唯一：同一个 requestId 可能同时触发多条业务消息（LikeUnlike + Notify）。
-            // 如果复用 requestId 作为 eventId，会导致第二条消息被 INSERT IGNORE 静默丢弃。
+            // ReliableMqOutbox 鐨?event_id 鏄叏灞€鍞竴锛氬悓涓€涓?requestId 鍙兘鍚屾椂瑙﹀彂澶氭潯涓氬姟娑堟伅锛圠ikeUnlike + Notify锛夈€?
+            // 濡傛灉澶嶇敤 requestId 浣滀负 eventId锛屼細瀵艰嚧绗簩鏉℃秷鎭 INSERT IGNORE 闈欓粯涓㈠純銆?
             String rid = requestId == null ? "" : requestId.trim();
             String eventId = rid.isBlank() ? ("notify:like:" + socialIdPort.nextId()) : ("notify:like:" + rid);
             InteractionNotifyEvent event = new InteractionNotifyEvent();
@@ -377,7 +237,7 @@ public class ReactionLikeService implements IReactionLikeService {
                 event.setPostId(target.getTargetId());
             }
             event.setTsMs(socialIdPort.now());
-            interactionNotifyEventPort.publish(event);
+            reactionNotifyMqPort.publish(event);
         } catch (Exception e) {
             log.warn("publish InteractionNotifyEvent LIKE_ADDED failed, requestId={}, fromUserId={}, target={}", requestId, fromUserId, target, e);
         }
@@ -388,7 +248,7 @@ public class ReactionLikeService implements IReactionLikeService {
             return;
         }
         try {
-            // unlike 与 recommend feedback 是两条独立消息：避免与 LikeUnlike 的 outbox eventId 冲突。
+            // unlike 涓?recommend feedback 鏄袱鏉＄嫭绔嬫秷鎭細閬垮厤涓?LikeUnlike 鐨?outbox eventId 鍐茬獊銆?
             String rid = requestId == null ? "" : requestId.trim();
             String eventId = rid.isBlank() ? ("recommend:unlike:" + socialIdPort.nextId()) : ("recommend:unlike:" + rid);
             RecommendFeedbackEvent event = new RecommendFeedbackEvent();
@@ -397,7 +257,7 @@ public class ReactionLikeService implements IReactionLikeService {
             event.setPostId(target.getTargetId());
             event.setFeedbackType("unlike");
             event.setTsMs(socialIdPort.now());
-            recommendFeedbackEventPort.publish(event);
+            reactionRecommendFeedbackMqPort.publish(event);
         } catch (Exception e) {
             log.warn("publish RecommendFeedbackEvent unlike failed, requestId={}, fromUserId={}, target={}", requestId, fromUserId, target, e);
         }
@@ -433,36 +293,34 @@ public class ReactionLikeService implements IReactionLikeService {
             event.setPostId(postId);
             event.setDelta(delta);
             event.setTsMs(nowMs);
-            commentEventPort.publish(event);
+            reactionCommentLikeChangedMqPort.publish(event);
         } catch (Exception e) {
             log.warn("publish CommentLikeChangedEvent failed, rootCommentId={}, postId={}, delta={}", rootCommentId, postId, delta, e);
         }
     }
 
-    private long defaultWindowMs(ReactionTargetVO target) {
-        if (target != null && target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT) {
-            return COMMENT_WINDOW_MS;
-        }
-        return DEFAULT_WINDOW_MS;
-    }
-
-    private void afterCommit(Runnable action) {
-        if (action == null) {
+    private void publishEventLogBestEffort(String requestId,
+                                           Long userId,
+                                           ReactionTargetVO target,
+                                           int desiredState,
+                                           int delta,
+                                           long nowMs) {
+        if (delta == 0 || target == null || target.getTargetType() == null || target.getReactionType() == null) {
             return;
         }
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            action.run();
-            return;
+        try {
+            reactionEventLogMqPort.publish(ReactionEventLogRecordVO.builder()
+                    .eventId(requestId)
+                    .targetType(target.getTargetType().getCode())
+                    .targetId(target.getTargetId())
+                    .reactionType(target.getReactionType().getCode())
+                    .userId(userId)
+                    .desiredState(desiredState)
+                    .delta(delta)
+                    .eventTime(nowMs)
+                    .build());
+        } catch (Exception e) {
+            log.warn("publish reaction event log failed, requestId={}, userId={}, target={}, delta={}", requestId, userId, target, delta, e);
         }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            /**
-             * 执行 afterCommit 逻辑。
-             *
-             */
-            @Override
-            public void afterCommit() {
-                action.run();
-            }
-        });
     }
 }

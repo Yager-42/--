@@ -3,10 +3,11 @@ package cn.nexus.infrastructure.adapter.counter.port;
 import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
+import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.ICommentDao;
-import cn.nexus.infrastructure.dao.social.IInteractionReactionCountDao;
 import cn.nexus.infrastructure.dao.social.po.CommentPO;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -30,7 +31,7 @@ public class ObjectCounterPort implements IObjectCounterPort {
     private static final String REACTION_CNT_KEY_PREFIX = "interact:reaction:cnt:";
 
     private final StringRedisTemplate redisTemplate;
-    private final IInteractionReactionCountDao reactionCountDao;
+    private final IReactionCachePort reactionCachePort;
     private final ICommentDao commentDao;
 
     @Override
@@ -118,12 +119,11 @@ public class ObjectCounterPort implements IObjectCounterPort {
             return 0L;
         }
         if (target.getCounterType() == ObjectCounterType.LIKE) {
-            ReactionTypeEnumVO reactionType = ReactionTypeEnumVO.LIKE;
-            Long count = reactionCountDao.selectCount(
-                    target.getTargetType().getCode(),
-                    target.getTargetId(),
-                    reactionType.getCode());
-            return count == null ? 0L : Math.max(0L, count);
+            return reactionCachePort.getCountFromRedis(ReactionTargetVO.builder()
+                    .targetType(target.getTargetType())
+                    .targetId(target.getTargetId())
+                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .build());
         }
         if (target.getCounterType() == ObjectCounterType.REPLY
                 && target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT) {

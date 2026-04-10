@@ -3,9 +3,9 @@ package cn.nexus.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.infrastructure.dao.social.po.UserBasePO;
 import cn.nexus.trigger.mq.config.SearchIndexCdcMqConfig;
@@ -51,10 +51,10 @@ class SearchIndexConsumerRealIntegrationTest extends RealMiddlewareIntegrationTe
         contentPostDao.insert(post);
         contentPostTypeDao.insertBatch(postId, java.util.List.of("integration", "search"));
         postContentKvPort.add(contentUuid, "这是一段会进入 Elasticsearch 的真实正文");
-        reactionRepository.upsertCount(ReactionTargetVO.builder()
+        objectCounterPort.setCount(ObjectCounterTarget.builder()
                 .targetType(ReactionTargetTypeEnumVO.POST)
                 .targetId(postId)
-                .reactionType(ReactionTypeEnumVO.LIKE)
+                .counterType(ObjectCounterType.LIKE)
                 .build(), 7L);
 
         deleteRedisKey("social:userbase:" + userId);

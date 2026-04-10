@@ -11,8 +11,6 @@ public interface IInteractionService {
 
     ReactionStateVO reactionState(Long userId, Long targetId, String targetType, String type);
 
-    ReactionLikersVO reactionLikers(Long targetId, String targetType, String type, String cursor, Integer limit);
-
     CommentResultVO comment(Long userId, Long postId, Long parentId, String content, Long commentId);
 
     OperationResultVO applyCommentRiskReviewResult(Long commentId, String finalResult, String reasonCode);

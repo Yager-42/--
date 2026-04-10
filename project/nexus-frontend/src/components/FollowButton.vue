@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { followUser, unfollowUser } from '@/api/relation'
 import { useAuthStore } from '@/store/auth'
@@ -49,9 +49,13 @@ const onToggle = async () => {
 
 <template>
   <button
-    class="follow-btn"
-    :class="{ following: state === 'FOLLOWING', unknown: state === 'UNKNOWN' }"
     type="button"
+    class="inline-flex min-h-[42px] min-w-[104px] items-center justify-center rounded-full px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
+    :class="state === 'FOLLOWING'
+      ? 'border border-outline-variant/20 bg-white/80 text-on-surface'
+      : state === 'UNKNOWN'
+        ? 'bg-tertiary/15 text-on-surface-variant'
+        : 'zen-gradient-cta'"
     :disabled="disabled"
     @click="onToggle"
   >
@@ -59,32 +63,3 @@ const onToggle = async () => {
     <span v-else>{{ text }}</span>
   </button>
 </template>
-
-<style scoped>
-.follow-btn {
-  min-width: 92px;
-  min-height: 36px;
-  border-radius: 999px;
-  padding: 0 12px;
-  background: var(--brand-primary);
-  color: #fff;
-  font-weight: 700;
-  font-size: 0.84rem;
-}
-
-.follow-btn.following {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  border: 1px solid var(--border-soft);
-}
-
-.follow-btn.unknown {
-  background: #e6e6e6;
-  color: #666;
-}
-
-.follow-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
-}
-</style>

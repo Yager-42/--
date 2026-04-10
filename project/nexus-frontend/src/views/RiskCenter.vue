@@ -1,22 +1,44 @@
-﻿<script setup lang="ts">
-import { ref } from 'vue'
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { submitAppeal } from '@/api/risk'
+import { fetchUserRiskStatus, submitAppeal } from '@/api/risk'
+import AppealFormPanel from '@/components/risk/AppealFormPanel.vue'
+import RiskOverviewCard from '@/components/risk/RiskOverviewCard.vue'
+import FormMessage from '@/components/system/FormMessage.vue'
+import StatePanel from '@/components/system/StatePanel.vue'
+import TheNavBar from '@/components/TheNavBar.vue'
+import { useRiskRouteMode } from '@/composables/useRiskRouteMode'
 
 const router = useRouter()
 const route = useRoute()
+const { decisionId, punishId, appealReady, appealUnavailable } = useRiskRouteMode(route)
 
+const status = ref<'NORMAL' | 'LIMITED' | 'BANNED'>('NORMAL')
+const capabilities = ref<string[]>([])
 const appealContent = ref('')
 const loading = ref(false)
+const pageLoading = ref(false)
 const error = ref('')
 const success = ref('')
+const showAppeal = ref(false)
 
-const decisionId = typeof route.query.decisionId === 'string' ? route.query.decisionId : 'unknown'
-const punishId = typeof route.query.punishId === 'string' ? route.query.punishId : 'unknown'
+const loadRiskStatus = async () => {
+  pageLoading.value = true
+  error.value = ''
+  try {
+    const response = await fetchUserRiskStatus()
+    status.value = response.status
+    capabilities.value = response.capabilities
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '风险状态加载失败'
+  } finally {
+    pageLoading.value = false
+  }
+}
 
 const handleSubmit = async () => {
-  if (!appealContent.value.trim()) {
-    error.value = '请填写申诉内容'
+  if (!appealReady.value || !appealContent.value.trim()) {
+    error.value = '当前缺少可提交的申诉参数或申诉内容'
     return
   }
 
@@ -26,117 +48,94 @@ const handleSubmit = async () => {
 
   try {
     await submitAppeal({
-      decisionId,
-      punishId,
+      decisionId: decisionId.value,
+      punishId: punishId.value,
       content: appealContent.value.trim()
     })
     success.value = '申诉已提交，我们会尽快处理。'
-    setTimeout(() => {
-      void router.back()
-    }, 900)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '提交失败，请稍后重试'
   } finally {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  void loadRiskStatus()
+})
 </script>
 
 <template>
-  <div class="page-shell with-top-nav risk-page">
-    <main class="page-content surface-card risk-card">
-      <header>
-        <h1 class="text-large-title">申诉中心</h1>
-        <p class="text-secondary">如果你认为处罚存在误判，请完整描述实际情况。</p>
-      </header>
+  <div class="page-wrap">
+    <TheNavBar />
 
-      <section class="info-box">
-        <p><span>事件编号：</span><strong>{{ decisionId }}</strong></p>
-        <p><span>处罚编号：</span><strong>{{ punishId }}</strong></p>
+    <main class="page-main">
+      <section class="paper-panel grid gap-6 p-6 md:p-8">
+        <StatePanel
+          v-if="pageLoading"
+          variant="loading"
+          title="正在同步风险状态"
+          body="我们正在读取最新的限制与申诉条件。"
+        />
+
+        <StatePanel
+          v-else-if="error && !success && !showAppeal"
+          variant="request-failure"
+          :body="error"
+          action-label="重试"
+          @action="loadRiskStatus"
+        />
+
+        <template v-else>
+          <RiskOverviewCard
+            :status="status"
+            :capabilities="capabilities"
+            :appeal-ready="appealReady"
+            @appeal="showAppeal = true"
+          />
+
+          <FormMessage v-if="success" tone="success" :message="success" />
+          <FormMessage v-if="error && showAppeal" tone="error" :message="error" />
+
+          <StatePanel
+            v-if="showAppeal && appealUnavailable"
+            variant="restricted"
+            title="当前没有可提交的申诉案件"
+            body="只有带齐 decisionId 与 punishId 的入口才会开启真正可提交的申诉表单。"
+            compact
+          />
+
+          <AppealFormPanel
+            v-else-if="showAppeal"
+            :decision-id="decisionId"
+            :punish-id="punishId"
+            :content="appealContent"
+            :loading="loading"
+            :unavailable="appealUnavailable"
+            @update:content="appealContent = $event"
+            @submit="handleSubmit"
+          />
+
+          <div class="risk-actions">
+            <button type="button" class="secondary-btn" @click="router.back()">返回</button>
+            <button
+              v-if="showAppeal"
+              type="button"
+              class="secondary-btn"
+              @click="showAppeal = false"
+            >
+              返回概览
+            </button>
+          </div>
+        </template>
       </section>
-
-      <label class="field">
-        <span>申诉理由</span>
-        <textarea v-model="appealContent" placeholder="请详细说明申诉理由和补充证据" />
-      </label>
-
-      <p v-if="error" class="msg error">{{ error }}</p>
-      <p v-if="success" class="msg success">{{ success }}</p>
-
-      <div class="actions">
-        <button class="secondary-btn" type="button" @click="router.back()">返回</button>
-        <button class="primary-btn" type="button" :disabled="loading || !appealContent.trim()" @click="handleSubmit">
-          {{ loading ? '提交中...' : '提交申诉' }}
-        </button>
-      </div>
     </main>
   </div>
 </template>
 
 <style scoped>
-.risk-page {
-  display: grid;
-}
-
-.risk-card {
-  padding: 20px;
-  display: grid;
-  gap: 12px;
-}
-
-.info-box {
-  border: 1px solid #facc15;
-  background: #fffbeb;
-  border-radius: 12px;
-  padding: 10px 12px;
-  color: #854d0e;
-  display: grid;
-  gap: 4px;
-}
-
-.field {
-  display: grid;
-  gap: 6px;
-}
-
-.field span {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-}
-
-textarea {
-  min-height: 180px;
-  resize: vertical;
-  border-radius: 12px;
-  border: 1px solid var(--border-soft);
-  background: #fff;
-  padding: 10px 12px;
-  outline: none;
-}
-
-.msg {
-  font-size: 0.9rem;
-}
-
-.msg.error {
-  color: var(--brand-danger);
-}
-
-.msg.success {
-  color: #15803d;
-}
-
-.actions {
+.risk-actions {
   display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.actions .secondary-btn,
-.actions .primary-btn {
-  min-width: 100px;
-  padding: 0 14px;
+  gap: 0.75rem;
 }
 </style>
-
-

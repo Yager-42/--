@@ -1,10 +1,19 @@
-﻿<script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import ZenButton from '@/components/primitives/ZenButton.vue'
+import ZenIcon from '@/components/primitives/ZenIcon.vue'
 import { fetchSuggest } from '@/api/search'
+import SearchSuggestionPanel from '@/components/search/SearchSuggestionPanel.vue'
 
-const props = defineProps<{
-  isExpanded: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    isExpanded: boolean
+    placeholder?: string
+  }>(),
+  {
+    placeholder: '搜索帖子、作者、关键词'
+  }
+)
 
 const emit = defineEmits<{
   (event: 'expand'): void
@@ -16,11 +25,16 @@ const keyword = ref('')
 const loading = ref(false)
 const suggestions = ref<string[]>([])
 const showPanel = ref(false)
-let timer: ReturnType<typeof setTimeout> | null = null
+const requestFailed = ref('')
+let timer: number | null = null
+
+const canSearch = computed(() => keyword.value.trim().length > 0)
 
 const closePanel = () => {
   showPanel.value = false
   suggestions.value = []
+  loading.value = false
+  requestFailed.value = ''
 }
 
 const submit = () => {
@@ -30,54 +44,60 @@ const submit = () => {
   closePanel()
 }
 
+const clear = () => {
+  keyword.value = ''
+  closePanel()
+  emit('collapse')
+}
+
 const onFocus = () => {
   emit('expand')
-  if (suggestions.value.length > 0) {
+  if (keyword.value.trim()) {
     showPanel.value = true
   }
 }
 
 const onBlur = () => {
-  setTimeout(() => {
+  window.setTimeout(() => {
     closePanel()
     if (!keyword.value.trim()) {
       emit('collapse')
     }
-  }, 120)
+  }, 140)
 }
 
-const choose = (item: string) => {
+const selectSuggestion = (item: string) => {
   keyword.value = item
   submit()
 }
 
-const searchSuggest = async () => {
-  const q = keyword.value.trim()
-  if (!q) {
+const loadSuggestions = async () => {
+  const query = keyword.value.trim()
+  if (!query) {
     closePanel()
     return
   }
 
   loading.value = true
+  requestFailed.value = ''
+  showPanel.value = true
+
   try {
-    const res = await fetchSuggest(q)
-    suggestions.value = Array.isArray(res.items) ? res.items : []
-    showPanel.value = suggestions.value.length > 0
+    const response = await fetchSuggest(query, 8)
+    suggestions.value = Array.isArray(response.items) ? response.items : []
   } catch (error) {
-    console.error('load suggestions failed', error)
-    closePanel()
+    requestFailed.value = error instanceof Error ? error.message : '搜索建议加载失败'
+    suggestions.value = []
   } finally {
     loading.value = false
   }
 }
 
 watch(keyword, () => {
-  if (timer) clearTimeout(timer)
-  timer = setTimeout(searchSuggest, 220)
-})
-
-onBeforeUnmount(() => {
-  if (timer) clearTimeout(timer)
+  if (timer) window.clearTimeout(timer)
+  timer = window.setTimeout(() => {
+    void loadSuggestions()
+  }, 220)
 })
 
 watch(
@@ -88,150 +108,67 @@ watch(
     }
   }
 )
+
+onBeforeUnmount(() => {
+  if (timer) window.clearTimeout(timer)
+})
 </script>
 
 <template>
-  <div class="search-box" :class="{ expanded: isExpanded }">
-    <label class="input-wrap" aria-label="搜索内容">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M11 4a7 7 0 1 0 4.6 12.3L20 20.7 21.3 19l-4.4-4.4A7 7 0 0 0 11 4Z" fill="currentColor" />
-      </svg>
+  <div class="relative w-full">
+    <label
+      class="grid min-h-[56px] w-full grid-cols-[20px,minmax(0,1fr),auto,auto] items-center gap-3 rounded-full border border-outline-variant/12 bg-surface-container-lowest/85 px-4 py-1.5 shadow-soft transition"
+      :class="isExpanded ? 'bg-white/90' : ''"
+      aria-label="搜索内容"
+    >
+      <ZenIcon name="search" :size="18" class="text-on-surface-variant" />
+
       <input
         v-model="keyword"
         type="search"
         inputmode="search"
-        placeholder="搜索帖子、作者、关键词"
+        class="w-full min-w-0 border-none bg-transparent text-sm text-on-surface outline-none placeholder:text-outline-variant/80"
+        :placeholder="placeholder"
+        :aria-expanded="showPanel"
+        aria-controls="search-suggestion-panel"
         @focus="onFocus"
         @blur="onBlur"
         @keydown.enter.prevent="submit"
       >
+
+      <button
+        v-if="keyword"
+        type="button"
+        class="grid h-9 w-9 place-items-center rounded-full text-on-surface-variant transition hover:bg-surface-container-low"
+        aria-label="清空搜索"
+        @mousedown.prevent
+        @click="clear"
+      >
+        <ZenIcon name="close" :size="18" />
+      </button>
+
+      <ZenButton
+        variant="primary"
+        class="min-h-[42px] min-w-[88px] px-4 text-xs sm:text-sm"
+        :disabled="!canSearch"
+        @mousedown.prevent
+        @click="submit"
+      >
+        搜索
+      </ZenButton>
     </label>
 
-    <button
-      v-if="isExpanded"
-      class="go-btn"
-      type="button"
-      :disabled="!keyword.trim()"
-      @mousedown.prevent
-      @click="submit"
-    >
-      搜索
-    </button>
-
-    <div v-if="showPanel" class="suggestion-panel" role="listbox">
-      <div v-if="loading" class="suggestion-item muted">正在加载建议...</div>
-      <button
-        v-for="item in suggestions"
-        v-else
-        :key="item"
-        type="button"
-        class="suggestion-item"
-        @mousedown.prevent
-        @click="choose(item)"
-      >
-        {{ item }}
-      </button>
+    <div class="absolute inset-x-0 top-[calc(100%+10px)] z-50">
+      <SearchSuggestionPanel
+        panel-id="search-suggestion-panel"
+        :open="showPanel"
+        :loading="loading"
+        :items="suggestions"
+        :query="keyword"
+        :error-message="requestFailed"
+        @select="selectSuggestion"
+        @retry="loadSuggestions"
+      />
     </div>
   </div>
 </template>
-
-<style scoped>
-.search-box {
-  position: relative;
-  width: 240px;
-  transition: width 220ms ease;
-}
-
-.search-box.expanded {
-  width: min(640px, 100%);
-}
-
-.input-wrap {
-  min-height: 44px;
-  border-radius: 999px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-soft);
-  display: grid;
-  grid-template-columns: 20px 1fr;
-  align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-}
-
-.input-wrap svg {
-  width: 18px;
-  height: 18px;
-  color: var(--text-secondary);
-}
-
-input {
-  border: none;
-  outline: none;
-  background: transparent;
-  width: 100%;
-  color: var(--text-primary);
-}
-
-input::placeholder {
-  color: var(--text-muted);
-}
-
-.go-btn {
-  position: absolute;
-  right: 8px;
-  top: 6px;
-  height: 32px;
-  border-radius: 999px;
-  padding: 0 12px;
-  background: var(--brand-primary);
-  color: #fff;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.go-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.suggestion-panel {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(100% + 8px);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
-  box-shadow: var(--shadow-soft);
-  overflow: hidden;
-  z-index: 40;
-}
-
-.suggestion-item {
-  width: 100%;
-  min-height: 44px;
-  text-align: left;
-  padding: 0 14px;
-  border-bottom: 1px solid #fbe5ea;
-  background: transparent;
-}
-
-.suggestion-item:last-child {
-  border-bottom: none;
-}
-
-.suggestion-item:hover {
-  background: #fff4f7;
-}
-
-.muted {
-  color: var(--text-secondary);
-}
-
-@media (max-width: 900px) {
-  .search-box,
-  .search-box.expanded {
-    width: 100%;
-  }
-}
-</style>

@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed } from 'vue'
 import { markAsRead, type NotificationDTO } from '@/api/notification'
 import { useRouter } from 'vue-router'
@@ -18,7 +18,7 @@ const typeText = computed(() => {
     case 'FOLLOW':
       return '关注了你'
     default:
-      return '给你发送了一条通知'
+      return '向你发送了一条通知'
   }
 })
 
@@ -55,75 +55,22 @@ const openTarget = async () => {
 </script>
 
 <template>
-  <article class="notification-item" :class="{ unread: notification.hasUnread }" @click="openTarget">
-    <img :src="notification.senderAvatar || 'https://via.placeholder.com/80'" class="avatar" alt="avatar">
+  <article
+    class="grid min-h-[96px] cursor-pointer grid-cols-[3rem,minmax(0,1fr),auto] items-center gap-4 rounded-[28px] border p-4 transition"
+    :class="notification.hasUnread ? 'border-outline-variant/25 bg-surface-container-lowest' : 'border-outline-variant/10 bg-white/75'"
+    @click="openTarget"
+  >
+    <img :src="notification.senderAvatar || 'https://via.placeholder.com/80'" class="h-12 w-12 rounded-full object-cover" alt="avatar">
 
-    <div class="main">
-      <p class="line">
-        <strong>{{ notification.senderName }}</strong>
-        <span class="text-secondary">{{ typeText }}</span>
+    <div class="grid min-w-0 gap-1.5">
+      <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{{ timeText }}</p>
+      <p class="flex flex-wrap gap-2 leading-7 text-on-surface">
+        <strong class="font-semibold">{{ notification.senderName }}</strong>
+        <span>{{ typeText }}</span>
       </p>
-      <p class="content" v-if="notification.content">{{ notification.content }}</p>
-      <p class="time text-secondary">{{ timeText }}</p>
+      <p v-if="notification.content" class="line-clamp-2 text-sm leading-7 text-on-surface-variant">{{ notification.content }}</p>
     </div>
 
-    <span class="dot" v-if="notification.hasUnread" aria-label="未读"></span>
+    <span v-if="notification.hasUnread" class="h-2.5 w-2.5 rounded-full bg-primary" aria-label="未读" />
   </article>
 </template>
-
-<style scoped>
-.notification-item {
-  min-height: 78px;
-  border: 1px solid var(--border-soft);
-  border-radius: 14px;
-  padding: 12px;
-  background: #fff;
-  display: grid;
-  grid-template-columns: 44px 1fr auto;
-  gap: 10px;
-  align-items: center;
-  cursor: pointer;
-}
-
-.notification-item.unread {
-  border-color: var(--border-strong);
-  background: #fff6f8;
-}
-
-.avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.main {
-  min-width: 0;
-}
-
-.line {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  flex-wrap: wrap;
-}
-
-.content {
-  margin-top: 4px;
-  color: var(--text-primary);
-  font-size: 0.9rem;
-  line-height: 1.5;
-}
-
-.time {
-  margin-top: 4px;
-  font-size: 0.8rem;
-}
-
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--brand-primary);
-}
-</style>

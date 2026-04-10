@@ -1,23 +1,23 @@
-﻿<script setup lang="ts">
-import { onMounted, ref } from 'vue'
+<script setup lang="ts">
+import { computed, onMounted } from 'vue'
 import { useFeedStore } from '@/store/feed'
-import PostCard from './PostCard.vue'
 import type { FeedCardViewModel } from '@/api/feed'
+import PostCard from './PostCard.vue'
+import StatePanel from '@/components/system/StatePanel.vue'
 
-const feedStore = useFeedStore()
-const containerRef = ref<HTMLElement | null>(null)
+const props = defineProps<{
+  featuredPostId?: string
+}>()
 
 const emit = defineEmits<{
   (event: 'select', post: FeedCardViewModel): void
 }>()
 
-const onScroll = () => {
-  if (!containerRef.value) return
-  const { scrollTop, scrollHeight, clientHeight } = containerRef.value
-  if (scrollTop + clientHeight >= scrollHeight - 280) {
-    void feedStore.fetchNextPage()
-  }
-}
+const feedStore = useFeedStore()
+
+const visiblePosts = computed(() =>
+  feedStore.posts.filter((post) => post.postId !== props.featuredPostId)
+)
 
 onMounted(() => {
   if (feedStore.posts.length === 0) {
@@ -31,101 +31,61 @@ const retryFetch = () => {
 </script>
 
 <template>
-  <section
-    ref="containerRef"
-    class="feed-container"
-    aria-label="推荐内容流"
-    @scroll="onScroll"
-  >
-    <div v-if="feedStore.error && feedStore.posts.length === 0" class="error-state surface-card">
-      <h3>内容加载失败</h3>
-      <p>{{ feedStore.error }}</p>
-      <button class="primary-btn retry-btn" type="button" @click="retryFetch">
-        重试
-      </button>
-    </div>
+  <section class="grid gap-5" aria-label="推荐内容流">
+    <StatePanel
+      v-if="feedStore.error && feedStore.posts.length === 0"
+      variant="request-failure"
+      title="内容暂时没有加载出来"
+      body="时间线请求失败了，你可以重新尝试同步内容。"
+      primary-label="重新加载"
+      @primary="retryFetch"
+    />
 
-    <div v-else class="feed-grid">
-      <PostCard
-        v-for="post in feedStore.posts"
+    <div v-else-if="visiblePosts.length > 0" class="grid gap-5 xl:grid-cols-12">
+      <div
+        v-for="(post, index) in visiblePosts"
         :key="post.postId"
-        :post="{
-          id: post.postId,
-          title: post.title,
-          body: post.body,
-          author: post.author,
-          image: post.image,
-          isLiked: post.isLiked,
-          reactionCount: post.reactionCount,
-          commentCount: post.commentCount
-        }"
-        @click="emit('select', post)"
-      />
+        :class="index % 4 === 0 ? 'xl:col-span-7' : index % 4 === 1 ? 'xl:col-span-5' : 'xl:col-span-4'"
+      >
+        <PostCard
+          :post="{
+            id: post.postId,
+            title: post.title,
+            body: post.body,
+            author: post.author,
+            image: post.image,
+            isLiked: post.isLiked,
+            reactionCount: post.reactionCount,
+            commentCount: post.commentCount
+          }"
+          :variant="index % 3 === 0 ? 'feature' : 'standard'"
+          @click="emit('select', post)"
+        />
+      </div>
     </div>
 
-    <div v-if="feedStore.loading" class="loading-status">
-      <div class="spinner"></div>
-      <span>正在加载内容...</span>
+    <StatePanel
+      v-else-if="!feedStore.loading"
+      variant="empty"
+      title="还没有可展示的内容"
+      body="等时间线出现新的内容后，这里会逐步填满。"
+    />
+
+    <div
+      v-if="feedStore.loading"
+      class="flex min-h-[76px] items-center justify-center gap-3 rounded-[28px] border border-outline-variant/10 bg-surface-container-low/70 text-sm text-on-surface-variant"
+    >
+      <div class="spinner" />
+      <span>正在整理内容...</span>
     </div>
 
-    <div v-if="!feedStore.loading && !feedStore.hasMore" class="loading-status done">
-      已经到底了
-    </div>
+    <button
+      v-if="!feedStore.loading && feedStore.hasMore"
+      type="button"
+      class="secondary-btn justify-self-center"
+      @click="feedStore.fetchNextPage()"
+    >
+      加载更多
+    </button>
   </section>
 </template>
-
-<style scoped>
-.feed-container {
-  height: calc(100dvh - var(--header-height) - var(--dock-height) - var(--safe-top) - var(--safe-bottom) - 18px);
-  overflow: auto;
-  width: 100%;
-}
-
-.feed-grid {
-  display: grid;
-  gap: 14px;
-}
-
-.error-state {
-  margin: 6px auto 18px;
-  min-height: 180px;
-  display: grid;
-  place-items: center;
-  text-align: center;
-  gap: 10px;
-  padding: 20px;
-}
-
-.error-state h3 {
-  margin: 0;
-  font-size: 1.05rem;
-}
-
-.error-state p {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 0.92rem;
-}
-
-.retry-btn {
-  min-width: 120px;
-}
-
-.loading-status {
-  margin: 6px auto 18px;
-  min-height: 56px;
-  border-radius: 14px;
-  border: 1px solid var(--border-soft);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  font-size: 0.92rem;
-}
-
-.loading-status.done {
-  color: var(--text-muted);
-}
-</style>

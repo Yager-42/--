@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
@@ -12,6 +12,12 @@ import {
   type RootCommentDisplayItem
 } from '@/api/interact'
 import CommentItem from '@/components/CommentItem.vue'
+import ContentDetailContinuation from '@/components/content/ContentDetailContinuation.vue'
+import ContentDetailHeader from '@/components/content/ContentDetailHeader.vue'
+import TheDock from '@/components/TheDock.vue'
+import TheNavBar from '@/components/TheNavBar.vue'
+import FormMessage from '@/components/system/FormMessage.vue'
+import StatePanel from '@/components/system/StatePanel.vue'
 
 interface ReplyThreadState {
   expanded: boolean
@@ -36,12 +42,23 @@ const loading = ref(true)
 const commentLoading = ref(false)
 const sending = ref(false)
 const errorMsg = ref('')
+const commentError = ref('')
 const commentContent = ref('')
 const liked = ref(false)
 const likeCount = ref(0)
 
 const postId = computed(() => String(route.params.postId || ''))
-const heroImage = computed(() => detail.value?.mediaUrls[0] || 'https://via.placeholder.com/1200x900?text=Nexus')
+
+const continuationItems = computed(() => {
+  if (!detail.value) return []
+  return [
+    {
+      id: detail.value.postId,
+      title: detail.value.title,
+      subtitle: detail.value.summary || detail.value.authorName
+    }
+  ]
+})
 
 const mergeRootComments = (currentItems: RootCommentDisplayItem[], incomingItems: RootCommentDisplayItem[]) => {
   const seen = new Set(currentItems.map((item) => item.commentId))
@@ -196,6 +213,8 @@ const handlePostComment = async () => {
   if (!content) return
 
   sending.value = true
+  commentError.value = ''
+
   const optimisticCommentId = `local-${Date.now()}`
   const optimisticComment: RootCommentDisplayItem = {
     commentId: optimisticCommentId,
@@ -224,6 +243,7 @@ const handlePostComment = async () => {
     console.error('post comment failed', error)
     comments.value = comments.value.filter((item) => item.commentId !== optimisticCommentId)
     commentContent.value = content
+    commentError.value = error instanceof Error ? error.message : '评论发送失败'
   } finally {
     sending.value = false
   }
@@ -237,234 +257,228 @@ onMounted(() => {
   void loadAll()
 })
 
-watch(() => route.params.postId, () => {
-  void loadAll()
-})
+watch(
+  () => route.params.postId,
+  () => {
+    void loadAll()
+  }
+)
 </script>
 
 <template>
-  <div class="page-shell with-top-nav detail-page">
-    <main class="page-content detail-content">
-      <header class="bar surface-card">
-        <button class="secondary-btn" type="button" @click="router.back()">返回</button>
-        <button class="primary-btn" type="button" @click="handleLike">
-          {{ liked ? '已赞' : '点赞' }} {{ likeCount }}
-        </button>
-      </header>
+  <div class="page-wrap">
+    <TheNavBar />
 
-      <section v-if="loading" class="state-card">
-        <div class="spinner"></div>
-        正在加载内容...
-      </section>
+    <main class="page-main page-main--dock">
+      <section class="grid gap-6">
+        <header class="detail-actions">
+          <button class="secondary-btn" type="button" @click="router.back()">返回</button>
+          <button class="primary-btn" type="button" @click="handleLike">
+            {{ liked ? '已赞' : '点赞' }} {{ likeCount }}
+          </button>
+        </header>
 
-      <section v-else-if="errorMsg" class="state-card error">
-        {{ errorMsg }}
-      </section>
+        <StatePanel
+          v-if="loading"
+          variant="loading"
+          title="正在准备内容详情"
+          body="正文、评论与相关内容正在加载中。"
+        />
 
-      <section v-else-if="detail" class="surface-card article">
-        <img :src="heroImage" class="hero-image" alt="cover">
+        <StatePanel
+          v-else-if="errorMsg"
+          variant="request-failure"
+          :body="errorMsg"
+          primary-label="返回首页"
+          @primary="router.push('/')"
+        />
 
-        <div class="main-block">
-          <p class="text-secondary">作者：{{ detail.authorName }}</p>
-          <h1 class="text-large-title">{{ detail.title }}</h1>
-          <p class="text-body body">{{ detail.content || '暂无正文' }}</p>
-        </div>
+        <template v-else-if="detail">
+          <ContentDetailHeader :detail="detail" />
 
-        <div class="comment-block">
-          <h2 class="text-headline">评论</h2>
+          <section class="paper-panel p-6 md:p-8">
+            <div class="detail-body">
+              <p class="text-body">{{ detail.content || '暂无正文。' }}</p>
+            </div>
+          </section>
 
-          <div class="editor">
-            <input
-              v-model="commentContent"
-              class="input"
-              placeholder="写下你的评论"
-              @keyup.enter="handlePostComment"
-            >
-            <button class="primary-btn send-btn" type="button" :disabled="sending || !commentContent.trim()" @click="handlePostComment">
-              {{ sending ? '发送中...' : '发送' }}
-            </button>
-          </div>
+          <ContentDetailContinuation
+            :items="continuationItems"
+            title="继续浏览同一主题"
+            @select="router.push(`/content/${$event}`)"
+          />
 
-          <div v-if="commentLoading" class="state-card small">
-            正在加载评论...
-          </div>
-
-          <div v-else-if="!pinnedComment && comments.length === 0" class="state-card small">
-            还没有评论
-          </div>
-
-          <div v-else class="comment-list">
-            <div v-if="pinnedComment" class="pin-block">
-              <p class="text-secondary pin-title">置顶评论</p>
-              <CommentItem :comment="pinnedComment" />
+          <section class="paper-panel grid gap-5 p-6 md:p-8">
+            <div class="comment-head">
+              <h2 class="text-headline">评论</h2>
             </div>
 
-            <div v-for="item in comments" :key="item.commentId" class="root-row">
-              <CommentItem :comment="item" />
-
+            <div class="comment-editor">
+              <textarea
+                v-model="commentContent"
+                class="min-h-[120px] rounded-3xl border border-outline-variant/10 bg-surface-container-low px-5 py-4 text-sm text-on-surface outline-none transition focus:border-primary/20 focus:bg-surface-container-lowest"
+                placeholder="写下你的评论"
+              />
               <button
-                v-if="item.replyCount > 0"
-                class="reply-btn"
+                class="primary-btn"
                 type="button"
-                @click="toggleReplies(item)"
+                :disabled="sending || !commentContent.trim()"
+                @click="handlePostComment"
               >
-                {{ getReplyThread(item).expanded ? '收起回复' : `查看回复（${item.replyCount}）` }}
+                {{ sending ? '发送中...' : '发送评论' }}
               </button>
+            </div>
 
-              <div v-if="getReplyThread(item).expanded" class="reply-thread">
-                <CommentItem
-                  v-for="reply in getReplyThread(item).items"
-                  :key="reply.commentId"
-                  :comment="reply"
-                  compact
-                />
+            <FormMessage
+              v-if="commentError"
+              tone="error"
+              :message="commentError"
+            />
+
+            <StatePanel
+              v-if="commentLoading && !pinnedComment && comments.length === 0"
+              variant="loading"
+              title="正在整理评论"
+              body="讨论区内容正在同步中。"
+            />
+
+            <StatePanel
+              v-else-if="!pinnedComment && comments.length === 0"
+              variant="empty"
+              title="还没有评论"
+              body="成为第一个留下想法的人。"
+            />
+
+            <div v-else class="comment-list">
+              <div v-if="pinnedComment" class="comment-list__pin">
+                <p class="comment-list__eyebrow">置顶评论</p>
+                <CommentItem :comment="pinnedComment" />
+              </div>
+
+              <div v-for="item in comments" :key="item.commentId" class="comment-list__group">
+                <CommentItem :comment="item" />
 
                 <button
-                  v-if="getReplyThread(item).hasMore"
-                  class="reply-btn"
+                  v-if="item.replyCount > 0"
+                  class="comment-list__toggle"
                   type="button"
-                  :disabled="getReplyThread(item).loading"
-                  @click="loadReplies(item, true)"
+                  @click="toggleReplies(item)"
                 >
-                  {{ getReplyThread(item).loading ? '加载中...' : '加载更多回复' }}
+                  {{ getReplyThread(item).expanded ? '收起回复' : `查看回复（${item.replyCount}）` }}
                 </button>
-              </div>
-            </div>
 
-            <button
-              v-if="hasMoreComments"
-              class="reply-btn"
-              type="button"
-              :disabled="commentLoading"
-              @click="loadComments(false)"
-            >
-              {{ commentLoading ? '加载中...' : '加载更多评论' }}
-            </button>
-          </div>
-        </div>
+                <div v-if="getReplyThread(item).expanded" class="comment-list__thread">
+                  <CommentItem
+                    v-for="reply in getReplyThread(item).items"
+                    :key="reply.commentId"
+                    :comment="reply"
+                    compact
+                  />
+
+                  <button
+                    v-if="getReplyThread(item).hasMore"
+                    type="button"
+                    class="comment-list__toggle"
+                    :disabled="getReplyThread(item).loading"
+                    @click="loadReplies(item, true)"
+                  >
+                    {{ getReplyThread(item).loading ? '加载中...' : '加载更多回复' }}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                v-if="hasMoreComments"
+                type="button"
+                class="secondary-btn comment-list__more"
+                :disabled="commentLoading"
+                @click="loadComments(false)"
+              >
+                {{ commentLoading ? '加载中...' : '加载更多评论' }}
+              </button>
+            </div>
+          </section>
+        </template>
       </section>
     </main>
+
+    <TheDock />
   </div>
 </template>
 
 <style scoped>
-.detail-content {
-  display: grid;
-  gap: 12px;
+.detail-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
-.bar {
-  padding: 8px;
+.detail-body {
+  max-width: 48rem;
+}
+
+.comment-head {
   display: flex;
+  align-items: center;
   justify-content: space-between;
 }
 
-.bar .secondary-btn,
-.bar .primary-btn {
-  min-width: 88px;
-  padding: 0 14px;
-}
-
-.article {
-  overflow: hidden;
-}
-
-.hero-image {
-  width: 100%;
-  max-height: 320px;
-  object-fit: cover;
-}
-
-.main-block,
-.comment-block {
-  padding: 14px;
-}
-
-.body {
-  margin-top: 10px;
-  white-space: pre-wrap;
-}
-
-.comment-block {
-  border-top: 1px solid #f8e3ea;
+.comment-editor {
   display: grid;
-  gap: 10px;
+  gap: 0.9rem;
 }
 
-.editor {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-}
-
-.input {
-  min-height: 42px;
-  border-radius: 999px;
-  border: 1px solid var(--border-soft);
-  padding: 0 12px;
-  outline: none;
-}
-
-.send-btn {
-  min-width: 88px;
-  padding: 0 12px;
+.comment-editor button {
+  justify-self: end;
 }
 
 .comment-list {
   display: grid;
-  gap: 8px;
+  gap: 1rem;
 }
 
-.pin-title {
-  margin-bottom: 6px;
-  font-size: 0.84rem;
-}
-
-.reply-btn {
-  color: var(--brand-primary);
-  font-weight: 700;
-  font-size: 0.84rem;
-  text-align: left;
-  padding: 2px 4px;
-}
-
-.reply-thread {
-  margin-left: 22px;
-  border-left: 2px solid #f9dde6;
-  padding-left: 8px;
+.comment-list__pin {
   display: grid;
-  gap: 6px;
+  gap: 0.6rem;
 }
 
-.state-card {
-  min-height: 120px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--text-secondary);
+.comment-list__eyebrow {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
-.state-card.small {
-  min-height: 80px;
+.comment-list__group {
+  display: grid;
+  gap: 0.55rem;
 }
 
-.error {
-  color: var(--brand-danger);
+.comment-list__toggle {
+  justify-self: start;
+  color: var(--brand-primary-solid);
+  font-weight: 600;
 }
 
-@media (max-width: 700px) {
-  .editor {
-    grid-template-columns: 1fr;
+.comment-list__thread {
+  margin-left: 1.5rem;
+  display: grid;
+  gap: 0.5rem;
+  padding-left: 1rem;
+  border-left: 1px solid var(--border-soft);
+}
+
+.comment-list__more {
+  justify-self: center;
+}
+
+@media (max-width: 720px) {
+  .detail-actions {
+    flex-direction: column;
   }
 
-  .send-btn {
-    width: 100%;
+  .comment-editor button {
+    justify-self: stretch;
   }
 }
 </style>
-
-

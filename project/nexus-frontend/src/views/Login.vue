@@ -1,8 +1,12 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { loginWithPassword } from '@/api/auth'
+import ZenButton from '@/components/primitives/ZenButton.vue'
+import ZenField from '@/components/primitives/ZenField.vue'
+import ZenIcon from '@/components/primitives/ZenIcon.vue'
+import FormMessage from '@/components/system/FormMessage.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -49,89 +53,85 @@ const handleLogin = async () => {
 </script>
 
 <template>
-  <div class="auth-page">
-    <section class="auth-card surface-card">
-      <h1 class="text-large-title">登录 Nexus</h1>
-      <p class="text-secondary">连接你的内容与社交关系</p>
+  <div class="page-wrap">
+    <header class="fixed inset-x-0 top-0 z-40 px-6 py-6">
+      <div class="mx-auto flex w-full max-w-screen-2xl items-center justify-between">
+        <button type="button" class="text-2xl font-semibold tracking-tight text-on-surface" @click="router.push('/login')">
+          Nexus
+        </button>
+        <ZenIcon name="help_outline" :size="22" class="text-on-surface-variant" />
+      </div>
+    </header>
 
-      <label class="field">
-        <span>手机号</span>
-        <input v-model="phone" type="text" placeholder="请输入手机号">
-      </label>
+    <main class="flex min-h-screen items-center justify-center px-6 pb-12 pt-24">
+      <div class="w-full max-w-md">
+        <div class="paper-panel ghost-border relative overflow-hidden p-8 sm:p-10">
+          <div class="mb-10 text-center">
+            <h1 class="text-3xl font-bold tracking-tight text-on-surface">Welcome Back</h1>
+            <p class="mt-2 text-sm tracking-wide text-on-surface-variant">
+              登录后返回你刚才浏览的内容与连接关系。
+            </p>
+          </div>
 
-      <label class="field">
-        <span>密码</span>
-        <input v-model="password" type="password" placeholder="请输入密码" @keyup.enter="handleLogin">
-      </label>
+          <form class="grid gap-5" @submit.prevent="handleLogin">
+            <ZenField v-model="phone" label="手机号" placeholder="请输入手机号" />
+            <ZenField
+              v-model="password"
+              label="密码"
+              type="password"
+              placeholder="请输入密码"
+            />
 
-      <p v-if="error" class="msg error">{{ error }}</p>
-      <p v-if="success" class="msg success">{{ success }}</p>
+            <FormMessage v-if="error" tone="error" :message="error" />
+            <FormMessage v-if="success" tone="success" :message="success" />
 
-      <button class="primary-btn" type="button" :disabled="loading" @click="handleLogin">
-        {{ loading ? '登录中...' : '登录' }}
-      </button>
+            <ZenButton variant="primary" block type="submit" :disabled="loading">
+              {{ loading ? '登录中...' : '登录' }}
+            </ZenButton>
+          </form>
 
-      <p class="switcher">
-        还没有账号？
-        <button class="link-btn" type="button" @click="router.push('/register')">立即注册</button>
-      </p>
-    </section>
+          <div class="relative my-10">
+            <div class="absolute inset-0 flex items-center">
+              <div class="w-full border-t border-outline-variant/15" />
+            </div>
+            <div class="relative flex justify-center">
+              <span class="bg-white px-4 text-[11px] font-semibold uppercase tracking-[0.22em] text-outline">
+                Or connect via
+              </span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <button
+              type="button"
+              class="flex items-center justify-center gap-3 rounded-2xl bg-surface-container-low py-3.5 transition hover:bg-secondary-container"
+            >
+              <span class="text-sm font-medium text-on-surface-variant">Google</span>
+            </button>
+            <button
+              type="button"
+              class="flex items-center justify-center gap-3 rounded-2xl bg-surface-container-low py-3.5 transition hover:bg-secondary-container"
+            >
+              <span class="text-sm font-medium text-on-surface-variant">Apple</span>
+            </button>
+          </div>
+
+          <p class="mt-10 text-center text-sm text-on-surface-variant">
+            还没有账号？
+            <button
+              type="button"
+              class="font-semibold text-primary underline-offset-4 hover:underline"
+              @click="router.push('/register')"
+            >
+              立即注册
+            </button>
+          </p>
+        </div>
+
+        <div class="pointer-events-none mt-12 flex h-24 items-center justify-center overflow-hidden opacity-10 select-none">
+          <span class="whitespace-nowrap text-6xl font-extrabold tracking-tight">CURATED SPACES</span>
+        </div>
+      </div>
+    </main>
   </div>
 </template>
-
-<style scoped>
-.auth-page {
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-}
-
-.auth-card {
-  width: min(420px, 100%);
-  padding: 20px;
-  display: grid;
-  gap: 12px;
-}
-
-.field {
-  display: grid;
-  gap: 6px;
-}
-
-.field span {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-}
-
-.field input {
-  min-height: 44px;
-  border-radius: 12px;
-  border: 1px solid var(--border-soft);
-  background: #fff;
-  padding: 0 12px;
-  outline: none;
-}
-
-.msg {
-  font-size: 0.9rem;
-}
-
-.msg.error {
-  color: var(--brand-danger);
-}
-
-.msg.success {
-  color: #15803d;
-}
-
-.switcher {
-  font-size: 0.92rem;
-  color: var(--text-secondary);
-}
-
-.link-btn {
-  color: var(--brand-primary);
-  font-weight: 700;
-}
-</style>

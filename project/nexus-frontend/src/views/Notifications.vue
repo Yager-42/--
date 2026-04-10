@@ -1,10 +1,12 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { fetchNotifications, markAllAsRead, type NotificationDTO } from '@/api/notification'
 import { useAuthStore } from '@/store/auth'
 import NotificationItem from '@/components/NotificationItem.vue'
-import TheNavBar from '@/components/TheNavBar.vue'
+import StatePanel from '@/components/system/StatePanel.vue'
 import TheDock from '@/components/TheDock.vue'
+import TheNavBar from '@/components/TheNavBar.vue'
+import ZenButton from '@/components/primitives/ZenButton.vue'
 
 const authStore = useAuthStore()
 const notifications = ref<NotificationDTO[]>([])
@@ -54,82 +56,64 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-shell with-full-nav">
+  <div class="page-wrap">
     <TheNavBar />
 
-    <main class="page-content notifications-page">
-      <header class="page-header">
-        <h1 class="text-large-title">通知中心</h1>
-        <button v-if="hasUnread" class="secondary-btn read-all-btn" type="button" @click="handleReadAll">
-          全部已读
-        </button>
-      </header>
+    <main class="page-main page-main--dock">
+      <section class="grid gap-6">
+        <header class="grid gap-4 md:flex md:items-end md:justify-between">
+          <div class="grid gap-3">
+            <p class="section-kicker">Inbox</p>
+            <h1 class="section-title">Quiet updates, not loud interruptions.</h1>
+          </div>
 
-      <section v-if="error" class="state-card error">
-        {{ error }}
-      </section>
+          <ZenButton v-if="hasUnread" variant="secondary" @click="handleReadAll">
+            全部已读
+          </ZenButton>
+        </header>
 
-      <section v-else-if="loading && notifications.length === 0" class="state-card">
-        <div class="spinner"></div>
-        正在加载通知...
-      </section>
+        <StatePanel
+          v-if="error"
+          variant="request-failure"
+          :body="error"
+          primary-label="重新加载"
+          @primary="loadNotifications"
+        />
 
-      <section v-else-if="notifications.length === 0" class="state-card">
-        暂无通知
-      </section>
+        <StatePanel
+          v-else-if="loading && notifications.length === 0"
+          variant="loading"
+          title="正在整理通知"
+          body="你的通知正在按时间顺序安静地排好。"
+        />
 
-      <section v-else class="list">
-        <NotificationItem v-for="item in notifications" :key="item.notificationId" :notification="item" />
+        <StatePanel
+          v-else-if="notifications.length === 0"
+          variant="empty"
+          title="现在还没有新的提醒"
+          body="当有人关注、评论或点赞时，这里会出现新的动态。"
+        />
 
-        <button v-if="hasMore" class="secondary-btn more-btn" type="button" :disabled="loading" @click="loadNotifications">
-          {{ loading ? '加载中...' : '加载更多' }}
-        </button>
+        <section v-else class="grid gap-4">
+          <NotificationItem
+            v-for="item in notifications"
+            :key="item.notificationId"
+            :notification="item"
+          />
+
+          <ZenButton
+            v-if="hasMore"
+            variant="secondary"
+            class="justify-self-center"
+            :disabled="loading"
+            @click="loadNotifications"
+          >
+            {{ loading ? '加载中...' : '加载更多' }}
+          </ZenButton>
+        </section>
       </section>
     </main>
 
     <TheDock />
   </div>
 </template>
-
-<style scoped>
-.notifications-page {
-  display: grid;
-  gap: 14px;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.read-all-btn,
-.more-btn {
-  min-width: 110px;
-  padding: 0 14px;
-}
-
-.list {
-  display: grid;
-  gap: 10px;
-}
-
-.state-card {
-  min-height: 120px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--text-secondary);
-}
-
-.error {
-  color: var(--brand-danger);
-}
-</style>
-
-

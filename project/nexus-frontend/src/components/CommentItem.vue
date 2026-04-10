@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed } from 'vue'
 import type { CommentDisplayItem } from '@/api/interact'
 
@@ -19,68 +19,26 @@ const timeText = computed(() => {
 </script>
 
 <template>
-  <article class="comment-item" :class="{ compact }">
-    <img :src="comment.authorAvatar || 'https://via.placeholder.com/80'" class="avatar" alt="avatar">
-    <div class="main">
-      <header class="top">
-        <p>
-          <strong>{{ comment.authorName }}</strong>
-          <span v-if="comment.replyToId" class="text-secondary"> 回复</span>
-        </p>
-        <span class="time text-secondary">{{ timeText }}</span>
+  <article
+    class="grid grid-cols-[2.6rem,minmax(0,1fr)] gap-4 rounded-2xl border border-outline-variant/10 p-4"
+    :class="compact ? 'bg-surface-container-low/75' : 'bg-white/80'"
+  >
+    <img :src="comment.authorAvatar || 'https://via.placeholder.com/80'" class="h-10 w-10 rounded-full object-cover" alt="avatar">
+
+    <div class="grid gap-2">
+      <header class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <strong class="text-sm font-semibold text-on-surface">{{ comment.authorName }}</strong>
+          <span v-if="comment.replyToId" class="text-xs text-on-surface-variant">回复中</span>
+        </div>
+        <span class="text-xs text-on-surface-variant">{{ timeText }}</span>
       </header>
 
-      <p class="body">{{ comment.content }}</p>
+      <p class="whitespace-pre-wrap text-sm leading-7 text-on-surface">{{ comment.content }}</p>
 
-      <p v-if="!compact" class="meta text-secondary">
+      <p v-if="!compact" class="text-xs text-on-surface-variant">
         赞 {{ comment.likeCount }} · 回复 {{ comment.replyCount }}
       </p>
     </div>
   </article>
 </template>
-
-<style scoped>
-.comment-item {
-  display: grid;
-  grid-template-columns: 36px 1fr;
-  gap: 10px;
-  padding: 10px;
-  border-radius: 12px;
-  background: #fff;
-  border: 1px solid #f8e0e8;
-}
-
-.comment-item.compact {
-  background: #fffbfc;
-}
-
-.avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.top {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: center;
-}
-
-.time {
-  font-size: 0.76rem;
-}
-
-.body {
-  margin-top: 4px;
-  font-size: 0.92rem;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.meta {
-  margin-top: 5px;
-  font-size: 0.8rem;
-}
-</style>

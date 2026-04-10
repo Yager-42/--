@@ -1,11 +1,17 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchProfilePage, type ProfilePageViewModel } from '@/api/user'
+import { fetchProfilePage, updateMyProfile, type ProfilePageViewModel } from '@/api/user'
 import { useAuthStore } from '@/store/auth'
 import FollowButton from '@/components/FollowButton.vue'
-import TheNavBar from '@/components/TheNavBar.vue'
+import EditProfilePanel from '@/components/profile/EditProfilePanel.vue'
+import ProfileContentGrid from '@/components/profile/ProfileContentGrid.vue'
+import ProfileHero from '@/components/profile/ProfileHero.vue'
+import FormMessage from '@/components/system/FormMessage.vue'
+import StatePanel from '@/components/system/StatePanel.vue'
 import TheDock from '@/components/TheDock.vue'
+import TheNavBar from '@/components/TheNavBar.vue'
+import { useProfileViewModel } from '@/composables/useProfileViewModel'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,12 +19,24 @@ const authStore = useAuthStore()
 
 const user = ref<ProfilePageViewModel | null>(null)
 const loading = ref(false)
+const saving = ref(false)
 const error = ref('')
+const saveMessage = ref('')
+const editing = ref(false)
 
 const routeUserId = computed(() =>
   typeof route.params.userId === 'string' ? route.params.userId : null
 )
 const isMyProfile = computed(() => !routeUserId.value || routeUserId.value === authStore.userId)
+
+const {
+  draftNickname,
+  draftAvatarUrl,
+  syncDraft,
+  profileCards
+} = useProfileViewModel()
+
+const cards = computed(() => profileCards(user.value))
 
 const loadProfile = async () => {
   const targetUserId = routeUserId.value ?? authStore.userId
@@ -33,6 +51,7 @@ const loadProfile = async () => {
   try {
     const res = await fetchProfilePage(targetUserId)
     user.value = res
+    syncDraft(res)
 
     if (!routeUserId.value) {
       authStore.setUserId(res.userId)
@@ -45,74 +64,113 @@ const loadProfile = async () => {
   }
 }
 
+const saveProfile = async () => {
+  if (!isMyProfile.value) return
+
+  saving.value = true
+  error.value = ''
+  saveMessage.value = ''
+  try {
+    await updateMyProfile({
+      nickname: draftNickname.value.trim(),
+      avatarUrl: draftAvatarUrl.value.trim()
+    })
+    saveMessage.value = '资料已更新。'
+    editing.value = false
+    await loadProfile()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '资料保存失败'
+  } finally {
+    saving.value = false
+  }
+}
+
+const cancelEdit = () => {
+  syncDraft(user.value)
+  editing.value = false
+}
+
 onMounted(() => {
   void loadProfile()
 })
 
-watch(() => route.params.userId, () => {
-  void loadProfile()
-})
+watch(
+  () => route.params.userId,
+  () => {
+    editing.value = false
+    void loadProfile()
+  }
+)
 </script>
 
 <template>
-  <div class="page-shell with-full-nav">
+  <div class="page-wrap">
     <TheNavBar />
 
-    <main class="page-content profile-page">
-      <section v-if="loading" class="state-card">
-        <div class="spinner"></div>
-        正在加载资料...
-      </section>
+    <main class="page-main page-main--dock">
+      <section class="grid gap-6">
+        <StatePanel
+          v-if="loading"
+          variant="loading"
+          title="正在准备资料页"
+          body="个人资料与关系状态正在同步。"
+        />
 
-      <section v-else-if="error" class="state-card error">
-        {{ error }}
-      </section>
+        <StatePanel
+          v-else-if="error && !user"
+          variant="request-failure"
+          :body="error"
+          action-label="重试"
+          @action="loadProfile"
+        />
 
-      <section v-else-if="user" class="profile-card surface-card">
-        <button
-          v-if="user.riskStatus !== 'NORMAL'"
-          class="risk-banner"
-          type="button"
-          @click="router.push('/settings/risk')"
-        >
-          账号安全存在风险，点击查看申诉中心
-        </button>
-
-        <div class="hero">
-          <img :src="user.avatar || 'https://via.placeholder.com/160'" alt="avatar" class="avatar">
-          <h1 class="text-large-title">{{ user.nickname }}</h1>
-          <p class="text-secondary">{{ user.bio || '这个用户还没有填写个人简介。' }}</p>
-
-          <FollowButton
-            v-if="!isMyProfile"
-            :user-id="user.userId"
-            :relation-state="user.relationState"
-          />
-          <button v-else class="secondary-btn edit-btn" type="button">编辑资料（开发中）</button>
-        </div>
-
-        <div class="stats">
-          <button type="button" class="stat-item">
-            <strong>{{ user.stats.likeCount }}</strong>
-            <span>获赞</span>
-          </button>
+        <template v-else-if="user">
           <button
+            v-if="user.riskStatus !== 'NORMAL'"
+            class="profile-risk"
             type="button"
-            class="stat-item"
-            @click="router.push(`/relation/following/${user.userId}`)"
+            @click="router.push('/settings/risk')"
           >
-            <strong>{{ user.stats.followCount }}</strong>
-            <span>关注</span>
+            账号当前存在风险状态，查看限制与申诉路径
           </button>
-          <button
-            type="button"
-            class="stat-item"
-            @click="router.push(`/relation/followers/${user.userId}`)"
-          >
-            <strong>{{ user.stats.followerCount }}</strong>
-            <span>粉丝</span>
-          </button>
-        </div>
+
+          <section class="paper-panel grid gap-6 p-6 md:p-8">
+            <ProfileHero :profile="user" :is-my-profile="isMyProfile" @edit="editing = true" />
+
+            <div class="profile-actions">
+              <FollowButton
+                v-if="!isMyProfile"
+                :user-id="user.userId"
+                :relation-state="user.relationState"
+              />
+
+              <button
+                v-if="isMyProfile"
+                type="button"
+                class="secondary-btn"
+                @click="router.push(`/relation/following/${user.userId}`)"
+              >
+                查看关注
+              </button>
+            </div>
+
+            <FormMessage v-if="error && user" tone="error" :message="error" />
+            <FormMessage v-if="saveMessage" tone="success" :message="saveMessage" />
+
+            <EditProfilePanel
+              v-if="isMyProfile && editing"
+              :nickname="draftNickname"
+              :avatar-url="draftAvatarUrl"
+              :loading="saving"
+              @update:nickname="draftNickname = $event"
+              @update:avatar-url="draftAvatarUrl = $event"
+              @cancel="cancelEdit"
+              @save="saveProfile"
+            />
+
+            <ProfileContentGrid :items="cards" />
+          </section>
+        </template>
       </section>
     </main>
 
@@ -121,86 +179,21 @@ watch(() => route.params.userId, () => {
 </template>
 
 <style scoped>
-.profile-page {
-  display: grid;
-}
-
-.profile-card {
-  padding: 18px;
-  display: grid;
-  gap: 16px;
-}
-
-.risk-banner {
-  min-height: 44px;
-  border-radius: 12px;
-  border: 1px solid #facc15;
-  background: #fffbeb;
-  color: #854d0e;
-  font-weight: 600;
-  padding: 0 14px;
-  text-align: left;
-}
-
-.hero {
-  display: grid;
-  justify-items: center;
-  text-align: center;
-  gap: 8px;
-}
-
-.avatar {
-  width: 100px;
-  height: 100px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.edit-btn {
-  min-width: 132px;
-  padding: 0 14px;
-}
-
-.stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-
-.stat-item {
-  min-height: 72px;
-  border-radius: 14px;
-  border: 1px solid var(--border-soft);
-  background: var(--bg-elevated);
-  display: grid;
-  place-items: center;
-  color: var(--text-primary);
-}
-
-.stat-item strong {
-  font-size: 1.15rem;
-}
-
-.stat-item span {
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-}
-
-.state-card {
-  min-height: 120px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  display: flex;
+.profile-risk {
+  min-height: 3rem;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  color: var(--text-secondary);
+  padding: 0 1rem;
+  border-radius: 999px;
+  background: rgba(148, 80, 64, 0.14);
+  color: var(--brand-danger);
+  border: 1px solid rgba(148, 80, 64, 0.22);
 }
 
-.error {
-  color: var(--brand-danger);
+.profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 </style>
-
-

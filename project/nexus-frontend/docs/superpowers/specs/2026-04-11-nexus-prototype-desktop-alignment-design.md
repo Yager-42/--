@@ -69,6 +69,29 @@ Authoritative artifact rule:
 
 For each route, implementation should preserve current real backend behavior while using the mapped prototype HTML as the visual source of truth for desktop shell, width, hierarchy, and composition.
 
+## Route To Current Vue File Mapping
+
+This appendix translates route scope into current implementation units for planning.
+
+| Route | Current Vue File | Notes |
+|---|---|---|
+| `/` | `src/views/Home.vue` | Gallery/list route |
+| `/login` | `src/views/Login.vue` | Auth route |
+| `/register` | `src/views/Register.vue` | Auth route |
+| `/content/:postId` | `src/views/ContentDetail.vue` | Reference route |
+| `/profile` | `src/views/Profile.vue` | Self profile |
+| `/user/:userId` | `src/views/Profile.vue` | Shares current view implementation with `/profile` |
+| `/relation/:type/:userId` | `src/views/RelationList.vue` | Secondary route |
+| `/notifications` | `src/views/Notifications.vue` | Secondary route |
+| `/search` | `src/views/SearchResults.vue` | Secondary route |
+| `/publish` | `src/views/Publish.vue` | Secondary route |
+| `/settings/risk` | `src/views/RiskCenter.vue` | Secondary route |
+
+Planning note:
+
+1. `/profile` and `/user/:userId` may continue sharing one route component implementation if the resulting page can still satisfy the mapped prototype references for self and other-user variants
+2. planners should treat shared component implementation as an optimization choice, not as a reason to collapse route-level fidelity requirements
+
 ## Problem Statement
 
 The current frontend drifted away from the prototype because it is using a different visual system and layout model:

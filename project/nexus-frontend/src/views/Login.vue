@@ -1,12 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { loginWithPassword } from '@/api/auth'
-import ZenButton from '@/components/primitives/ZenButton.vue'
-import ZenField from '@/components/primitives/ZenField.vue'
+import PrototypeAuthShell from '@/components/prototype/PrototypeAuthShell.vue'
 import ZenIcon from '@/components/primitives/ZenIcon.vue'
-import FormMessage from '@/components/system/FormMessage.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -27,8 +25,10 @@ onMounted(() => {
   }
 })
 
+const canSubmit = computed(() => phone.value.trim().length > 0 && password.value.trim().length > 0)
+
 const handleLogin = async () => {
-  if (!phone.value.trim() || !password.value.trim()) {
+  if (!canSubmit.value) {
     error.value = '请输入手机号和密码'
     return
   }
@@ -53,85 +53,115 @@ const handleLogin = async () => {
 </script>
 
 <template>
-  <div class="page-wrap">
-    <header class="fixed inset-x-0 top-0 z-40 px-6 py-6">
-      <div class="mx-auto flex w-full max-w-screen-2xl items-center justify-between">
-        <button type="button" class="text-2xl font-semibold tracking-tight text-on-surface" @click="router.push('/login')">
-          Nexus
-        </button>
-        <ZenIcon name="help_outline" :size="22" class="text-on-surface-variant" />
+  <PrototypeAuthShell>
+    <div class="grid w-full max-w-content grid-cols-1 overflow-hidden rounded-[2rem] border border-prototype-line bg-prototype-surface lg:grid-cols-[1.05fr,0.95fr]">
+      <div class="relative hidden min-h-[42rem] overflow-hidden bg-prototype-bg lg:block">
+        <img
+          alt="Quiet interior"
+          class="absolute inset-0 h-full w-full object-cover opacity-85"
+          src="https://lh3.googleusercontent.com/aida-public/AB6AXuCtz72u02xqM9fCGeRe4fpcPahXntM8bjZy1WrYyKcOPKV6yW5glsoCKf5UYsZzVlXFXA_lLmnnwLw3Zei6fy4MJNTY3Wcx8TFRLHVW8WYGqI_PsTCEingPkEUx9tY-MPqOWkA_vt9F7o2BorpbhuF75AOalEZZyA0Fd7mf76KbzsZjLTzRtZ3TsMuyM-_xHU2GDYieWmqNIw2bxxEMwCHjZR2C87xyBiPke98hf-nHVb9OvXaXXpN4EINegLco1Vry245klBgDOiXS"
+        >
+        <div class="absolute inset-0 bg-gradient-to-t from-[rgba(25,24,20,0.58)] via-transparent to-transparent" />
+        <div class="absolute inset-x-0 bottom-0 p-10 text-prototype-surface">
+          <p class="mb-3 text-[11px] font-semibold uppercase tracking-[0.24em]">Nexus</p>
+          <h1 class="max-w-[12ch] font-headline text-5xl tracking-[-0.05em]">
+            Enter a quieter sanctuary.
+          </h1>
+          <p class="mt-4 max-w-md text-sm leading-7 text-white/80">
+            Resume your gallery with a calmer, prototype-aligned entry point designed for desktop reading.
+          </p>
+        </div>
       </div>
-    </header>
 
-    <main class="flex min-h-screen items-center justify-center px-6 pb-12 pt-24">
-      <div class="w-full max-w-md">
-        <div class="paper-panel ghost-border relative overflow-hidden p-8 sm:p-10">
-          <div class="mb-10 text-center">
-            <h1 class="text-3xl font-bold tracking-tight text-on-surface">Welcome Back</h1>
-            <p class="mt-2 text-sm tracking-wide text-on-surface-variant">
-              登录后返回你刚才浏览的内容与连接关系。
+      <div class="flex flex-col justify-center px-8 py-10 md:px-12 md:py-14">
+        <form class="space-y-8" @submit.prevent="handleLogin">
+          <div class="space-y-3">
+            <button
+              type="button"
+              class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted transition hover:text-prototype-ink"
+              @click="router.push('/')"
+            >
+              Nexus
+            </button>
+            <h2 class="font-headline text-4xl tracking-[-0.04em] text-prototype-ink md:text-5xl">
+              Welcome back
+            </h2>
+            <p class="text-sm leading-7 text-prototype-muted">
+              Enter your phone number and password to return to your gallery.
             </p>
           </div>
 
-          <form class="grid gap-5" @submit.prevent="handleLogin">
-            <ZenField v-model="phone" label="手机号" placeholder="请输入手机号" />
-            <ZenField
-              v-model="password"
-              label="密码"
-              type="password"
-              placeholder="请输入密码"
-            />
-
-            <FormMessage v-if="error" tone="error" :message="error" />
-            <FormMessage v-if="success" tone="success" :message="success" />
-
-            <ZenButton variant="primary" block type="submit" :disabled="loading">
-              {{ loading ? '登录中...' : '登录' }}
-            </ZenButton>
-          </form>
-
-          <div class="relative my-10">
-            <div class="absolute inset-0 flex items-center">
-              <div class="w-full border-t border-outline-variant/15" />
+          <div class="space-y-6">
+            <div class="space-y-2">
+              <label class="text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">Phone Number</label>
+              <div class="flex gap-2">
+                <div class="flex items-center gap-2 rounded-full border border-prototype-line bg-prototype-bg px-4 py-4">
+                  <span class="text-sm font-medium text-prototype-ink">+86</span>
+                  <ZenIcon name="expand_more" :size="16" class="text-prototype-muted" />
+                </div>
+                <input
+                  v-model="phone"
+                  type="tel"
+                  inputmode="tel"
+                  autocomplete="tel"
+                  class="flex-grow rounded-full border border-prototype-line bg-prototype-bg px-6 py-4 text-lg tracking-wide text-prototype-ink outline-none transition placeholder:text-prototype-muted/70 focus:border-prototype-ink"
+                  placeholder="138 0000 0000"
+                >
+              </div>
             </div>
-            <div class="relative flex justify-center">
-              <span class="bg-white px-4 text-[11px] font-semibold uppercase tracking-[0.22em] text-outline">
-                Or connect via
-              </span>
+
+            <div class="space-y-2">
+              <label class="text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">Password</label>
+              <input
+                v-model="password"
+                type="password"
+                autocomplete="current-password"
+                class="w-full rounded-full border border-prototype-line bg-prototype-bg px-6 py-4 text-lg tracking-wide text-prototype-ink outline-none transition placeholder:text-prototype-muted/70 focus:border-prototype-ink"
+                placeholder="Enter your password"
+              >
             </div>
+
+            <p
+              v-if="error"
+              class="rounded-2xl border border-error/15 bg-[rgba(158,66,44,0.08)] px-4 py-3 text-sm leading-6 text-error"
+              role="alert"
+            >
+              {{ error }}
+            </p>
+
+            <p
+              v-if="success"
+              class="rounded-2xl border border-tertiary/15 bg-[rgba(95,98,62,0.08)] px-4 py-3 text-sm leading-6 text-tertiary"
+            >
+              {{ success }}
+            </p>
+
+            <button
+              type="submit"
+              class="w-full rounded-full bg-prototype-ink py-4 text-sm font-semibold tracking-[0.12em] text-prototype-surface transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="loading || !canSubmit"
+            >
+              {{ loading ? 'Signing in...' : 'Enter Nexus' }}
+            </button>
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
-            <button
-              type="button"
-              class="flex items-center justify-center gap-3 rounded-2xl bg-surface-container-low py-3.5 transition hover:bg-secondary-container"
-            >
-              <span class="text-sm font-medium text-on-surface-variant">Google</span>
-            </button>
-            <button
-              type="button"
-              class="flex items-center justify-center gap-3 rounded-2xl bg-surface-container-low py-3.5 transition hover:bg-secondary-container"
-            >
-              <span class="text-sm font-medium text-on-surface-variant">Apple</span>
-            </button>
+          <div class="border-t border-prototype-line pt-8">
+            <p class="text-center text-sm leading-7 text-prototype-muted">
+              By continuing, you agree to our Manifesto and Terms.
+            </p>
+            <p class="mt-4 text-center text-sm text-prototype-muted">
+              No account yet?
+              <button
+                type="button"
+                class="font-semibold text-prototype-accent transition hover:text-prototype-ink"
+                @click="router.push('/register')"
+              >
+                Create one
+              </button>
+            </p>
           </div>
-
-          <p class="mt-10 text-center text-sm text-on-surface-variant">
-            还没有账号？
-            <button
-              type="button"
-              class="font-semibold text-primary underline-offset-4 hover:underline"
-              @click="router.push('/register')"
-            >
-              立即注册
-            </button>
-          </p>
-        </div>
-
-        <div class="pointer-events-none mt-12 flex h-24 items-center justify-center overflow-hidden opacity-10 select-none">
-          <span class="whitespace-nowrap text-6xl font-extrabold tracking-tight">CURATED SPACES</span>
-        </div>
+        </form>
       </div>
-    </main>
-  </div>
+    </div>
+  </PrototypeAuthShell>
 </template>

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=Public+Sans:wght@300;400;500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
 
 @tailwind base;
@@ -8,8 +8,10 @@
 @layer base {
   :root {
     color-scheme: light;
-    --font-display: 'Manrope', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-    --font-body: 'Manrope', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --font-display: 'Newsreader', 'STSong', 'Songti SC', serif;
+    --font-body: 'Public Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --font-serif: 'Newsreader', 'STSong', 'Songti SC', serif;
+    --font-sans: 'Public Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     --text-primary: #2f342d;
     --text-secondary: #5c6058;
     --text-muted: #787c73;
@@ -23,6 +25,11 @@
     --bg-surface: rgba(255, 255, 255, 0.82);
     --bg-elevated: #f4f4ee;
     --bg-overlay: rgba(255, 255, 255, 0.78);
+    --prototype-bg: #f8f6f1;
+    --prototype-surface: #fffdf8;
+    --prototype-ink: #191814;
+    --prototype-muted: #5f5b50;
+    --prototype-line: rgba(25, 24, 20, 0.12);
     --border-soft: rgba(175, 179, 170, 0.24);
     --border-strong: rgba(120, 124, 115, 0.28);
     --border-ghost: rgba(175, 179, 170, 0.16);
@@ -52,32 +59,11 @@
 
   body {
     margin: 0;
-    background:
-      radial-gradient(56rem 28rem at 100% -10%, rgba(97, 95, 80, 0.14), transparent 70%),
-      radial-gradient(44rem 20rem at 0% 0%, rgba(95, 98, 62, 0.11), transparent 72%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(250, 249, 244, 0.96)),
-      #faf9f4;
-    color: #2f342d;
-    font-family: 'Manrope', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--prototype-bg);
+    color: var(--prototype-ink);
+    font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-  }
-
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    opacity: 0.55;
-    background:
-      linear-gradient(rgba(86, 81, 75, 0.015), rgba(86, 81, 75, 0.015)),
-      repeating-linear-gradient(
-        0deg,
-        transparent 0,
-        transparent 11px,
-        rgba(92, 96, 88, 0.028) 11px,
-        rgba(92, 96, 88, 0.028) 12px
-      );
   }
 
   h1,
@@ -87,7 +73,8 @@
   h5,
   h6 {
     margin: 0;
-    font-family: 'Manrope', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-family: var(--font-display);
+    letter-spacing: -0.03em;
   }
 
   p {
@@ -122,11 +109,11 @@
   }
 
   ::selection {
-    background: rgba(97, 95, 80, 0.16);
+    background: rgba(122, 98, 69, 0.16);
   }
 
   :focus-visible {
-    outline: 2px solid rgba(97, 95, 80, 0.32);
+    outline: 2px solid rgba(122, 98, 69, 0.32);
     outline-offset: 3px;
   }
 }
@@ -199,23 +186,6 @@
 
   .text-secondary {
     @apply text-on-surface-variant;
-  }
-
-  .surface-card {
-    @apply tonal-panel;
-  }
-
-  .primary-btn,
-  .secondary-btn {
-    @apply inline-flex min-h-[46px] items-center justify-center gap-2 rounded-full px-5 text-sm font-semibold transition duration-200 disabled:cursor-not-allowed disabled:opacity-50;
-  }
-
-  .primary-btn {
-    @apply zen-gradient-cta;
-  }
-
-  .secondary-btn {
-    @apply border border-outline-variant/20 bg-white/70 text-on-surface shadow-soft hover:bg-surface-container-lowest;
   }
 
   .spinner {

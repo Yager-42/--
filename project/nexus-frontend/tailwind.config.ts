@@ -7,6 +7,12 @@ export default {
       colors: {
         background: '#faf9f4',
         surface: '#faf9f4',
+        'prototype-bg': '#f8f6f1',
+        'prototype-surface': '#fffdf8',
+        'prototype-ink': '#191814',
+        'prototype-muted': '#5f5b50',
+        'prototype-line': 'rgba(25, 24, 20, 0.12)',
+        'prototype-accent': '#7a6245',
         'surface-container-lowest': '#ffffff',
         'surface-container-low': '#f4f4ee',
         'surface-container': '#edefe7',
@@ -29,10 +35,11 @@ export default {
         'error-container': '#fe8b70'
       },
       fontFamily: {
-        sans: ['Manrope', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
-        headline: ['Manrope', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
-        body: ['Manrope', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
-        label: ['Manrope', 'PingFang SC', 'Microsoft YaHei', 'sans-serif']
+        sans: ['"Public Sans"', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
+        serif: ['"Newsreader"', 'STSong', 'Songti SC', 'serif'],
+        headline: ['"Newsreader"', 'STSong', 'Songti SC', 'serif'],
+        body: ['"Public Sans"', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
+        label: ['"Public Sans"', 'PingFang SC', 'Microsoft YaHei', 'sans-serif']
       },
       boxShadow: {
         editorial: '0 40px 60px -20px rgba(47, 52, 45, 0.05)',
@@ -50,7 +57,10 @@ export default {
         editorial: '0.32em'
       },
       maxWidth: {
-        editorial: '72rem'
+        editorial: '72rem',
+        shell: '85rem',
+        content: '70rem',
+        reading: '44rem'
       }
     }
   },

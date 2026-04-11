@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useFeedStore } from '@/store/feed'
 import type { FeedCardViewModel } from '@/api/feed'
 import PostCard from './PostCard.vue'
+import ZenButton from '@/components/primitives/ZenButton.vue'
 import StatePanel from '@/components/system/StatePanel.vue'
 
 const props = defineProps<{
@@ -79,13 +80,13 @@ const retryFetch = () => {
       <span>正在整理内容...</span>
     </div>
 
-    <button
+    <ZenButton
       v-if="!feedStore.loading && feedStore.hasMore"
-      type="button"
-      class="secondary-btn justify-self-center"
+      variant="secondary"
+      class="justify-self-center"
       @click="feedStore.fetchNextPage()"
     >
       加载更多
-    </button>
+    </ZenButton>
   </section>
 </template>

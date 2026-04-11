@@ -1,4 +1,4 @@
-﻿import axios from 'axios'
+import axios from 'axios'
 import type {
   AxiosRequestConfig,
   AxiosResponse,
@@ -6,6 +6,8 @@ import type {
   AxiosError
 } from 'axios'
 import type { ApiResponse } from '@/api/types'
+import { mockRequest, type MockRequestOptions } from '@/mocks/http'
+import { isUIMockModeEnabled } from '@/mocks/runtime'
 import { useAuthStore } from '@/store/auth'
 import router from '@/router'
 import { refreshAccessToken } from '@/api/auth'
@@ -25,6 +27,7 @@ const client = axios.create({
 
 type RetryableConfig = InternalAxiosRequestConfig & { _retry?: boolean }
 let refreshPromise: Promise<string> | null = null
+const uiMockEnabled = isUIMockModeEnabled()
 
 client.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
@@ -132,20 +135,78 @@ const request = async <T>(promise: Promise<AxiosResponse<ApiResponse<T>>>): Prom
   }
 }
 
+const normalizeParams = (params: AxiosRequestConfig['params']): Record<string, unknown> | undefined => {
+  if (!params) {
+    return undefined
+  }
+  if (params instanceof URLSearchParams) {
+    return Object.fromEntries(params.entries())
+  }
+  if (typeof params === 'object' && !Array.isArray(params)) {
+    return params as Record<string, unknown>
+  }
+  return undefined
+}
+
+const normalizeHeaders = (
+  headers: AxiosRequestConfig['headers']
+): Record<string, string | undefined> | undefined => {
+  if (!headers) {
+    return undefined
+  }
+
+  if (typeof (headers as { toJSON?: () => unknown }).toJSON === 'function') {
+    const serialized = (headers as { toJSON: () => unknown }).toJSON()
+    if (serialized && typeof serialized === 'object') {
+      return serialized as Record<string, string | undefined>
+    }
+  }
+
+  if (typeof headers === 'object') {
+    return headers as Record<string, string | undefined>
+  }
+
+  return undefined
+}
+
+const toMockOptions = (
+  config?: AxiosRequestConfig,
+  data?: unknown
+): MockRequestOptions => ({
+  params: normalizeParams(config?.params),
+  data,
+  headers: normalizeHeaders(config?.headers)
+})
+
 const http = {
   get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+    if (uiMockEnabled) {
+      return mockRequest<T>('get', url, toMockOptions(config))
+    }
     return request(client.get<ApiResponse<T>>(url, config))
   },
   post<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+    if (uiMockEnabled) {
+      return mockRequest<T>('post', url, toMockOptions(config, data))
+    }
     return request(client.post<ApiResponse<T>>(url, data, config))
   },
   put<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+    if (uiMockEnabled) {
+      return mockRequest<T>('put', url, toMockOptions(config, data))
+    }
     return request(client.put<ApiResponse<T>>(url, data, config))
   },
   patch<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+    if (uiMockEnabled) {
+      return mockRequest<T>('patch', url, toMockOptions(config, data))
+    }
     return request(client.patch<ApiResponse<T>>(url, data, config))
   },
   delete<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+    if (uiMockEnabled) {
+      return mockRequest<T>('delete', url, toMockOptions(config))
+    }
     return request(client.delete<ApiResponse<T>>(url, config))
   }
 }

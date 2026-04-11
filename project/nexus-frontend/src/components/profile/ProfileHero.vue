@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ProfilePageViewModel } from '@/api/user'
+import ZenButton from '@/components/primitives/ZenButton.vue'
 
 defineProps<{
   profile: ProfilePageViewModel
@@ -12,106 +13,56 @@ defineEmits<{
 </script>
 
 <template>
-  <section class="profile-hero">
-    <div class="profile-hero__identity">
-      <img :src="profile.avatar || 'https://via.placeholder.com/160'" alt="avatar" class="profile-hero__avatar">
-      <div class="profile-hero__copy">
-        <p class="profile-hero__eyebrow">Creator Profile</p>
-        <h1 class="text-large-title">{{ profile.nickname }}</h1>
-        <p class="text-body text-secondary">
+  <section class="grid gap-8">
+    <div class="grid gap-6 md:grid-cols-[8rem,minmax(0,1fr)] md:items-center">
+      <img
+        :src="profile.avatar || 'https://via.placeholder.com/160'"
+        alt="avatar"
+        class="h-28 w-28 rounded-full object-cover md:h-32 md:w-32"
+      >
+      <div class="grid gap-3">
+        <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">
+          Creator Profile
+        </p>
+        <h2 class="font-headline text-4xl tracking-[-0.04em] text-prototype-ink md:text-5xl">
+          {{ profile.nickname }}
+        </h2>
+        <p class="max-w-2xl text-sm leading-7 text-prototype-muted">
           {{ profile.bio || '这个用户还没有填写个人简介。' }}
         </p>
       </div>
     </div>
 
-    <div class="profile-hero__stats">
-      <div class="profile-hero__stat">
-        <strong>{{ profile.stats.likeCount }}</strong>
-        <span>获赞</span>
+    <div class="grid gap-3 md:grid-cols-3">
+      <div class="rounded-[1.5rem] border border-prototype-line bg-prototype-bg px-5 py-4">
+        <p class="font-headline text-3xl tracking-[-0.04em] text-prototype-ink">
+          {{ profile.stats.likeCount }}
+        </p>
+        <p class="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">
+          获赞
+        </p>
       </div>
-      <div class="profile-hero__stat">
-        <strong>{{ profile.stats.followCount }}</strong>
-        <span>关注</span>
+      <div class="rounded-[1.5rem] border border-prototype-line bg-prototype-bg px-5 py-4">
+        <p class="font-headline text-3xl tracking-[-0.04em] text-prototype-ink">
+          {{ profile.stats.followCount }}
+        </p>
+        <p class="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">
+          关注
+        </p>
       </div>
-      <div class="profile-hero__stat">
-        <strong>{{ profile.stats.followerCount }}</strong>
-        <span>粉丝</span>
+      <div class="rounded-[1.5rem] border border-prototype-line bg-prototype-bg px-5 py-4">
+        <p class="font-headline text-3xl tracking-[-0.04em] text-prototype-ink">
+          {{ profile.stats.followerCount }}
+        </p>
+        <p class="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">
+          粉丝
+        </p>
       </div>
     </div>
 
-    <button v-if="isMyProfile" type="button" class="secondary-btn profile-hero__edit" @click="$emit('edit')">
+    <ZenButton v-if="isMyProfile" variant="secondary" class="justify-self-start" @click="$emit('edit')">
       编辑资料
-    </button>
+    </ZenButton>
   </section>
 </template>
-
-<style scoped>
-.profile-hero {
-  display: grid;
-  gap: 1.2rem;
-}
-
-.profile-hero__identity {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 1.2rem;
-  align-items: center;
-}
-
-.profile-hero__avatar {
-  width: 7rem;
-  height: 7rem;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.profile-hero__copy {
-  display: grid;
-  gap: 0.7rem;
-}
-
-.profile-hero__eyebrow {
-  color: var(--text-muted);
-  font-size: 0.76rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.profile-hero__stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.8rem;
-}
-
-.profile-hero__stat {
-  display: grid;
-  justify-items: center;
-  gap: 0.25rem;
-  padding: 0.95rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-ghost);
-  background: rgba(255, 251, 245, 0.72);
-}
-
-.profile-hero__stat strong {
-  font-family: var(--font-display);
-  font-size: 1.2rem;
-}
-
-.profile-hero__stat span {
-  color: var(--text-secondary);
-}
-
-.profile-hero__edit {
-  justify-self: start;
-}
-
-@media (max-width: 720px) {
-  .profile-hero__identity {
-    grid-template-columns: 1fr;
-    text-align: center;
-    justify-items: center;
-  }
-}
-</style>
 

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ZenButton from '@/components/primitives/ZenButton.vue'
+
 defineProps<{
   status: 'NORMAL' | 'LIMITED' | 'BANNED'
   capabilities: string[]
@@ -11,61 +13,41 @@ defineEmits<{
 </script>
 
 <template>
-  <section class="risk-overview">
-    <p class="risk-overview__eyebrow">Risk Overview</p>
-    <h1 class="text-large-title">当前账号状态：{{ status }}</h1>
-    <p class="text-body text-secondary">
+  <section class="grid gap-5">
+    <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">
+      Risk Overview
+    </p>
+    <h2 class="font-headline text-4xl tracking-[-0.04em] text-prototype-ink md:text-5xl">
+      当前账号状态：{{ status }}
+    </h2>
+    <p class="max-w-2xl text-sm leading-7 text-prototype-muted">
       当前状态与能力限制来自后端风险接口；只有带齐处罚参数时才允许进入可提交的申诉流程。
     </p>
 
-    <div class="risk-overview__caps">
-      <span v-for="item in capabilities" :key="item" class="risk-overview__chip">{{ item }}</span>
-      <span v-if="capabilities.length === 0" class="risk-overview__chip">暂无限制说明</span>
+    <div class="flex flex-wrap gap-3">
+      <span
+        v-for="item in capabilities"
+        :key="item"
+        class="inline-flex min-h-[2.5rem] items-center rounded-full border border-prototype-line bg-prototype-bg px-4 text-sm text-prototype-muted"
+      >
+        {{ item }}
+      </span>
+      <span
+        v-if="capabilities.length === 0"
+        class="inline-flex min-h-[2.5rem] items-center rounded-full border border-prototype-line bg-prototype-bg px-4 text-sm text-prototype-muted"
+      >
+        暂无限制说明
+      </span>
     </div>
 
-    <button
-      type="button"
-      class="primary-btn risk-overview__action"
+    <ZenButton
+      variant="primary"
+      class="justify-self-start"
       :disabled="!appealReady"
       @click="$emit('appeal')"
     >
       {{ appealReady ? '进入申诉' : '当前无可申诉案件' }}
-    </button>
+    </ZenButton>
   </section>
 </template>
-
-<style scoped>
-.risk-overview {
-  display: grid;
-  gap: 1rem;
-}
-
-.risk-overview__eyebrow {
-  color: var(--text-muted);
-  font-size: 0.76rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.risk-overview__caps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-}
-
-.risk-overview__chip {
-  min-height: 2.2rem;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 0.9rem;
-  border-radius: 999px;
-  background: rgba(255, 251, 245, 0.8);
-  border: 1px solid var(--border-ghost);
-  color: var(--text-secondary);
-}
-
-.risk-overview__action {
-  justify-self: start;
-}
-</style>
 

@@ -3,9 +3,9 @@ import { computed, onMounted, ref } from 'vue'
 import { fetchNotifications, markAllAsRead, type NotificationDTO } from '@/api/notification'
 import { useAuthStore } from '@/store/auth'
 import NotificationItem from '@/components/NotificationItem.vue'
+import PrototypeContainer from '@/components/prototype/PrototypeContainer.vue'
+import PrototypeShell from '@/components/prototype/PrototypeShell.vue'
 import StatePanel from '@/components/system/StatePanel.vue'
-import TheDock from '@/components/TheDock.vue'
-import TheNavBar from '@/components/TheNavBar.vue'
 import ZenButton from '@/components/primitives/ZenButton.vue'
 
 const authStore = useAuthStore()
@@ -56,45 +56,55 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-wrap">
-    <TheNavBar />
-
-    <main class="page-main page-main--dock">
-      <section class="grid gap-6">
-        <header class="grid gap-4 md:flex md:items-end md:justify-between">
-          <div class="grid gap-3">
-            <p class="section-kicker">Inbox</p>
-            <h1 class="section-title">Quiet updates, not loud interruptions.</h1>
+  <PrototypeShell>
+    <article data-prototype-notifications class="space-y-16 pb-20">
+      <PrototypeContainer class="space-y-8 pt-12">
+        <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr),auto] lg:items-end">
+          <div class="space-y-3">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">
+              Inbox
+            </p>
+            <h1 class="font-headline text-5xl tracking-[-0.05em] text-prototype-ink md:text-6xl">
+              Quiet updates, not loud interruptions.
+            </h1>
+            <p class="max-w-2xl text-sm leading-7 text-prototype-muted">
+              只展示真实通知流，不伪造额外的摘要层或推送聚合。
+            </p>
           </div>
 
           <ZenButton v-if="hasUnread" variant="secondary" @click="handleReadAll">
             全部已读
           </ZenButton>
-        </header>
+        </div>
+      </PrototypeContainer>
 
+      <PrototypeContainer v-if="error" width="content">
         <StatePanel
-          v-if="error"
           variant="request-failure"
           :body="error"
           primary-label="重新加载"
           @primary="loadNotifications"
         />
+      </PrototypeContainer>
 
+      <PrototypeContainer v-else-if="loading && notifications.length === 0" width="content">
         <StatePanel
-          v-else-if="loading && notifications.length === 0"
           variant="loading"
           title="正在整理通知"
           body="你的通知正在按时间顺序安静地排好。"
         />
+      </PrototypeContainer>
 
+      <PrototypeContainer v-else-if="notifications.length === 0" width="content">
         <StatePanel
-          v-else-if="notifications.length === 0"
           variant="empty"
           title="现在还没有新的提醒"
           body="当有人关注、评论或点赞时，这里会出现新的动态。"
         />
+      </PrototypeContainer>
 
-        <section v-else class="grid gap-4">
+      <PrototypeContainer v-else width="content">
+        <section class="space-y-4">
           <NotificationItem
             v-for="item in notifications"
             :key="item.notificationId"
@@ -111,9 +121,7 @@ onMounted(() => {
             {{ loading ? '加载中...' : '加载更多' }}
           </ZenButton>
         </section>
-      </section>
-    </main>
-
-    <TheDock />
-  </div>
+      </PrototypeContainer>
+    </article>
+  </PrototypeShell>
 </template>

@@ -3,8 +3,9 @@ import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchFollowers, fetchFollowing, type RelationUserDTO } from '@/api/relation'
 import FollowButton from '@/components/FollowButton.vue'
+import PrototypeContainer from '@/components/prototype/PrototypeContainer.vue'
+import PrototypeShell from '@/components/prototype/PrototypeShell.vue'
 import StatePanel from '@/components/system/StatePanel.vue'
-import TheNavBar from '@/components/TheNavBar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -54,154 +55,97 @@ watch(
 </script>
 
 <template>
-  <div class="page-wrap">
-    <TheNavBar />
-
-    <main class="page-main">
-      <section class="grid gap-6">
-        <div class="relation-header">
-          <p class="relation-header__eyebrow">Connections</p>
-          <h1 class="text-large-title">{{ type === 'following' ? 'Following' : 'Followers' }}</h1>
+  <PrototypeShell>
+    <article data-prototype-relation class="space-y-16 pb-20">
+      <PrototypeContainer class="space-y-8 pt-12">
+        <div class="space-y-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">
+            Connections
+          </p>
+          <h1 class="font-headline text-5xl tracking-[-0.05em] text-prototype-ink md:text-6xl">
+            {{ type === 'following' ? 'Following' : 'Followers' }}
+          </h1>
+          <p class="max-w-2xl text-sm leading-7 text-prototype-muted">
+            关系链只展示真实关注与粉丝数据，不添加额外推荐层。
+          </p>
         </div>
 
-        <div class="relation-tabs">
+        <div class="inline-flex w-fit gap-1 rounded-full border border-prototype-line bg-prototype-surface p-1">
           <button
-            class="relation-tabs__item"
-            :class="{ 'relation-tabs__item--active': type === 'following' }"
+            class="min-h-[3rem] rounded-full px-5 text-sm font-semibold tracking-[0.08em] transition"
+            :class="type === 'following'
+              ? 'bg-prototype-ink text-prototype-surface'
+              : 'text-prototype-muted hover:text-prototype-ink'"
             type="button"
             @click="switchTab('following')"
           >
             关注
           </button>
           <button
-            class="relation-tabs__item"
-            :class="{ 'relation-tabs__item--active': type === 'followers' }"
+            class="min-h-[3rem] rounded-full px-5 text-sm font-semibold tracking-[0.08em] transition"
+            :class="type === 'followers'
+              ? 'bg-prototype-ink text-prototype-surface'
+              : 'text-prototype-muted hover:text-prototype-ink'"
             type="button"
             @click="switchTab('followers')"
           >
             粉丝
           </button>
         </div>
+      </PrototypeContainer>
 
+      <PrototypeContainer v-if="loading" width="content">
         <StatePanel
-          v-if="loading"
           variant="loading"
           title="正在整理连接关系"
           body="人物列表正在按顺序准备好。"
         />
+      </PrototypeContainer>
 
+      <PrototypeContainer v-else-if="error" width="content">
         <StatePanel
-          v-else-if="error"
           variant="request-failure"
           :body="error"
           primary-label="重试"
           @primary="loadData"
         />
+      </PrototypeContainer>
 
+      <PrototypeContainer v-else-if="items.length === 0" width="content">
         <StatePanel
-          v-else-if="items.length === 0"
           variant="empty"
           title="这里还没有可展示的人"
           body="等你开始关注更多创作者，这里会自然形成新的联系网络。"
         />
+      </PrototypeContainer>
 
-        <section v-else class="relation-list">
+      <PrototypeContainer v-else width="content">
+        <section class="space-y-4">
           <article
             v-for="item in items"
             :key="item.userId"
-            class="relation-list__row"
+            class="grid cursor-pointer gap-4 rounded-[1.75rem] border border-prototype-line bg-prototype-surface p-5 transition hover:-translate-y-0.5 md:grid-cols-[4rem,minmax(0,1fr),auto] md:items-center"
             @click="router.push(`/user/${item.userId}`)"
           >
-            <img :src="item.avatar || 'https://via.placeholder.com/80'" class="relation-list__avatar" alt="avatar">
-            <div class="relation-list__main">
-              <p class="relation-list__name">{{ item.nickname }}</p>
-              <p class="relation-list__bio">{{ item.bio || 'TA 还没有填写简介。' }}</p>
+            <img
+              :src="item.avatar || 'https://via.placeholder.com/80'"
+              class="h-16 w-16 rounded-full object-cover"
+              alt="avatar"
+            >
+            <div class="min-w-0 space-y-2">
+              <p class="font-headline text-2xl tracking-[-0.03em] text-prototype-ink">
+                {{ item.nickname }}
+              </p>
+              <p class="text-sm leading-7 text-prototype-muted">
+                {{ item.bio || 'TA 还没有填写简介。' }}
+              </p>
             </div>
-            <div class="relation-list__ops" @click.stop>
+            <div @click.stop>
               <FollowButton :user-id="item.userId" :relation-state="item.relationState" />
             </div>
           </article>
         </section>
-      </section>
-    </main>
-  </div>
+      </PrototypeContainer>
+    </article>
+  </PrototypeShell>
 </template>
-
-<style scoped>
-.relation-header {
-  display: grid;
-  gap: 0.7rem;
-}
-
-.relation-header__eyebrow {
-  color: var(--text-muted);
-  font-size: 0.76rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.relation-tabs {
-  width: fit-content;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(6rem, 1fr));
-  gap: 0.4rem;
-  padding: 0.35rem;
-  border-radius: 999px;
-  background: rgba(255, 251, 244, 0.84);
-  border: 1px solid var(--border-ghost);
-}
-
-.relation-tabs__item {
-  min-height: 2.5rem;
-  border-radius: 999px;
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-.relation-tabs__item--active {
-  background: var(--brand-primary);
-  color: var(--text-on-dark);
-}
-
-.relation-list {
-  display: grid;
-  gap: 0.8rem;
-}
-
-.relation-list__row {
-  min-height: 5.5rem;
-  display: grid;
-  grid-template-columns: 3.25rem minmax(0, 1fr) auto;
-  gap: 1rem;
-  align-items: center;
-  padding: 1rem;
-  border-radius: var(--radius-panel);
-  border: 1px solid var(--border-ghost);
-  background: rgba(255, 251, 245, 0.76);
-  cursor: pointer;
-}
-
-.relation-list__avatar {
-  width: 3.25rem;
-  height: 3.25rem;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.relation-list__main {
-  min-width: 0;
-  display: grid;
-  gap: 0.3rem;
-}
-
-.relation-list__name {
-  font-family: var(--font-display);
-  font-size: 1.05rem;
-  font-weight: 700;
-}
-
-.relation-list__bio {
-  color: var(--text-secondary);
-  line-height: 1.6;
-}
-</style>

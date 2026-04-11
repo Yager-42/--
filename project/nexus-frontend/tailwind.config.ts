@@ -42,22 +42,14 @@ export default {
         label: ['"Public Sans"', 'PingFang SC', 'Microsoft YaHei', 'sans-serif']
       },
       boxShadow: {
-        editorial: '0 40px 60px -20px rgba(47, 52, 45, 0.05)',
         float: '0 28px 56px -24px rgba(47, 52, 45, 0.12)',
         soft: '0 18px 40px -24px rgba(47, 52, 45, 0.12)'
-      },
-      backdropBlur: {
-        editorial: '24px'
       },
       borderRadius: {
         '4xl': '2rem',
         '5xl': '2.5rem'
       },
-      letterSpacing: {
-        editorial: '0.32em'
-      },
       maxWidth: {
-        editorial: '72rem',
         shell: '85rem',
         content: '70rem',
         reading: '44rem'

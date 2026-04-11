@@ -2,11 +2,13 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchUserRiskStatus, submitAppeal } from '@/api/risk'
+import PrototypeContainer from '@/components/prototype/PrototypeContainer.vue'
+import PrototypeShell from '@/components/prototype/PrototypeShell.vue'
+import ZenButton from '@/components/primitives/ZenButton.vue'
 import AppealFormPanel from '@/components/risk/AppealFormPanel.vue'
 import RiskOverviewCard from '@/components/risk/RiskOverviewCard.vue'
 import FormMessage from '@/components/system/FormMessage.vue'
 import StatePanel from '@/components/system/StatePanel.vue'
-import TheNavBar from '@/components/TheNavBar.vue'
 import { useRiskRouteMode } from '@/composables/useRiskRouteMode'
 
 const router = useRouter()
@@ -66,11 +68,23 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-wrap">
-    <TheNavBar />
+  <PrototypeShell>
+    <article data-prototype-risk class="space-y-16 pb-20">
+      <PrototypeContainer class="space-y-8 pt-12">
+        <div class="space-y-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">
+            Risk Center
+          </p>
+          <h1 class="max-w-[11ch] font-headline text-5xl tracking-[-0.05em] text-prototype-ink md:text-6xl">
+            Review account status and appeal options.
+          </h1>
+          <p class="max-w-2xl text-sm leading-7 text-prototype-muted">
+            当前状态与申诉入口全部来自后端风险接口；这里仅重构桌面层级，不改动原有逻辑。
+          </p>
+        </div>
+      </PrototypeContainer>
 
-    <main class="page-main">
-      <section class="paper-panel grid gap-6 p-6 md:p-8">
+      <PrototypeContainer width="content" class="space-y-6">
         <StatePanel
           v-if="pageLoading"
           variant="loading"
@@ -87,12 +101,14 @@ onMounted(() => {
         />
 
         <template v-else>
-          <RiskOverviewCard
-            :status="status"
-            :capabilities="capabilities"
-            :appeal-ready="appealReady"
-            @appeal="showAppeal = true"
-          />
+          <section class="rounded-[2rem] border border-prototype-line bg-prototype-surface p-6 md:p-8">
+            <RiskOverviewCard
+              :status="status"
+              :capabilities="capabilities"
+              :appeal-ready="appealReady"
+              @appeal="showAppeal = true"
+            />
+          </section>
 
           <FormMessage v-if="success" tone="success" :message="success" />
           <FormMessage v-if="error && showAppeal" tone="error" :message="error" />
@@ -105,37 +121,33 @@ onMounted(() => {
             compact
           />
 
-          <AppealFormPanel
+          <section
             v-else-if="showAppeal"
-            :decision-id="decisionId"
-            :punish-id="punishId"
-            :content="appealContent"
-            :loading="loading"
-            :unavailable="appealUnavailable"
-            @update:content="appealContent = $event"
-            @submit="handleSubmit"
-          />
+            class="rounded-[2rem] border border-prototype-line bg-prototype-surface p-6 md:p-8"
+          >
+            <AppealFormPanel
+              :decision-id="decisionId"
+              :punish-id="punishId"
+              :content="appealContent"
+              :loading="loading"
+              :unavailable="appealUnavailable"
+              @update:content="appealContent = $event"
+              @submit="handleSubmit"
+            />
+          </section>
 
-          <div class="risk-actions">
-            <button type="button" class="secondary-btn" @click="router.back()">返回</button>
-            <button
+          <div class="flex flex-wrap gap-3">
+            <ZenButton variant="secondary" @click="router.back()">返回</ZenButton>
+            <ZenButton
               v-if="showAppeal"
-              type="button"
-              class="secondary-btn"
+              variant="secondary"
               @click="showAppeal = false"
             >
               返回概览
-            </button>
+            </ZenButton>
           </div>
         </template>
-      </section>
-    </main>
-  </div>
+      </PrototypeContainer>
+    </article>
+  </PrototypeShell>
 </template>
-
-<style scoped>
-.risk-actions {
-  display: flex;
-  gap: 0.75rem;
-}
-</style>

@@ -60,13 +60,13 @@ const stateVariant = computed(() => {
   <section
     v-if="open"
     :id="panelId"
-    class="tonal-panel grid gap-3 p-3"
+    class="grid gap-3 rounded-[1.75rem] border border-prototype-line bg-prototype-surface p-3 shadow-soft"
     role="listbox"
     aria-label="搜索建议"
   >
     <header class="grid gap-1 px-1 pt-1">
       <p class="section-kicker">Search Notes</p>
-      <h3 class="text-base font-semibold tracking-tight text-on-surface">{{ panelTitle }}</h3>
+      <h3 class="text-base font-semibold tracking-tight text-prototype-ink">{{ panelTitle }}</h3>
     </header>
 
     <div v-if="loading || hasError || (!hasItems && hasQuery)">
@@ -85,11 +85,11 @@ const stateVariant = computed(() => {
       <li v-for="item in items" :key="item">
         <button
           type="button"
-          class="grid min-h-[52px] w-full grid-cols-[18px,minmax(0,1fr)] items-center gap-3 rounded-2xl px-4 text-left text-sm text-on-surface transition hover:bg-surface-container-low"
+          class="grid min-h-[52px] w-full grid-cols-[18px,minmax(0,1fr)] items-center gap-3 rounded-2xl px-4 text-left text-sm text-prototype-ink transition hover:bg-prototype-bg"
           @mousedown.prevent
           @click="emit('select', item)"
         >
-          <ZenIcon name="search" :size="18" class="text-on-surface-variant" />
+          <ZenIcon name="search" :size="18" class="text-prototype-muted" />
           <span class="truncate">{{ item }}</span>
         </button>
       </li>

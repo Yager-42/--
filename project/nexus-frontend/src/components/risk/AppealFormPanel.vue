@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ZenButton from '@/components/primitives/ZenButton.vue'
+
 defineProps<{
   decisionId: string
   punishId: string
@@ -14,65 +16,30 @@ defineEmits<{
 </script>
 
 <template>
-  <section class="appeal-panel">
-    <div class="appeal-panel__meta">
-      <p><span>事件编号：</span><strong>{{ decisionId || '未提供' }}</strong></p>
-      <p><span>处罚编号：</span><strong>{{ punishId || '未提供' }}</strong></p>
+  <section class="grid gap-6 rounded-[1.75rem] border border-prototype-line bg-prototype-bg p-6">
+    <div class="grid gap-3 rounded-[1.5rem] border border-prototype-line bg-prototype-surface p-5 text-sm leading-7 text-prototype-muted">
+      <p><span>事件编号：</span><strong class="text-prototype-ink">{{ decisionId || '未提供' }}</strong></p>
+      <p><span>处罚编号：</span><strong class="text-prototype-ink">{{ punishId || '未提供' }}</strong></p>
     </div>
 
-    <label class="appeal-panel__field">
-      <span>申诉理由</span>
+    <label class="grid gap-2">
+      <span class="text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">申诉理由</span>
       <textarea
         :value="content"
         :disabled="unavailable"
         placeholder="请完整描述你希望申诉的事实与依据。"
+        class="min-h-[16rem] rounded-[1.75rem] border border-prototype-line bg-prototype-surface px-5 py-4 text-prototype-ink outline-none transition placeholder:text-prototype-muted/70 focus:border-prototype-ink disabled:cursor-not-allowed disabled:opacity-60"
         @input="$emit('update:content', ($event.target as HTMLTextAreaElement).value)"
       />
     </label>
 
-    <button
-      type="button"
-      class="primary-btn appeal-panel__submit"
+    <ZenButton
+      variant="primary"
+      class="justify-self-end"
       :disabled="loading || unavailable || !content.trim()"
       @click="$emit('submit')"
     >
       {{ loading ? '提交中...' : '提交申诉' }}
-    </button>
+    </ZenButton>
   </section>
 </template>
-
-<style scoped>
-.appeal-panel {
-  display: grid;
-  gap: 1rem;
-}
-
-.appeal-panel__meta {
-  display: grid;
-  gap: 0.35rem;
-  padding: 1rem;
-  border-radius: var(--radius-md);
-  background: rgba(255, 251, 245, 0.72);
-  border: 1px solid var(--border-ghost);
-  color: var(--text-secondary);
-}
-
-.appeal-panel__field {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.appeal-panel__field span {
-  color: var(--text-secondary);
-}
-
-.appeal-panel__submit {
-  justify-self: end;
-}
-
-@media (max-width: 640px) {
-  .appeal-panel__submit {
-    justify-self: stretch;
-  }
-}
-</style>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ZenButton from '@/components/primitives/ZenButton.vue'
+
 defineProps<{
   title: string
   content: string
@@ -16,119 +18,57 @@ defineEmits<{
 </script>
 
 <template>
-  <section class="publish-workspace">
-    <label class="publish-workspace__field">
-      <span>标题</span>
+  <section class="grid gap-6">
+    <label class="grid gap-2">
+      <span class="text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">标题</span>
       <input
         :value="title"
         type="text"
         placeholder="给这次发布写一个标题（可选）"
+        class="rounded-full border border-prototype-line bg-prototype-bg px-5 py-4 text-prototype-ink outline-none transition placeholder:text-prototype-muted/70 focus:border-prototype-ink"
         @input="$emit('update:title', ($event.target as HTMLInputElement).value)"
       >
     </label>
 
-    <label class="publish-workspace__field">
-      <span>正文</span>
+    <label class="grid gap-2">
+      <span class="text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">正文</span>
       <textarea
         :value="content"
         placeholder="分享你此刻真正想表达的内容。"
+        class="min-h-[18rem] rounded-[1.75rem] border border-prototype-line bg-prototype-bg px-5 py-4 text-prototype-ink outline-none transition placeholder:text-prototype-muted/70 focus:border-prototype-ink"
         @input="$emit('update:content', ($event.target as HTMLTextAreaElement).value)"
       />
     </label>
 
-    <div class="publish-workspace__media">
-      <article v-for="(img, index) in previews" :key="img" class="publish-workspace__preview">
-        <img :src="img" alt="preview">
-        <button type="button" class="publish-workspace__remove" @click="$emit('remove-media', index)">
+    <div class="grid gap-3 md:grid-cols-3">
+      <article
+        v-for="(img, index) in previews"
+        :key="img"
+        class="relative aspect-square overflow-hidden rounded-[1.5rem] border border-prototype-line bg-prototype-surface"
+      >
+        <img :src="img" alt="preview" class="h-full w-full object-cover">
+        <button
+          type="button"
+          class="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-black/55 text-base text-white"
+          @click="$emit('remove-media', index)"
+        >
           ×
         </button>
       </article>
 
-      <label v-if="previews.length < 9" class="publish-workspace__upload">
+      <label
+        v-if="previews.length < 9"
+        class="grid aspect-square cursor-pointer place-items-center gap-1 rounded-[1.5rem] border border-dashed border-prototype-line bg-prototype-bg text-prototype-muted"
+      >
         <input hidden type="file" accept="image/*" @change="$emit('pick-file', $event)">
-        <span>+</span>
-        <small>添加图片</small>
+        <span class="text-3xl leading-none">+</span>
+        <small class="text-xs font-semibold uppercase tracking-[0.18em]">添加图片</small>
       </label>
     </div>
 
-    <button type="button" class="primary-btn publish-workspace__submit" :disabled="loading" @click="$emit('publish')">
+    <ZenButton variant="primary" class="justify-self-end" :disabled="loading" @click="$emit('publish')">
       {{ loading ? '提交中...' : '发布内容' }}
-    </button>
+    </ZenButton>
   </section>
 </template>
-
-<style scoped>
-.publish-workspace {
-  display: grid;
-  gap: 1rem;
-}
-
-.publish-workspace__field {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.publish-workspace__field span {
-  color: var(--text-secondary);
-}
-
-.publish-workspace__media {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.8rem;
-}
-
-.publish-workspace__preview,
-.publish-workspace__upload {
-  position: relative;
-  aspect-ratio: 1;
-  overflow: hidden;
-  border-radius: var(--radius-md);
-}
-
-.publish-workspace__preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.publish-workspace__remove {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.56);
-  color: #fff;
-  font-size: 1.1rem;
-}
-
-.publish-workspace__upload {
-  display: grid;
-  place-items: center;
-  border: 1px dashed var(--border-strong);
-  background: rgba(255, 251, 245, 0.72);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.publish-workspace__upload span {
-  font-size: 1.5rem;
-}
-
-.publish-workspace__submit {
-  justify-self: end;
-}
-
-@media (max-width: 640px) {
-  .publish-workspace__media {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .publish-workspace__submit {
-    justify-self: stretch;
-  }
-}
-</style>
 

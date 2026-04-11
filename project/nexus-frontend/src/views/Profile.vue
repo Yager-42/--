@@ -7,10 +7,11 @@ import FollowButton from '@/components/FollowButton.vue'
 import EditProfilePanel from '@/components/profile/EditProfilePanel.vue'
 import ProfileContentGrid from '@/components/profile/ProfileContentGrid.vue'
 import ProfileHero from '@/components/profile/ProfileHero.vue'
+import PrototypeContainer from '@/components/prototype/PrototypeContainer.vue'
+import PrototypeShell from '@/components/prototype/PrototypeShell.vue'
+import ZenButton from '@/components/primitives/ZenButton.vue'
 import FormMessage from '@/components/system/FormMessage.vue'
 import StatePanel from '@/components/system/StatePanel.vue'
-import TheDock from '@/components/TheDock.vue'
-import TheNavBar from '@/components/TheNavBar.vue'
 import { useProfileViewModel } from '@/composables/useProfileViewModel'
 
 const route = useRoute()
@@ -37,6 +38,17 @@ const {
 } = useProfileViewModel()
 
 const cards = computed(() => profileCards(user.value))
+const profileHeading = computed(() => {
+  if (user.value) {
+    return isMyProfile.value ? 'Your profile and archive.' : `${user.value.nickname}'s profile`
+  }
+  return isMyProfile.value ? 'Your profile and archive.' : 'Creator profile'
+})
+const profileDescription = computed(() =>
+  isMyProfile.value
+    ? '保留真实资料、关注关系与编辑流程，并让个人主页回到更克制的桌面阅读层级。'
+    : '展示真实资料与关系状态，不额外引入自我编辑壳层或多余运营模块。'
+)
 
 const loadProfile = async () => {
   const targetUserId = routeUserId.value ?? authStore.userId
@@ -104,96 +116,85 @@ watch(
 </script>
 
 <template>
-  <div class="page-wrap">
-    <TheNavBar />
+  <PrototypeShell>
+    <article data-prototype-profile class="space-y-16 pb-20">
+      <PrototypeContainer class="space-y-8 pt-12">
+        <div class="space-y-3">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">
+            Profile
+          </p>
+          <h1 class="max-w-[10ch] font-headline text-5xl tracking-[-0.05em] text-prototype-ink md:text-6xl">
+            {{ profileHeading }}
+          </h1>
+          <p class="max-w-2xl text-sm leading-7 text-prototype-muted">
+            {{ profileDescription }}
+          </p>
+        </div>
+      </PrototypeContainer>
 
-    <main class="page-main page-main--dock">
-      <section class="grid gap-6">
+      <PrototypeContainer v-if="loading" width="content">
         <StatePanel
-          v-if="loading"
           variant="loading"
           title="正在准备资料页"
           body="个人资料与关系状态正在同步。"
         />
+      </PrototypeContainer>
 
+      <PrototypeContainer v-else-if="error && !user" width="content">
         <StatePanel
-          v-else-if="error && !user"
           variant="request-failure"
           :body="error"
           action-label="重试"
           @action="loadProfile"
         />
+      </PrototypeContainer>
 
-        <template v-else-if="user">
-          <button
-            v-if="user.riskStatus !== 'NORMAL'"
-            class="profile-risk"
-            type="button"
-            @click="router.push('/settings/risk')"
-          >
-            账号当前存在风险状态，查看限制与申诉路径
-          </button>
+      <PrototypeContainer v-else-if="user" width="content" class="space-y-6">
+        <button
+          v-if="user.riskStatus !== 'NORMAL'"
+          class="inline-flex min-h-[3rem] items-center justify-center rounded-full border border-error/20 bg-[rgba(158,66,44,0.08)] px-5 text-sm font-semibold text-error transition hover:border-error/35"
+          type="button"
+          @click="router.push('/settings/risk')"
+        >
+          账号当前存在风险状态，查看限制与申诉路径
+        </button>
 
-          <section class="paper-panel grid gap-6 p-6 md:p-8">
-            <ProfileHero :profile="user" :is-my-profile="isMyProfile" @edit="editing = true" />
+        <section class="space-y-6 rounded-[2rem] border border-prototype-line bg-prototype-surface p-6 md:p-8">
+          <ProfileHero :profile="user" :is-my-profile="isMyProfile" @edit="editing = true" />
 
-            <div class="profile-actions">
-              <FollowButton
-                v-if="!isMyProfile"
-                :user-id="user.userId"
-                :relation-state="user.relationState"
-              />
-
-              <button
-                v-if="isMyProfile"
-                type="button"
-                class="secondary-btn"
-                @click="router.push(`/relation/following/${user.userId}`)"
-              >
-                查看关注
-              </button>
-            </div>
-
-            <FormMessage v-if="error && user" tone="error" :message="error" />
-            <FormMessage v-if="saveMessage" tone="success" :message="saveMessage" />
-
-            <EditProfilePanel
-              v-if="isMyProfile && editing"
-              :nickname="draftNickname"
-              :avatar-url="draftAvatarUrl"
-              :loading="saving"
-              @update:nickname="draftNickname = $event"
-              @update:avatar-url="draftAvatarUrl = $event"
-              @cancel="cancelEdit"
-              @save="saveProfile"
+          <div class="flex flex-wrap items-center gap-3">
+            <FollowButton
+              v-if="!isMyProfile"
+              :user-id="user.userId"
+              :relation-state="user.relationState"
             />
 
-            <ProfileContentGrid :items="cards" />
-          </section>
-        </template>
-      </section>
-    </main>
+            <ZenButton
+              v-if="isMyProfile"
+              variant="secondary"
+              @click="router.push(`/relation/following/${user.userId}`)"
+            >
+              查看关注
+            </ZenButton>
+          </div>
 
-    <TheDock />
-  </div>
+          <FormMessage v-if="error && user" tone="error" :message="error" />
+          <FormMessage v-if="saveMessage" tone="success" :message="saveMessage" />
+
+          <EditProfilePanel
+            v-if="isMyProfile && editing"
+            :nickname="draftNickname"
+            :avatar-url="draftAvatarUrl"
+            :loading="saving"
+            @update:nickname="draftNickname = $event"
+            @update:avatar-url="draftAvatarUrl = $event"
+            @cancel="cancelEdit"
+            @save="saveProfile"
+          />
+
+          <ProfileContentGrid :items="cards" />
+        </section>
+      </PrototypeContainer>
+    </article>
+  </PrototypeShell>
 </template>
-
-<style scoped>
-.profile-risk {
-  min-height: 3rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 1rem;
-  border-radius: 999px;
-  background: rgba(148, 80, 64, 0.14);
-  color: var(--brand-danger);
-  border: 1px solid rgba(148, 80, 64, 0.22);
-}
-
-.profile-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-</style>

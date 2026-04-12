@@ -27,10 +27,39 @@ export interface RegisterResponseDTO {
   userId: string;
 }
 
+interface RawAuthMeResponseDTO {
+  userId: number | string;
+  phone: string;
+  status: string;
+  nickname: string;
+  avatarUrl?: string;
+}
+
+export interface AuthMeResponseDTO {
+  userId: string;
+  phone: string;
+  status: string;
+  nickname: string;
+  avatarUrl: string;
+}
+
+export interface ChangePasswordRequestDTO {
+  oldPassword: string;
+  newPassword: string;
+}
+
 const normalizeAuthTokenResponse = (data: RawAuthTokenResponseDTO): AuthTokenResponseDTO => ({
   token: data.token,
   refreshToken: data.refreshToken,
   userId: String(data.userId)
+});
+
+const normalizeAuthMeResponse = (data: RawAuthMeResponseDTO): AuthMeResponseDTO => ({
+  userId: String(data.userId),
+  phone: data.phone,
+  status: data.status,
+  nickname: data.nickname,
+  avatarUrl: data.avatarUrl || ''
 });
 
 export const loginWithPassword = async (
@@ -64,4 +93,17 @@ export const refreshAccessToken = async (
 ): Promise<AuthTokenResponseDTO> => {
   const response = await http.post<RawAuthTokenResponseDTO>('/auth/refresh', data);
   return normalizeAuthTokenResponse(response);
+};
+
+export const fetchAuthMe = async (): Promise<AuthMeResponseDTO> => {
+  const response = await http.get<RawAuthMeResponseDTO>('/auth/me');
+  return normalizeAuthMeResponse(response);
+};
+
+export const logout = async (): Promise<void> => {
+  await http.post<null>('/auth/logout');
+};
+
+export const changePassword = async (data: ChangePasswordRequestDTO): Promise<void> => {
+  await http.post<null>('/auth/password/change', data);
 };

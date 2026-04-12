@@ -2,12 +2,15 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { fetchTimeline, type FeedCardViewModel } from '@/api/feed'
 
+export type FeedViewMode = 'FOLLOWING' | 'RECOMMENDED' | 'TRENDING'
+
 export const useFeedStore = defineStore('feed', () => {
   const posts = ref<FeedCardViewModel[]>([])
   const nextCursor = ref<string | null>(null)
   const loading = ref(false)
   const hasMore = ref(true)
   const error = ref<string | null>(null)
+  const activeFeed = ref<FeedViewMode>('FOLLOWING')
 
   const mergePosts = (incoming: FeedCardViewModel[]) => {
     const seen = new Set(posts.value.map((post) => post.postId))
@@ -29,7 +32,8 @@ export const useFeedStore = defineStore('feed', () => {
     try {
       const res = await fetchTimeline({
         cursor: nextCursor.value || undefined,
-        limit: 10
+        limit: 10,
+        feedType: activeFeed.value
       })
 
       mergePosts(res.items)
@@ -54,12 +58,20 @@ export const useFeedStore = defineStore('feed', () => {
     await fetchNextPage()
   }
 
+  const setFeed = async (nextFeed: FeedViewMode) => {
+    if (activeFeed.value === nextFeed) return
+    activeFeed.value = nextFeed
+    await refresh()
+  }
+
   return {
     posts,
     loading,
     hasMore,
     error,
+    activeFeed,
     fetchNextPage,
-    refresh
+    refresh,
+    setFeed
   }
 })

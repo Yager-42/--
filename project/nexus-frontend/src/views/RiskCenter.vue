@@ -23,6 +23,20 @@ const pageLoading = ref(false)
 const error = ref('')
 const success = ref('')
 const showAppeal = ref(false)
+const previousAppeals = [
+  {
+    id: 'ZE-9012',
+    status: 'Resolved',
+    summary: 'A prior visibility review was restored after manual verification.',
+    date: '2026-02-08'
+  },
+  {
+    id: 'ZE-8841',
+    status: 'Denied',
+    summary: 'A previous dispute was closed because supporting context was incomplete.',
+    date: '2025-11-24'
+  }
+]
 
 const loadRiskStatus = async () => {
   pageLoading.value = true
@@ -84,7 +98,7 @@ onMounted(() => {
         </div>
       </PrototypeContainer>
 
-      <PrototypeContainer width="content" class="space-y-6">
+      <PrototypeContainer width="content" class="space-y-8">
         <StatePanel
           v-if="pageLoading"
           variant="loading"
@@ -102,6 +116,12 @@ onMounted(() => {
 
         <template v-else>
           <section class="rounded-[2rem] border border-prototype-line bg-prototype-surface p-6 md:p-8">
+            <div class="mb-6 rounded-[1.5rem] bg-prototype-bg px-5 py-5">
+              <p class="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-prototype-muted">Current Tier</p>
+              <p class="text-2xl font-semibold tracking-[-0.03em] text-prototype-ink">
+                {{ status }}
+              </p>
+            </div>
             <RiskOverviewCard
               :status="status"
               :capabilities="capabilities"
@@ -125,6 +145,9 @@ onMounted(() => {
             v-else-if="showAppeal"
             class="rounded-[2rem] border border-prototype-line bg-prototype-surface p-6 md:p-8"
           >
+            <div class="mb-6">
+              <h3 class="text-xl font-bold text-prototype-ink">Submit an Appeal</h3>
+            </div>
             <AppealFormPanel
               :decision-id="decisionId"
               :punish-id="punishId"
@@ -134,6 +157,39 @@ onMounted(() => {
               @update:content="appealContent = $event"
               @submit="handleSubmit"
             />
+          </section>
+
+          <section class="rounded-[2rem] border border-prototype-line bg-prototype-surface p-6 md:p-8">
+            <div class="mb-6">
+              <h3 class="text-xl font-bold text-prototype-ink">Previous Appeals</h3>
+            </div>
+            <div class="space-y-4">
+              <article
+                v-for="item in previousAppeals"
+                :key="item.id"
+                class="rounded-[1.5rem] bg-prototype-bg px-5 py-5"
+              >
+                <div class="flex items-center justify-between gap-4">
+                  <span class="text-xs font-bold uppercase tracking-[0.18em] text-prototype-muted">
+                    Case #{{ item.id }}
+                  </span>
+                  <span
+                    class="rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em]"
+                    :class="item.status === 'Resolved'
+                      ? 'bg-secondary-container text-prototype-ink'
+                      : 'bg-prototype-surface text-prototype-muted'"
+                  >
+                    {{ item.status }}
+                  </span>
+                </div>
+                <p class="mt-3 text-sm leading-7 text-prototype-muted">
+                  {{ item.summary }}
+                </p>
+                <p class="mt-3 text-xs uppercase tracking-[0.18em] text-prototype-muted">
+                  {{ item.date }}
+                </p>
+              </article>
+            </div>
           </section>
 
           <div class="flex flex-wrap gap-3">

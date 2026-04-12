@@ -7,6 +7,10 @@ const props = defineProps<{
   notification: NotificationDTO
 }>()
 
+const emit = defineEmits<{
+  (event: 'read', notificationId: string): void
+}>()
+
 const router = useRouter()
 
 const typeText = computed(() => {
@@ -36,8 +40,7 @@ const openTarget = async () => {
   if (props.notification.hasUnread) {
     try {
       await markAsRead(props.notification.notificationId)
-      props.notification.hasUnread = false
-      props.notification.isRead = true
+      emit('read', props.notification.notificationId)
     } catch (error) {
       console.error('mark as read failed', error)
     }
@@ -50,7 +53,10 @@ const openTarget = async () => {
 
   if (props.notification.targetId) {
     void router.push(`/content/${props.notification.targetId}`)
+    return
   }
+
+  void router.push('/notifications')
 }
 </script>
 

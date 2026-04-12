@@ -2,19 +2,30 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
-import { fetchContentDetail, type ContentDetailViewModel } from '@/api/content'
 import {
+  deleteContent,
+  fetchContentDetail,
+  type ContentDetailViewModel
+} from '@/api/content'
+import {
+  deleteComment,
+  fetchHotComments,
+  fetchReactionState,
   fetchComments,
   fetchCommentReplies,
+  pinComment,
   postComment,
   postReaction,
   type CommentDisplayItem,
   type RootCommentDisplayItem
 } from '@/api/interact'
+import CommentActionMenu from '@/components/content/CommentActionMenu.vue'
+import ContentDetailActionMenu from '@/components/content/ContentDetailActionMenu.vue'
 import PrototypeCommentComposer from '@/components/content/PrototypeCommentComposer.vue'
 import PrototypeContinuationGrid, {
   type PrototypeContinuationCard
 } from '@/components/content/PrototypeContinuationGrid.vue'
+import ZenConfirmDialog from '@/components/system/ZenConfirmDialog.vue'
 import PrototypeContainer from '@/components/prototype/PrototypeContainer.vue'
 import PrototypeReadingColumn from '@/components/prototype/PrototypeReadingColumn.vue'
 import PrototypeShell from '@/components/prototype/PrototypeShell.vue'
@@ -37,7 +48,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const detail = ref<ContentDetailViewModel | null>(null)
-const pinnedComment = ref<RootCommentDisplayItem | null>(null)
+const hotComment = ref<RootCommentDisplayItem | null>(null)
 const comments = ref<RootCommentDisplayItem[]>([])
 const nextCursor = ref<string | null>(null)
 const hasMoreComments = ref(false)
@@ -52,6 +63,8 @@ const liked = ref(false)
 const likeCount = ref(0)
 const commentSort = ref<'popular' | 'newest'>('popular')
 const shareNotice = ref('')
+const actionPending = ref(false)
+const pendingDelete = ref<{ type: 'comment' | 'post'; id: string } | null>(null)
 
 const heroFallback =
   'https://lh3.googleusercontent.com/aida-public/AB6AXuAP584_spX38oDYtgxnY8LCloWPjTF603ZRYXC26L17S_RQjADoaiA_OAtYEgTrgBPnsqI_p3vmG4bdJejPNMURCe4p5v9N3fvBYbv-OuoF56Heu1VCf0qbnzAYp_iuldcfLm1Wv1_pfn9sUdkY8COx8QsSSRPL6AzV9b09fJuuorrudouflgowpcSJbNXeJMxtvlek1huXwhUOEdXQZ40iCLNw-yXhYvJ0hxXl9KJT9uIFze-rHrRhyTsHxmnHdS9j2-swvAUCRgEe'
@@ -140,6 +153,18 @@ const detailTags = computed(() => {
 
   return tags.filter(Boolean).slice(0, 4)
 })
+const appreciationLabel = computed(() => `${likeCount.value.toLocaleString('en-US')} appreciations`)
+const isAuthor = computed(() => detail.value?.authorId === authStore.userId)
+const confirmDialogTitle = computed(() => {
+  if (!pendingDelete.value) return ''
+  return pendingDelete.value.type === 'comment' ? 'Are you sure you want to delete this comment?' : 'Are you sure you want to delete this post?'
+})
+const confirmDialogBody = computed(() => {
+  if (!pendingDelete.value) return ''
+  return pendingDelete.value.type === 'comment'
+    ? 'This will remove the note from the reflection thread.'
+    : 'This will remove the story from the gallery and return you to the home feed.'
+})
 
 const continuationCards = computed<ContinuationCard[]>(() => {
   if (!detail.value) return []
@@ -164,7 +189,7 @@ const continuationCards = computed<ContinuationCard[]>(() => {
 })
 
 const sortedComments = computed(() => {
-  const items = [...comments.value]
+  const items = comments.value.filter((item) => item.commentId !== hotComment.value?.commentId)
   return items.sort((left, right) => {
     if (commentSort.value === 'newest') {
       return right.createTime - left.createTime
@@ -177,10 +202,23 @@ const sortedComments = computed(() => {
 })
 
 const commentTotal = computed(() => {
-  const pinned = pinnedComment.value ? 1 : 0
-  const roots = comments.value.length
-  const replies = Object.values(replyThreads.value).reduce((total, thread) => total + thread.items.length, 0)
-  return pinned + roots + replies
+  const uniqueIds = new Set<string>()
+
+  if (hotComment.value) {
+    uniqueIds.add(hotComment.value.commentId)
+  }
+
+  for (const item of comments.value) {
+    uniqueIds.add(item.commentId)
+  }
+
+  for (const thread of Object.values(replyThreads.value)) {
+    for (const reply of thread.items) {
+      uniqueIds.add(reply.commentId)
+    }
+  }
+
+  return uniqueIds.size
 })
 
 const mergeRootComments = (currentItems: RootCommentDisplayItem[], incomingItems: RootCommentDisplayItem[]) => {
@@ -219,28 +257,16 @@ const ensureReplyThread = (root: RootCommentDisplayItem): ReplyThreadState => {
 
 const getReplyThread = (root: RootCommentDisplayItem) => ensureReplyThread(root)
 
-const loadDetail = async () => {
-  if (!postId.value) {
-    errorMsg.value = '缺少内容标识，无法加载详情'
-    detail.value = null
-    loading.value = false
-    return
-  }
+const loadHotComment = async () => {
+  if (!postId.value) return
 
-  loading.value = true
-  errorMsg.value = ''
+  const res = await fetchHotComments({
+    postId: postId.value,
+    limit: 1,
+    preloadReplyLimit: 2
+  })
 
-  try {
-    const res = await fetchContentDetail(postId.value, authStore.userId || undefined)
-    detail.value = res
-    likeCount.value = res.likeCount
-    liked.value = false
-  } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : '内容加载失败'
-    detail.value = null
-  } finally {
-    loading.value = false
-  }
+  hotComment.value = res.pinned
 }
 
 const loadComments = async (reset = true) => {
@@ -255,7 +281,6 @@ const loadComments = async (reset = true) => {
       preloadReplyLimit: 2
     })
 
-    pinnedComment.value = res.pinned
     comments.value = reset ? res.items : mergeRootComments(comments.value, res.items)
     nextCursor.value = res.page.nextCursor
     hasMoreComments.value = res.page.hasMore
@@ -266,7 +291,6 @@ const loadComments = async (reset = true) => {
   } catch (error) {
     console.error('fetch comments failed', error)
     if (reset) {
-      pinnedComment.value = null
       comments.value = []
       nextCursor.value = null
       hasMoreComments.value = false
@@ -275,6 +299,28 @@ const loadComments = async (reset = true) => {
   } finally {
     commentLoading.value = false
   }
+}
+
+const bootstrapDetailState = async () => {
+  if (!postId.value) {
+    errorMsg.value = '缺少内容标识，无法加载详情'
+    detail.value = null
+    return
+  }
+
+  const [detailRes, hotRes, reactionRes] = await Promise.all([
+    fetchContentDetail(postId.value, authStore.userId || undefined),
+    loadHotComment(),
+    fetchReactionState({
+      targetId: postId.value,
+      targetType: 'POST',
+      type: 'LIKE'
+    })
+  ])
+
+  detail.value = detailRes
+  likeCount.value = reactionRes.currentCount
+  liked.value = reactionRes.state
 }
 
 const loadReplies = async (root: RootCommentDisplayItem, append = false) => {
@@ -319,6 +365,72 @@ const handleLike = async () => {
     liked.value = previousLiked
     likeCount.value = previousCount
     console.error('like failed', error)
+  }
+}
+
+const requestCommentDelete = (commentId: string) => {
+  pendingDelete.value = { type: 'comment', id: commentId }
+}
+
+const requestPostDelete = () => {
+  pendingDelete.value = { type: 'post', id: postId.value }
+}
+
+const closePendingDelete = () => {
+  pendingDelete.value = null
+}
+
+const pinRootComment = async (commentId: string) => {
+  if (actionPending.value) {
+    return
+  }
+
+  actionPending.value = true
+  commentError.value = ''
+  try {
+    await pinComment({ commentId, postId: postId.value })
+    await Promise.all([loadHotComment(), loadComments(true)])
+  } catch (error) {
+    commentError.value = error instanceof Error ? error.message : '置顶评论失败'
+  } finally {
+    actionPending.value = false
+  }
+}
+
+const confirmPendingDelete = async () => {
+  if (!pendingDelete.value || actionPending.value) {
+    return
+  }
+
+  const current = pendingDelete.value
+  actionPending.value = true
+  commentError.value = ''
+  errorMsg.value = ''
+
+  try {
+    if (current.type === 'comment') {
+      await deleteComment(current.id)
+      comments.value = comments.value.filter((item) => item.commentId !== current.id)
+      if (hotComment.value?.commentId === current.id) {
+        hotComment.value = null
+      }
+      replyThreads.value = Object.fromEntries(
+        Object.entries(replyThreads.value).filter(([key]) => key !== current.id)
+      )
+    } else {
+      await deleteContent(current.id, { userId: authStore.userId || undefined })
+      await router.push('/')
+    }
+    pendingDelete.value = null
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '删除失败，请稍后重试'
+    if (current.type === 'comment') {
+      commentError.value = message
+    } else {
+      errorMsg.value = message
+    }
+  } finally {
+    actionPending.value = false
   }
 }
 
@@ -372,7 +484,19 @@ const handlePostComment = async () => {
 }
 
 const loadAll = async () => {
-  await Promise.all([loadDetail(), loadComments(true)])
+  loading.value = true
+  errorMsg.value = ''
+  commentError.value = ''
+  pendingDelete.value = null
+
+  try {
+    await Promise.all([bootstrapDetailState(), loadComments(true)])
+  } catch (error) {
+    errorMsg.value = error instanceof Error ? error.message : '内容加载失败'
+    detail.value = null
+  } finally {
+    loading.value = false
+  }
 }
 
 const navTo = (path: string) => {
@@ -495,6 +619,11 @@ watch(
             >
               Share
             </button>
+            <ContentDetailActionMenu
+              :can-delete="isAuthor"
+              :busy="actionPending"
+              @delete="requestPostDelete"
+            />
           </div>
         </header>
       </PrototypeContainer>
@@ -505,31 +634,71 @@ watch(
         </section>
       </PrototypeContainer>
 
-      <PrototypeReadingColumn>
-        <p class="text-xl italic leading-9 text-prototype-ink">
-          {{ narrative.intro }}
-        </p>
+      <PrototypeContainer width="content">
+        <section class="grid gap-12 md:grid-cols-[13rem,minmax(0,1fr)]">
+          <aside class="space-y-8">
+            <div class="flex items-center gap-4">
+              <div class="h-12 w-12 overflow-hidden rounded-full bg-prototype-bg">
+                <img :src="detail.authorAvatar || avatarFallback" :alt="detailAuthor" class="h-full w-full object-cover">
+              </div>
+              <div>
+                <p class="text-xs font-bold uppercase tracking-[0.18em] text-prototype-muted">Curated by</p>
+                <p class="text-sm font-semibold text-prototype-ink">{{ detailAuthor }}</p>
+              </div>
+            </div>
 
-        <div class="space-y-6">
-          <p
-            v-for="(paragraph, index) in narrative.body"
-            :key="`${detail.postId}-paragraph-${index}`"
-            class="text-base leading-8 text-prototype-muted"
-          >
-            {{ paragraph }}
-          </p>
-        </div>
+            <div class="space-y-4 pt-2">
+              <button type="button" class="flex items-center gap-3 text-sm text-prototype-muted transition hover:text-prototype-ink" @click="handleLike">
+                <span class="material-symbols-outlined">favorite</span>
+                <span>{{ appreciationLabel }}</span>
+              </button>
+              <button type="button" class="flex items-center gap-3 text-sm text-prototype-muted transition hover:text-prototype-ink" @click="shareCurrent">
+                <span class="material-symbols-outlined">share</span>
+                <span>Share insight</span>
+              </button>
+              <button type="button" class="flex items-center gap-3 text-sm text-prototype-muted transition hover:text-prototype-ink">
+                <span class="material-symbols-outlined">bookmark</span>
+                <span>Add to gallery</span>
+              </button>
+            </div>
+          </aside>
 
-        <div v-if="detailTags.length > 0" class="flex flex-wrap gap-2 pt-2">
-          <span
-            v-for="tag in detailTags"
-            :key="tag"
-            class="rounded-full border border-prototype-line px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-prototype-muted"
-          >
-            {{ tag }}
-          </span>
-        </div>
-      </PrototypeReadingColumn>
+          <section class="space-y-8">
+            <p class="text-xl italic leading-9 text-prototype-ink">
+              {{ narrative.intro }}
+            </p>
+
+            <div class="space-y-6">
+              <p
+                v-for="(paragraph, index) in narrative.body"
+                :key="`${detail.postId}-paragraph-${index}`"
+                class="text-base leading-8 text-prototype-muted"
+              >
+                {{ paragraph }}
+              </p>
+            </div>
+
+            <div v-if="detail.mediaUrls.length > 2" class="grid gap-4 md:grid-cols-[minmax(0,2fr),minmax(0,1fr)]">
+              <div class="aspect-[16/11] overflow-hidden rounded-[1.25rem] bg-prototype-surface">
+                <img :src="detail.mediaUrls[1]" :alt="`${detailTitle} supporting visual`" class="h-full w-full object-cover">
+              </div>
+              <div class="aspect-[4/5] overflow-hidden rounded-[1.25rem] bg-prototype-surface">
+                <img :src="detail.mediaUrls[2]" :alt="`${detailTitle} detail visual`" class="h-full w-full object-cover">
+              </div>
+            </div>
+
+            <div v-if="detailTags.length > 0" class="flex flex-wrap gap-2 pt-2">
+              <span
+                v-for="tag in detailTags"
+                :key="tag"
+                class="rounded-full border border-prototype-line px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-prototype-muted"
+              >
+                {{ tag }}
+              </span>
+            </div>
+          </section>
+        </section>
+      </PrototypeContainer>
 
       <PrototypeContainer width="content">
         <div class="border-t border-prototype-line pt-16">
@@ -545,7 +714,7 @@ watch(
         <PrototypeReadingColumn>
           <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div class="flex items-baseline gap-3">
-              <h2 class="font-headline text-3xl tracking-[-0.03em] text-prototype-ink md:text-4xl">Community Notes</h2>
+              <h2 class="font-headline text-3xl tracking-[-0.03em] text-prototype-ink md:text-4xl">Shared Reflections</h2>
               <span class="font-medium text-prototype-muted">{{ commentTotal }}</span>
             </div>
 
@@ -580,31 +749,38 @@ watch(
           <p v-if="commentError" class="text-sm font-medium text-error">{{ commentError }}</p>
 
           <div
-            v-if="pinnedComment"
+            v-if="hotComment"
             class="relative overflow-hidden rounded-[1.5rem] border border-prototype-line bg-prototype-surface p-6"
           >
             <div class="absolute left-0 top-0 flex items-center gap-1 rounded-br-xl bg-prototype-ink px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-prototype-surface">
               <span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">push_pin</span>
-              Pinned
+              Hot comment
             </div>
 
             <article class="mt-5 flex gap-5">
               <div class="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-prototype-bg">
-                <img :src="pinnedComment.authorAvatar || avatarFallback" :alt="pinnedComment.authorName" class="h-full w-full object-cover">
+                <img :src="hotComment.authorAvatar || avatarFallback" :alt="hotComment.authorName" class="h-full w-full object-cover">
               </div>
               <div class="flex-1">
                 <div class="mb-2 flex items-baseline justify-between gap-4">
-                  <span class="font-semibold text-prototype-ink">{{ pinnedComment.authorName }}</span>
+                  <span class="font-semibold text-prototype-ink">{{ hotComment.authorName }}</span>
                   <span class="text-[10px] font-bold uppercase tracking-[0.2em] text-prototype-muted/70">
-                    {{ formatRelativeDate(pinnedComment.createTime) }}
+                    {{ formatRelativeDate(hotComment.createTime) }}
                   </span>
                 </div>
-                <p class="mb-4 text-sm leading-7 text-prototype-ink">{{ pinnedComment.content }}</p>
+                <p class="mb-4 text-sm leading-7 text-prototype-ink">{{ hotComment.content }}</p>
                 <div class="flex items-center gap-6">
                   <div class="flex items-center gap-1.5 text-prototype-accent">
                     <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">favorite</span>
-                    <span class="text-xs font-semibold">{{ pinnedComment.likeCount }}</span>
+                    <span class="text-xs font-semibold">{{ hotComment.likeCount }}</span>
                   </div>
+                  <CommentActionMenu
+                    :can-delete="hotComment.userId === authStore.userId || isAuthor"
+                    :can-pin="isAuthor"
+                    :busy="actionPending"
+                    @delete="requestCommentDelete(hotComment.commentId)"
+                    @pin="pinRootComment(hotComment.commentId)"
+                  />
                   <button type="button" class="text-xs font-semibold uppercase tracking-[0.2em] text-prototype-muted transition hover:text-prototype-ink">
                     Reply
                   </button>
@@ -614,7 +790,7 @@ watch(
           </div>
 
           <div
-            v-if="commentLoading && !pinnedComment && comments.length === 0"
+            v-if="commentLoading && !hotComment && comments.length === 0"
             class="rounded-[1.5rem] border border-prototype-line bg-prototype-surface px-8 py-14 text-center"
           >
             <h3 class="mb-3 font-headline text-2xl tracking-[-0.02em] text-prototype-ink">Loading community notes</h3>
@@ -622,7 +798,7 @@ watch(
           </div>
 
           <div
-            v-else-if="!pinnedComment && comments.length === 0"
+            v-else-if="!hotComment && comments.length === 0"
             class="rounded-[1.5rem] border border-prototype-line bg-prototype-surface px-8 py-14 text-center"
           >
             <h3 class="mb-3 font-headline text-2xl tracking-[-0.02em] text-prototype-ink">Quiet for now</h3>
@@ -648,6 +824,13 @@ watch(
                       <span class="material-symbols-outlined text-sm">favorite</span>
                       <span class="text-xs font-semibold">{{ item.likeCount }}</span>
                     </div>
+                    <CommentActionMenu
+                      :can-delete="item.userId === authStore.userId || isAuthor"
+                      :can-pin="isAuthor"
+                      :busy="actionPending"
+                      @delete="requestCommentDelete(item.commentId)"
+                      @pin="pinRootComment(item.commentId)"
+                    />
                     <button
                       v-if="item.replyCount > 0"
                       type="button"
@@ -719,5 +902,15 @@ watch(
         </PrototypeReadingColumn>
       </section>
     </article>
+
+    <ZenConfirmDialog
+      :open="pendingDelete !== null"
+      :title="confirmDialogTitle"
+      :body="confirmDialogBody"
+      confirm-label="Delete"
+      cancel-label="Cancel"
+      @close="closePendingDelete"
+      @confirm="confirmPendingDelete"
+    />
   </PrototypeShell>
 </template>

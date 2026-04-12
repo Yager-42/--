@@ -94,7 +94,7 @@ const handleRegister = async () => {
           <div class="absolute inset-0 bg-gradient-to-t from-[rgba(25,24,20,0.48)] to-transparent" />
         </div>
         <div class="space-y-3">
-          <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">Step 1 of 1</p>
+          <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">Begin your curation</p>
           <h2 class="font-headline text-4xl tracking-[-0.04em] text-prototype-ink">Your digital sanctuary.</h2>
           <p class="max-w-sm text-sm leading-7 text-prototype-muted">
             在更克制、更安静的界面里完成注册，把注意力留给内容与表达本身。
@@ -112,9 +112,9 @@ const handleRegister = async () => {
             >
               Nexus
             </button>
-            <h1 class="font-headline text-4xl tracking-[-0.04em] text-prototype-ink md:text-5xl">
-              Create Account
-            </h1>
+             <h1 class="font-headline text-4xl tracking-[-0.04em] text-prototype-ink md:text-5xl">
+               Create Account
+             </h1>
             <p class="text-sm leading-7 text-prototype-muted">
               Begin your curation journey today.
             </p>
@@ -223,7 +223,7 @@ const handleRegister = async () => {
 
             <div class="pt-4 text-center">
               <p class="text-prototype-muted">
-                Already have an account?
+                Already part of the sanctuary?
                 <button
                   type="button"
                   class="ml-1 font-semibold text-prototype-accent transition hover:text-prototype-ink"

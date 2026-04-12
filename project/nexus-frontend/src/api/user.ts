@@ -45,6 +45,14 @@ export interface UserProfileUpdateRequestDTO {
   avatarUrl?: string;
 }
 
+export interface UserPrivacyResponseDTO {
+  needApproval: boolean;
+}
+
+export interface UserPrivacyUpdateRequestDTO {
+  needApproval: boolean;
+}
+
 export interface ProfilePageViewModel extends UserDTO {
   riskStatus: string;
   relationState: RelationState;
@@ -103,4 +111,14 @@ export const updateMyProfile = (
   data: UserProfileUpdateRequestDTO
 ): Promise<OperationResultDTO> => {
   return http.post<OperationResultDTO>('/user/me/profile', data);
+};
+
+export const fetchMyPrivacy = (): Promise<UserPrivacyResponseDTO> => {
+  return http.get<UserPrivacyResponseDTO>('/user/me/privacy');
+};
+
+export const updateMyPrivacy = (
+  data: UserPrivacyUpdateRequestDTO
+): Promise<OperationResultDTO> => {
+  return http.post<OperationResultDTO>('/user/me/privacy', data);
 };

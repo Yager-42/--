@@ -111,7 +111,12 @@ const handleLogin = async () => {
             </div>
 
             <div class="space-y-2">
-              <label class="text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">Password</label>
+              <div class="flex items-center justify-between gap-4">
+                <label class="text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">Password</label>
+                <button type="button" class="text-xs font-semibold text-prototype-accent transition hover:text-prototype-ink">
+                  Forgot Password?
+                </button>
+              </div>
               <input
                 v-model="password"
                 type="password"
@@ -145,18 +150,44 @@ const handleLogin = async () => {
             </button>
           </div>
 
+          <div class="relative py-2">
+            <div class="absolute inset-0 flex items-center">
+              <div class="w-full border-t border-prototype-line" />
+            </div>
+            <div class="relative flex justify-center">
+              <span class="bg-prototype-surface px-4 text-xs uppercase tracking-[0.2em] text-prototype-muted">
+                Or connect via
+              </span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <button
+              type="button"
+              class="rounded-[1rem] bg-prototype-bg px-4 py-3 text-sm font-medium text-prototype-muted transition hover:bg-secondary-container hover:text-prototype-ink"
+            >
+              Google
+            </button>
+            <button
+              type="button"
+              class="rounded-[1rem] bg-prototype-bg px-4 py-3 text-sm font-medium text-prototype-muted transition hover:bg-secondary-container hover:text-prototype-ink"
+            >
+              Apple
+            </button>
+          </div>
+
           <div class="border-t border-prototype-line pt-8">
             <p class="text-center text-sm leading-7 text-prototype-muted">
               By continuing, you agree to our Manifesto and Terms.
             </p>
             <p class="mt-4 text-center text-sm text-prototype-muted">
-              No account yet?
+              New to the gallery?
               <button
                 type="button"
                 class="font-semibold text-prototype-accent transition hover:text-prototype-ink"
                 @click="router.push('/register')"
               >
-                Create one
+                Request access
               </button>
             </p>
           </div>

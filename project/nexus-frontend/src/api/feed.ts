@@ -30,6 +30,13 @@ export interface FeedTimelineRequestDTO {
   feedType?: string;
 }
 
+export interface ProfileTimelineRequestDTO {
+  targetId: string;
+  userId?: string;
+  cursor?: string;
+  limit?: number;
+}
+
 export interface FeedCardViewModel extends PostCardViewModel {
   postId: string;
   authorId: string;
@@ -134,6 +141,24 @@ export const fetchTimeline = async (
   params: FeedTimelineRequestDTO
 ): Promise<CursorPageResult<FeedCardViewModel>> => {
   const response = await http.get<FeedTimelineResponseDTO>('/feed/timeline', { params });
+  const nextCursor = toNullableCursor(response.nextCursor);
+
+  return {
+    items: response.items.map(mapFeedItem),
+    page: {
+      nextCursor,
+      hasMore: nextCursor !== null
+    }
+  };
+};
+
+export const fetchProfileTimeline = async (
+  params: ProfileTimelineRequestDTO
+): Promise<CursorPageResult<FeedCardViewModel>> => {
+  const { targetId, ...query } = params;
+  const response = await http.get<FeedTimelineResponseDTO>(`/feed/profile/${targetId}`, {
+    params: query
+  });
   const nextCursor = toNullableCursor(response.nextCursor);
 
   return {

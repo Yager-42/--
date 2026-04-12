@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { fetchNotifications, markAllAsRead, type NotificationDTO } from '@/api/notification'
 import { useAuthStore } from '@/store/auth'
 import NotificationItem from '@/components/NotificationItem.vue'
@@ -16,6 +16,20 @@ const nextCursor = ref<string | null>(null)
 const hasMore = ref(true)
 
 const hasUnread = computed(() => notifications.value.some((item) => !item.isRead))
+const unreadNotifications = computed(() => notifications.value.filter((item) => !item.isRead))
+const earlierNotifications = computed(() => notifications.value.filter((item) => item.isRead))
+
+const markLocalRead = (notificationId: string) => {
+  notifications.value = notifications.value.map((item) =>
+    item.notificationId === notificationId
+      ? {
+          ...item,
+          hasUnread: false,
+          isRead: true
+        }
+      : item
+  )
+}
 
 const loadNotifications = async () => {
   if (!authStore.userId || loading.value || !hasMore.value) return
@@ -53,6 +67,18 @@ const handleReadAll = async () => {
 onMounted(() => {
   void loadNotifications()
 })
+
+watch(
+  () => authStore.userId,
+  (userId) => {
+    if (!userId || notifications.value.length > 0 || loading.value) {
+      return
+    }
+
+    void loadNotifications()
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -72,9 +98,14 @@ onMounted(() => {
             </p>
           </div>
 
-          <ZenButton v-if="hasUnread" variant="secondary" @click="handleReadAll">
-            全部已读
-          </ZenButton>
+          <div class="flex items-center gap-3">
+            <div class="rounded-full border border-prototype-line bg-prototype-surface px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">
+              {{ unreadNotifications.length }} unread
+            </div>
+            <ZenButton v-if="hasUnread" variant="secondary" @click="handleReadAll">
+              全部已读
+            </ZenButton>
+          </div>
         </div>
       </PrototypeContainer>
 
@@ -103,24 +134,62 @@ onMounted(() => {
         />
       </PrototypeContainer>
 
-      <PrototypeContainer v-else width="content">
-        <section class="space-y-4">
-          <NotificationItem
-            v-for="item in notifications"
-            :key="item.notificationId"
-            :notification="item"
-          />
+      <PrototypeContainer v-else width="content" class="space-y-10">
+        <section v-if="unreadNotifications.length > 0" class="space-y-4">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">
+                Unread
+              </p>
+              <h2 class="mt-2 font-headline text-3xl tracking-[-0.03em] text-prototype-ink">
+                Fresh activity worth opening.
+              </h2>
+            </div>
+            <span class="rounded-full bg-prototype-surface px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted">
+              {{ unreadNotifications.length }} new
+            </span>
+          </div>
 
+          <div class="space-y-4 rounded-[2rem] border border-prototype-line bg-prototype-surface p-5">
+            <NotificationItem
+              v-for="item in unreadNotifications"
+              :key="item.notificationId"
+              :notification="item"
+              @read="markLocalRead"
+            />
+          </div>
+        </section>
+
+        <section v-if="earlierNotifications.length > 0" class="space-y-4">
+          <div>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-prototype-muted">
+              Earlier
+            </p>
+            <h2 class="mt-2 font-headline text-3xl tracking-[-0.03em] text-prototype-ink">
+              Older signals, kept quiet.
+            </h2>
+          </div>
+
+          <div class="space-y-4 rounded-[2rem] border border-prototype-line bg-prototype-bg/60 p-5">
+            <NotificationItem
+              v-for="item in earlierNotifications"
+              :key="item.notificationId"
+              :notification="item"
+              @read="markLocalRead"
+            />
+          </div>
+        </section>
+
+        <div class="flex justify-center">
           <ZenButton
             v-if="hasMore"
             variant="secondary"
-            class="justify-self-center"
             :disabled="loading"
             @click="loadNotifications"
           >
-            {{ loading ? '加载中...' : '加载更多' }}
+            {{ loading ? '加载中...' : 'Load Older Notifications' }}
           </ZenButton>
-        </section>
+        </div>
       </PrototypeContainer>
     </article>
   </PrototypeShell>

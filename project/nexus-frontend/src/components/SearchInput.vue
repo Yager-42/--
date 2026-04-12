@@ -7,30 +7,50 @@ import SearchSuggestionPanel from '@/components/search/SearchSuggestionPanel.vue
 
 const props = withDefaults(
   defineProps<{
+    modelValue?: string
     isExpanded: boolean
     placeholder?: string
   }>(),
   {
+    modelValue: '',
     placeholder: '搜索帖子、作者、关键词'
   }
 )
 
 const emit = defineEmits<{
+  (event: 'update:modelValue', value: string): void
   (event: 'expand'): void
   (event: 'collapse'): void
   (event: 'search', keyword: string): void
 }>()
 
-const keyword = ref('')
+const keyword = ref(props.modelValue)
 const loading = ref(false)
 const suggestions = ref<string[]>([])
 const showPanel = ref(false)
 const requestFailed = ref('')
 let timer: number | null = null
+let requestSequence = 0
+let activeRequestId = 0
 
 const canSearch = computed(() => keyword.value.trim().length > 0)
 
-const closePanel = () => {
+const clearPendingDebounce = () => {
+  if (timer) {
+    window.clearTimeout(timer)
+    timer = null
+  }
+}
+
+const cancelActiveRequest = () => {
+  activeRequestId = ++requestSequence
+}
+
+const closePanel = (options?: { cancelPending?: boolean }) => {
+  if (options?.cancelPending) {
+    clearPendingDebounce()
+    cancelActiveRequest()
+  }
   showPanel.value = false
   suggestions.value = []
   loading.value = false
@@ -41,12 +61,12 @@ const submit = () => {
   const value = keyword.value.trim()
   if (!value) return
   emit('search', value)
-  closePanel()
+  closePanel({ cancelPending: true })
 }
 
 const clear = () => {
   keyword.value = ''
-  closePanel()
+  closePanel({ cancelPending: true })
   emit('collapse')
 }
 
@@ -54,12 +74,15 @@ const onFocus = () => {
   emit('expand')
   if (keyword.value.trim()) {
     showPanel.value = true
+    if (suggestions.value.length === 0 && !loading.value && !requestFailed.value) {
+      void loadSuggestions()
+    }
   }
 }
 
 const onBlur = () => {
   window.setTimeout(() => {
-    closePanel()
+    closePanel({ cancelPending: true })
     if (!keyword.value.trim()) {
       emit('collapse')
     }
@@ -74,27 +97,49 @@ const selectSuggestion = (item: string) => {
 const loadSuggestions = async () => {
   const query = keyword.value.trim()
   if (!query) {
-    closePanel()
+    closePanel({ cancelPending: true })
     return
   }
 
+  const requestId = ++requestSequence
+  activeRequestId = requestId
   loading.value = true
   requestFailed.value = ''
   showPanel.value = true
 
   try {
     const response = await fetchSuggest(query, 8)
+    if (requestId !== activeRequestId) {
+      return
+    }
     suggestions.value = Array.isArray(response.items) ? response.items : []
   } catch (error) {
+    if (requestId !== activeRequestId) {
+      return
+    }
     requestFailed.value = error instanceof Error ? error.message : '搜索建议加载失败'
     suggestions.value = []
   } finally {
-    loading.value = false
+    if (requestId === activeRequestId) {
+      loading.value = false
+    }
   }
 }
 
-watch(keyword, () => {
-  if (timer) window.clearTimeout(timer)
+watch(
+  () => props.modelValue,
+  (value) => {
+    const nextValue = value ?? ''
+    if (nextValue !== keyword.value) {
+      keyword.value = nextValue
+    }
+  }
+)
+
+watch(keyword, (value) => {
+  emit('update:modelValue', value)
+
+  clearPendingDebounce()
   timer = window.setTimeout(() => {
     void loadSuggestions()
   }, 220)
@@ -104,13 +149,13 @@ watch(
   () => props.isExpanded,
   (expanded) => {
     if (!expanded) {
-      closePanel()
+      closePanel({ cancelPending: true })
     }
   }
 )
 
 onBeforeUnmount(() => {
-  if (timer) window.clearTimeout(timer)
+  clearPendingDebounce()
 })
 </script>
 

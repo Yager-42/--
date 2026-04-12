@@ -1,5 +1,5 @@
 import http from '@/utils/http';
-import type { CursorPageMeta } from './types';
+import type { CursorPageMeta, OperationResultDTO } from './types';
 
 export interface ReactionRequestDTO {
   requestId: string;
@@ -47,6 +47,11 @@ interface RawCommentListResponseDTO {
   pinned?: RawRootCommentViewDTO | null;
   items: RawRootCommentViewDTO[];
   nextCursor?: string | null;
+}
+
+interface RawHotCommentResponseDTO {
+  pinned?: RawRootCommentViewDTO | null;
+  items: RawRootCommentViewDTO[];
 }
 
 interface RawCommentReplyListResponseDTO {
@@ -102,6 +107,38 @@ export interface FetchCommentRepliesRequestDTO {
   rootId: string;
   cursor?: string;
   limit?: number;
+}
+
+export interface FetchHotCommentsRequestDTO {
+  postId: string;
+  limit?: number;
+  preloadReplyLimit?: number;
+}
+
+export interface PinCommentRequestDTO {
+  commentId: string;
+  postId: string;
+}
+
+interface RawReactionStateResponseDTO {
+  state: boolean;
+  currentCount?: number;
+}
+
+export interface ReactionStateRequestDTO {
+  targetId: string;
+  targetType: string;
+  type: string;
+}
+
+export interface ReactionStateResponseDTO {
+  state: boolean;
+  currentCount: number;
+}
+
+export interface HotCommentListViewModel {
+  pinned: RootCommentDisplayItem | null;
+  items: RootCommentDisplayItem[];
 }
 
 const toNullableCursor = (value?: string | null): string | null => {
@@ -196,4 +233,45 @@ export const fetchCommentReplies = async (
 
 export const postComment = (data: CommentRequestDTO): Promise<CommentCreateResponseDTO> => {
   return http.post<CommentCreateResponseDTO>('/interact/comment', data);
+};
+
+export const fetchHotComments = async (
+  params: FetchHotCommentsRequestDTO
+): Promise<HotCommentListViewModel> => {
+  const response = await http.get<RawHotCommentResponseDTO>('/comment/hot', {
+    params: {
+      ...params,
+      limit: params.limit ?? 10,
+      preloadReplyLimit: params.preloadReplyLimit ?? 2
+    }
+  });
+  const pinned = response.pinned ? mapRootComment(response.pinned) : null;
+
+  return {
+    pinned,
+    items: dedupeByCommentId(
+      response.items.map(mapRootComment).filter((item) => item.commentId !== pinned?.commentId)
+    )
+  };
+};
+
+export const deleteComment = (commentId: string) => {
+  return http.delete<OperationResultDTO>(`/comment/${commentId}`);
+};
+
+export const pinComment = (data: PinCommentRequestDTO) => {
+  return http.post<OperationResultDTO>('/interact/comment/pin', data);
+};
+
+export const fetchReactionState = async (
+  params: ReactionStateRequestDTO
+): Promise<ReactionStateResponseDTO> => {
+  const response = await http.get<RawReactionStateResponseDTO>('/interact/reaction/state', {
+    params
+  });
+
+  return {
+    state: Boolean(response.state),
+    currentCount: Number(response.currentCount ?? 0)
+  };
 };

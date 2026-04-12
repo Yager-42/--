@@ -24,6 +24,7 @@ interface PostRecord {
   mediaUrls: string[]
   locationInfo: string
   publishTime: number
+  versionNum: number
   likeCount: number
   likedBy: Set<string>
   tags: string[]
@@ -71,6 +72,52 @@ interface RiskRecord {
   status: 'NORMAL' | 'LIMITED' | 'BANNED'
   capabilities: string[]
 }
+
+interface AuthMeRecord {
+  userId: string
+  phone: string
+  status: string
+  nickname: string
+  avatarUrl: string
+}
+
+interface ContentVersionRecord {
+  versionId: string
+  title: string
+  content: string
+  time: number
+}
+
+interface PublishAttemptRecord {
+  attemptId: string
+  postId: string
+  userId: string
+  idempotentToken: string
+  transcodeJobId: string
+  attemptStatus: number
+  riskStatus: number
+  transcodeStatus: number
+  publishedVersionNum: number
+  errorCode: string
+  errorMessage: string
+  createTime: number
+  updateTime: number
+}
+
+interface ScheduleTaskRecord {
+  taskId: string
+  postId: string
+  userId: string
+  scheduleTime: number
+  status: number
+  retryCount: number
+  isCanceled: number
+  lastError: string
+  alarmSent: number
+  contentData: string
+}
+
+type FeedType = 'FOLLOWING' | 'RECOMMENDED' | 'TRENDING'
 
 const now = Date.now()
 
@@ -138,6 +185,7 @@ const postRecords = new Map<string, PostRecord>([
       ],
       locationInfo: 'Oslo',
       publishTime: now - 1000 * 60 * 38,
+      versionNum: 1,
       likeCount: 126,
       likedBy: new Set(['1']),
       tags: ['interior', 'minimal', 'light']
@@ -158,6 +206,7 @@ const postRecords = new Map<string, PostRecord>([
       ],
       locationInfo: 'Copenhagen',
       publishTime: now - 1000 * 60 * 95,
+      versionNum: 1,
       likeCount: 78,
       likedBy: new Set(),
       tags: ['editorial', 'ux', 'writing']
@@ -177,6 +226,7 @@ const postRecords = new Map<string, PostRecord>([
       ],
       locationInfo: 'Tokyo',
       publishTime: now - 1000 * 60 * 60 * 7,
+      versionNum: 1,
       likeCount: 44,
       likedBy: new Set(['3']),
       tags: ['archive', 'information', 'systems']
@@ -301,12 +351,25 @@ const risks = new Map<string, RiskRecord>([
 ])
 
 const drafts = new Map<string, DraftRecord>()
+const blockedEdges = new Set<string>()
+const privacySettings = new Map<string, boolean>([['1', false], ['2', false], ['3', true], ['4', true]])
+const contentHistories = new Map<string, ContentVersionRecord[]>()
+const publishAttempts = new Map<string, PublishAttemptRecord>()
+const scheduleTasks = new Map<string, ScheduleTaskRecord>()
+const passwordByUserId = new Map<string, string>([
+  ['1', 'old-pass'],
+  ['2', 'old-pass'],
+  ['3', 'old-pass'],
+  ['4', 'old-pass']
+])
 let draftSeq = 1
 let commentSeq = 100
 let appealSeq = 10
 let uploadSeq = 10
 let publishSeq = 10
-let currentUserId = '1'
+let scheduleSeq = 1
+let historySeq = 1
+let currentUserId: string | null = '1'
 
 export const UI_MOCK_DEFAULT_SESSION = {
   userId: '1',
@@ -360,6 +423,13 @@ const toNumber = (value: unknown, fallback: number): number => {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+const requireCurrentUserId = (): string => {
+  if (!currentUserId) {
+    throw new Error('mock auth required')
+  }
+  return currentUserId
+}
+
 const pickUser = (userId: string): UserRecord => {
   return users.get(userId) ?? users.get('1')!
 }
@@ -393,8 +463,9 @@ const followerCountOf = (userId: string): number => {
 
 const toMediaInfo = (urls: string[]): string => JSON.stringify(urls)
 
-const mapFeedItem = (post: PostRecord) => {
+const mapFeedItem = (post: PostRecord, source: FeedType = 'FOLLOWING') => {
   const author = pickUser(post.authorId)
+  const viewerId = currentUserId
   return {
     postId: post.postId,
     authorId: post.authorId,
@@ -405,12 +476,62 @@ const mapFeedItem = (post: PostRecord) => {
     mediaType: post.mediaUrls.length > 0 ? 1 : 0,
     mediaInfo: toMediaInfo(post.mediaUrls),
     publishTime: post.publishTime,
-    source: 'FOLLOWING',
+    source,
     likeCount: post.likeCount,
-    liked: post.likedBy.has(currentUserId),
-    followed: isFollowing(currentUserId, post.authorId),
+    liked: viewerId ? post.likedBy.has(viewerId) : false,
+    followed: viewerId ? isFollowing(viewerId, post.authorId) : false,
     seen: true
   }
+}
+
+const normalizeFeedType = (value: unknown): FeedType => {
+  const nextValue = toString(value, 'FOLLOWING').toUpperCase()
+  if (nextValue === 'TRENDING') {
+    return 'TRENDING'
+  }
+  if (nextValue === 'RECOMMENDED') {
+    return 'RECOMMENDED'
+  }
+  return 'FOLLOWING'
+}
+
+const getTimelineRecords = (feedType: FeedType): PostRecord[] => {
+  const viewerId = currentUserId
+  const posts = timelineOrder
+    .map((id) => postRecords.get(id))
+    .filter((post): post is PostRecord => Boolean(post))
+
+  if (feedType === 'TRENDING') {
+    return posts.sort((left, right) => {
+      if (right.likeCount !== left.likeCount) {
+        return right.likeCount - left.likeCount
+      }
+      return right.publishTime - left.publishTime
+    })
+  }
+
+  if (feedType === 'RECOMMENDED') {
+    return posts.sort((left, right) => {
+      const leftFollowed = viewerId && isFollowing(viewerId, left.authorId) ? 1 : 0
+      const rightFollowed = viewerId && isFollowing(viewerId, right.authorId) ? 1 : 0
+      if (leftFollowed !== rightFollowed) {
+        return leftFollowed - rightFollowed
+      }
+      if (right.publishTime !== left.publishTime) {
+        return right.publishTime - left.publishTime
+      }
+      return right.likeCount - left.likeCount
+    })
+  }
+
+  return posts.sort((left, right) => {
+    const leftFollowed = viewerId && isFollowing(viewerId, left.authorId) ? 1 : 0
+    const rightFollowed = viewerId && isFollowing(viewerId, right.authorId) ? 1 : 0
+    if (leftFollowed !== rightFollowed) {
+      return rightFollowed - leftFollowed
+    }
+    return right.publishTime - left.publishTime
+  })
 }
 
 const mapContentDetail = (post: PostRecord) => {
@@ -429,7 +550,7 @@ const mapContentDetail = (post: PostRecord) => {
     locationInfo: post.locationInfo,
     status: 0,
     visibility: 1,
-    versionNum: 1,
+    versionNum: post.versionNum,
     edited: false,
     createTime: post.publishTime,
     likeCount: post.likeCount
@@ -489,14 +610,239 @@ const clone = <T>(value: T): T => {
 
 const createResponse = <T>(value: T): T => clone(value)
 
+const createOperationResult = (
+  id?: string,
+  status = 'OK',
+  message = ''
+) => createResponse({ success: true, id, status, message })
+
+const upsertHistoryVersion = (postId: string, title: string, content: string, time = Date.now()) => {
+  const versions = contentHistories.get(postId) ?? []
+  versions.unshift({
+    versionId: `version-${historySeq++}`,
+    title,
+    content,
+    time
+  })
+  contentHistories.set(postId, versions)
+  return versions[0]
+}
+
+const buildScheduleContentData = (postId: string): string => {
+  const post = postRecords.get(postId)
+  return JSON.stringify({
+    postId,
+    title: post?.title ?? '',
+    text: post?.text ?? '',
+    mediaUrls: post?.mediaUrls ?? []
+  })
+}
+
+const removeCommentById = (commentId: string): boolean => {
+  for (const [postId, rows] of commentsByPost.entries()) {
+    const rootIndex = rows.findIndex((item) => item.root.commentId === commentId)
+    if (rootIndex >= 0) {
+      rows.splice(rootIndex, 1)
+      commentsByPost.set(postId, rows)
+      return true
+    }
+
+    for (const row of rows) {
+      const replyIndex = row.replies.findIndex((reply) => reply.commentId === commentId)
+      if (replyIndex >= 0) {
+        row.replies.splice(replyIndex, 1)
+        commentsByPost.set(postId, rows)
+        return true
+      }
+    }
+  }
+  return false
+}
+
+const authMePayload = (userId: string): AuthMeRecord => {
+  const user = pickUser(userId)
+  return {
+    userId: user.userId,
+    phone: user.phone,
+    status: user.status,
+    nickname: user.nickname,
+    avatarUrl: user.avatarUrl
+  }
+}
+
+const restoreMap = <K, V>(target: Map<K, V>, entries: Array<[K, V]>) => {
+  target.clear()
+  entries.forEach(([key, value]) => {
+    target.set(key, value)
+  })
+}
+
+const restoreSet = <T>(target: Set<T>, entries: T[]) => {
+  target.clear()
+  entries.forEach((entry) => {
+    target.add(entry)
+  })
+}
+
+const initialUsersSnapshot = clone(Array.from(users.entries()))
+const initialPostsSnapshot = clone(Array.from(postRecords.entries()))
+const initialTimelineSnapshot = clone(timelineOrder)
+const initialRelationEdgesSnapshot = clone(Array.from(relationEdges))
+const initialRelationTimesSnapshot = clone(Array.from(relationTimes.entries()))
+const initialCommentsSnapshot = clone(Array.from(commentsByPost.entries()))
+const initialNotificationsSnapshot = clone(notifications)
+const initialRisksSnapshot = clone(Array.from(risks.entries()))
+const initialPrivacySnapshot = clone(Array.from(privacySettings.entries()))
+const initialPasswordsSnapshot = clone(Array.from(passwordByUserId.entries()))
+
+export const resetUIMockState = (): void => {
+  restoreMap(users, clone(initialUsersSnapshot))
+  restoreMap(postRecords, clone(initialPostsSnapshot))
+  timelineOrder.splice(0, timelineOrder.length, ...clone(initialTimelineSnapshot))
+  restoreSet(relationEdges, clone(initialRelationEdgesSnapshot))
+  restoreMap(relationTimes, clone(initialRelationTimesSnapshot))
+  restoreMap(commentsByPost, clone(initialCommentsSnapshot))
+  notifications.splice(0, notifications.length, ...clone(initialNotificationsSnapshot))
+  restoreMap(risks, clone(initialRisksSnapshot))
+  restoreMap(privacySettings, clone(initialPrivacySnapshot))
+  restoreMap(passwordByUserId, clone(initialPasswordsSnapshot))
+  drafts.clear()
+  blockedEdges.clear()
+  contentHistories.clear()
+  publishAttempts.clear()
+  scheduleTasks.clear()
+  draftSeq = 1
+  commentSeq = 100
+  appealSeq = 10
+  uploadSeq = 10
+  publishSeq = 10
+  scheduleSeq = 1
+  historySeq = 1
+  currentUserId = UI_MOCK_DEFAULT_SESSION.userId
+
+  for (const post of postRecords.values()) {
+    contentHistories.set(post.postId, [
+      {
+        versionId: `version-${historySeq++}`,
+        title: post.title,
+        content: post.text,
+        time: post.publishTime
+      }
+    ])
+  }
+}
+
+resetUIMockState()
+
 const handleGet = (path: string, params: Record<string, unknown>) => {
   if (path === '/feed/timeline') {
     const cursor = toNumber(params.cursor, 0)
     const limit = Math.max(1, toNumber(params.limit, 10))
-    const ids = timelineOrder.slice(cursor, cursor + limit)
-    const items = ids.map((id) => mapFeedItem(postRecords.get(id)!))
-    const nextCursor = cursor + limit < timelineOrder.length ? String(cursor + limit) : null
+    const feedType = normalizeFeedType(params.feedType)
+    const records = getTimelineRecords(feedType)
+    const items = records
+      .slice(cursor, cursor + limit)
+      .filter((post): post is PostRecord => Boolean(post))
+      .map((post) => mapFeedItem(post, feedType))
+    const nextCursor = cursor + limit < records.length ? String(cursor + limit) : null
     return createResponse({ items, nextCursor })
+  }
+
+  if (path.startsWith('/feed/profile/')) {
+    const targetId = decodeURIComponent(path.slice('/feed/profile/'.length))
+    const cursor = toNumber(params.cursor, 0)
+    const limit = Math.max(1, toNumber(params.limit, 10))
+    const items = timelineOrder
+      .map((id) => postRecords.get(id))
+      .filter((post): post is PostRecord => {
+        if (!post) {
+          return false
+        }
+        return post.authorId === targetId
+      })
+      .sort((left, right) => right.publishTime - left.publishTime)
+    const paged = items
+      .slice(cursor, cursor + limit)
+      .filter((post): post is PostRecord => Boolean(post))
+      .map((post) => mapFeedItem(post, 'FOLLOWING'))
+    const nextCursor = cursor + limit < items.length ? String(cursor + limit) : null
+    return createResponse({ items: paged, nextCursor })
+  }
+
+  if (path === '/user/me/privacy') {
+    const userId = requireCurrentUserId()
+    return createResponse({
+      needApproval: privacySettings.get(userId) ?? false
+    })
+  }
+
+  if (path === '/auth/me') {
+    return createResponse(authMePayload(requireCurrentUserId()))
+  }
+
+  if (path === '/comment/hot') {
+    const postId = toString(params.postId)
+    const rows = commentsByPost.get(postId) ?? []
+    const limit = Math.max(1, toNumber(params.limit, 10))
+    const preloadReplyLimit = Math.max(0, toNumber(params.preloadReplyLimit, 2))
+    return createResponse({
+      pinned: rows[0] ? mapRootCommentRow(rows[0], preloadReplyLimit) : null,
+      items: rows.slice(1, 1 + limit).map((item) => mapRootCommentRow(item, preloadReplyLimit))
+    })
+  }
+
+  if (path === '/interact/reaction/state') {
+    const postId = toString(params.targetId)
+    const post = postRecords.get(postId)
+    if (!post) {
+      throw new Error(`No UI mock post for reaction state: ${postId}`)
+    }
+    const userId = requireCurrentUserId()
+    return createResponse({
+      state: post.likedBy.has(userId),
+      currentCount: post.likeCount
+    })
+  }
+
+  if (path.startsWith('/content/publish/attempt/')) {
+    const attemptId = decodeURIComponent(path.slice('/content/publish/attempt/'.length))
+    const attempt = publishAttempts.get(attemptId)
+    if (!attempt) {
+      throw new Error(`No UI mock publish attempt for ${attemptId}`)
+    }
+    return createResponse(attempt)
+  }
+
+  if (path.startsWith('/content/schedule/')) {
+    const taskId = decodeURIComponent(path.slice('/content/schedule/'.length))
+    const task = scheduleTasks.get(taskId)
+    if (!task) {
+      throw new Error(`No UI mock schedule task for ${taskId}`)
+    }
+    return createResponse({
+      taskId: task.taskId,
+      userId: task.userId,
+      scheduleTime: task.scheduleTime,
+      status: task.status,
+      retryCount: task.retryCount,
+      isCanceled: task.isCanceled,
+      lastError: task.lastError,
+      alarmSent: task.alarmSent,
+      contentData: task.contentData
+    })
+  }
+
+  if (path.endsWith('/history')) {
+    const postId = decodeURIComponent(path.slice('/content/'.length, -'/history'.length))
+    const offset = Math.max(0, toNumber(params.offset, 0))
+    const limit = Math.max(1, toNumber(params.limit, 20))
+    const versions = contentHistories.get(postId) ?? []
+    const items = versions.slice(offset, offset + limit)
+    const nextCursor = offset + limit < versions.length ? offset + limit : null
+    return createResponse({
+      versions: items,
+      nextCursor
+    })
   }
 
   if (path.startsWith('/content/')) {
@@ -560,6 +906,7 @@ const handleGet = (path: string, params: Record<string, unknown>) => {
     const paged = all.slice(after, after + size)
     const items = paged.map((post) => {
       const author = pickUser(post.authorId)
+      const viewerId = currentUserId
       return {
         id: post.postId,
         title: post.title,
@@ -569,7 +916,7 @@ const handleGet = (path: string, params: Record<string, unknown>) => {
         authorAvatar: author.avatarUrl,
         authorNickname: author.nickname,
         likeCount: post.likeCount,
-        liked: post.likedBy.has(currentUserId)
+        liked: viewerId ? post.likedBy.has(viewerId) : false
       }
     })
     const nextAfter = after + size < all.length ? String(after + size) : null
@@ -622,7 +969,7 @@ const handleGet = (path: string, params: Record<string, unknown>) => {
   }
 
   if (path === '/relation/followers' || path === '/relation/following') {
-    const targetUserId = toString(params.userId, currentUserId)
+    const targetUserId = toString(params.userId, currentUserId ?? '')
     const cursor = toNumber(params.cursor, 0)
     const limit = Math.max(1, toNumber(params.limit, 20))
 
@@ -651,12 +998,13 @@ const handleGet = (path: string, params: Record<string, unknown>) => {
   }
 
   if (path === '/user/profile/page') {
-    const targetUserId = toString(params.targetUserId, currentUserId)
+    const targetUserId = toString(params.targetUserId, currentUserId ?? '')
     const user = pickUser(targetUserId)
+    const viewerId = currentUserId
     const relation = {
       followCount: followCountOf(targetUserId),
       followerCount: followerCountOf(targetUserId),
-      isFollow: isFollowing(currentUserId, targetUserId)
+      isFollow: viewerId ? isFollowing(viewerId, targetUserId) : false
     }
     const risk = risks.get(targetUserId) ?? { status: 'NORMAL', capabilities: ['POST', 'COMMENT'] }
     return createResponse({
@@ -673,7 +1021,7 @@ const handleGet = (path: string, params: Record<string, unknown>) => {
   }
 
   if (path === '/user/profile') {
-    const targetUserId = toString(params.targetUserId, currentUserId)
+    const targetUserId = toString(params.targetUserId, currentUserId ?? '')
     const user = pickUser(targetUserId)
     return createResponse({
       userId: user.userId,
@@ -685,7 +1033,7 @@ const handleGet = (path: string, params: Record<string, unknown>) => {
   }
 
   if (path === '/user/me/profile') {
-    const user = pickUser(currentUserId)
+    const user = pickUser(requireCurrentUserId())
     return createResponse({
       userId: user.userId,
       username: user.username,
@@ -696,7 +1044,7 @@ const handleGet = (path: string, params: Record<string, unknown>) => {
   }
 
   if (path === '/risk/user/status') {
-    return createResponse(risks.get(currentUserId) ?? { status: 'NORMAL', capabilities: ['POST', 'COMMENT'] })
+    return createResponse(risks.get(requireCurrentUserId()) ?? { status: 'NORMAL', capabilities: ['POST', 'COMMENT'] })
   }
 
   throw new Error(`No UI mock handler for [GET] ${path}`)
@@ -745,7 +1093,28 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
     })
   }
 
+  if (path === '/auth/logout') {
+    currentUserId = null
+    return createResponse(null)
+  }
+
+  if (path === '/auth/password/change') {
+    const userId = requireCurrentUserId()
+    const oldPassword = toString(body.oldPassword)
+    const nextPassword = toString(body.newPassword)
+    const currentPassword = passwordByUserId.get(userId)
+    if (!nextPassword) {
+      throw new Error('mock password change requires newPassword')
+    }
+    if (currentPassword !== oldPassword) {
+      throw new Error('mock password change rejected old password')
+    }
+    passwordByUserId.set(userId, nextPassword)
+    return createResponse(null)
+  }
+
   if (path === '/interact/reaction') {
+    const userId = requireCurrentUserId()
     const postId = toString(body.targetId)
     const action = toString(body.action).toUpperCase()
     const post = postRecords.get(postId)
@@ -753,12 +1122,12 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
       throw new Error(`No UI mock post for reaction: ${postId}`)
     }
     if (action === 'ADD') {
-      if (!post.likedBy.has(currentUserId)) {
-        post.likedBy.add(currentUserId)
+      if (!post.likedBy.has(userId)) {
+        post.likedBy.add(userId)
         post.likeCount += 1
       }
     } else {
-      if (post.likedBy.delete(currentUserId)) {
+      if (post.likedBy.delete(userId)) {
         post.likeCount = Math.max(0, post.likeCount - 1)
       }
     }
@@ -770,6 +1139,7 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
   }
 
   if (path === '/interact/comment') {
+    const userId = requireCurrentUserId()
     const postId = toString(body.postId)
     const content = toString(body.content, '').trim()
     if (!postId || !content) {
@@ -786,7 +1156,7 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
         root: {
           commentId,
           postId,
-          userId: currentUserId,
+          userId,
           rootId: commentId,
           parentId: '',
           replyToId: '',
@@ -803,7 +1173,7 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
         root.replies.push({
           commentId,
           postId: root.root.postId,
-          userId: currentUserId,
+          userId,
           rootId: root.root.commentId,
           parentId: root.root.commentId,
           replyToId: root.root.userId,
@@ -823,6 +1193,21 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
     })
   }
 
+  if (path === '/interact/comment/pin') {
+    requireCurrentUserId()
+    const postId = toString(body.postId)
+    const commentId = toString(body.commentId)
+    const rows = commentsByPost.get(postId) ?? []
+    const targetIndex = rows.findIndex((item) => item.root.commentId === commentId)
+    if (targetIndex < 0) {
+      throw new Error(`No UI mock root comment for pin: ${commentId}`)
+    }
+    const [target] = rows.splice(targetIndex, 1)
+    rows.unshift(target)
+    commentsByPost.set(postId, rows)
+    return createOperationResult(commentId, 'PINNED')
+  }
+
   if (path === '/notification/read') {
     const id = toString(body.notificationId)
     const target = notifications.find((item) => item.notificationId === id)
@@ -840,18 +1225,19 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
   }
 
   if (path === '/relation/state/batch') {
+    const viewerId = requireCurrentUserId()
     const ids = Array.isArray(body.targetUserIds) ? body.targetUserIds : []
-    const followingUserIds = ids
-      .map((id) => toString(id))
-      .filter((id) => id && isFollowing(currentUserId, id))
+    const normalizedIds = ids.map((id) => toString(id)).filter(Boolean)
+    const followingUserIds = normalizedIds.filter((id) => isFollowing(viewerId, id))
+    const blockedUserIds = normalizedIds.filter((id) => blockedEdges.has(edgeKey(viewerId, id)))
     return createResponse({
       followingUserIds,
-      blockedUserIds: []
+      blockedUserIds
     })
   }
 
   if (path === '/relation/follow' || path === '/relation/unfollow') {
-    const sourceId = toString(body.sourceId, currentUserId)
+    const sourceId = toString(body.sourceId, requireCurrentUserId())
     const targetId = toString(body.targetId)
     const key = edgeKey(sourceId, targetId)
     if (!targetId) {
@@ -866,16 +1252,33 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
     return createResponse({ success: true })
   }
 
+  if (path === '/relation/block') {
+    const sourceId = toString(body.sourceId, requireCurrentUserId())
+    const targetId = toString(body.targetId)
+    if (!targetId) {
+      throw new Error('mock relation block requires targetId')
+    }
+    blockedEdges.add(edgeKey(sourceId, targetId))
+    return createOperationResult(targetId, 'BLOCKED')
+  }
+
   if (path === '/user/me/profile') {
-    const user = pickUser(currentUserId)
+    const userId = requireCurrentUserId()
+    const user = pickUser(userId)
     const nickname = toString(body.nickname, user.nickname).trim()
     const avatarUrl = toString(body.avatarUrl, user.avatarUrl).trim()
-    users.set(currentUserId, {
+    users.set(userId, {
       ...user,
       nickname: nickname || user.nickname,
       avatarUrl: avatarUrl || user.avatarUrl
     })
     return createResponse({ success: true, status: 'UPDATED' })
+  }
+
+  if (path === '/user/me/privacy') {
+    const userId = requireCurrentUserId()
+    privacySettings.set(userId, Boolean(body.needApproval))
+    return createOperationResult(userId, 'UPDATED')
   }
 
   if (path === '/risk/appeals') {
@@ -893,10 +1296,13 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
   }
 
   if (path === '/content/publish') {
-    const title = toString(body.title, 'Untitled')
-    const text = toString(body.text, '')
-    const authorId = toString(body.userId, currentUserId)
-    const postId = `post-mock-${publishSeq++}`
+    requireCurrentUserId()
+    const requestedPostId = toString(body.postId)
+    const postId = requestedPostId || `post-mock-${publishSeq++}`
+    const existing = postRecords.get(postId)
+    const title = toString(body.title, existing?.title ?? 'Untitled')
+    const text = toString(body.text, existing?.text ?? '')
+    const authorId = toString(body.userId, existing?.authorId ?? requireCurrentUserId())
     const mediaIds = parseMediaIds(
       (() => {
         const mediaInfo = body.mediaInfo
@@ -911,29 +1317,115 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
         return []
       })()
     )
-    const mediaUrls = mediaIds.map((id, index) => `https://picsum.photos/seed/${id || postId}-${index}/1200/900`)
+    const mediaUrls =
+      body.mediaInfo === undefined
+        ? [...(existing?.mediaUrls ?? [])]
+        : mediaIds.map((id, index) => `https://picsum.photos/seed/${id || postId}-${index}/1200/900`)
+    const versionNum = existing ? existing.versionNum + 1 : 1
+    const publishTime = Date.now()
 
     postRecords.set(postId, {
       postId,
       authorId,
       title,
-      summary: text.slice(0, 120),
+      summary: text ? text.slice(0, 120) : existing?.summary ?? '',
       text,
       mediaUrls,
-      locationInfo: toString(body.location, 'Mock City'),
-      publishTime: Date.now(),
-      likeCount: 0,
-      likedBy: new Set(),
-      tags: ['published', 'mock']
+      locationInfo: toString(body.location, existing?.locationInfo ?? 'Mock City'),
+      publishTime,
+      versionNum,
+      likeCount: existing?.likeCount ?? 0,
+      likedBy: existing?.likedBy ?? new Set(),
+      tags: existing?.tags ?? ['published', 'mock']
     })
-    timelineOrder.unshift(postId)
+    if (!timelineOrder.includes(postId)) {
+      timelineOrder.unshift(postId)
+    }
+    upsertHistoryVersion(postId, title, text, publishTime)
+
+    const attemptId = `attempt-${postId}-${publishSeq++}`
+    publishAttempts.set(attemptId, {
+      attemptId,
+      postId,
+      userId: authorId,
+      idempotentToken: `mock-idempotent-${postId}`,
+      transcodeJobId: `mock-transcode-${postId}`,
+      attemptStatus: 2,
+      riskStatus: 1,
+      transcodeStatus: 2,
+      publishedVersionNum: versionNum,
+      errorCode: '',
+      errorMessage: '',
+      createTime: publishTime,
+      updateTime: publishTime
+    })
 
     return createResponse({
       postId,
-      attemptId: `attempt-${postId}`,
-      versionNum: 1,
+      attemptId,
+      versionNum,
       status: 'PUBLISHED'
     })
+  }
+
+  if (path === '/content/schedule') {
+    const userId = requireCurrentUserId()
+    const postId = toString(body.postId)
+    const taskId = `schedule-${scheduleSeq++}`
+    const scheduleTime = toNumber(body.publishTime, Date.now())
+
+    if (!postRecords.has(postId)) {
+      throw new Error(`No UI mock content for schedule postId: ${postId}`)
+    }
+
+    scheduleTasks.set(taskId, {
+      taskId,
+      postId,
+      userId,
+      scheduleTime,
+      status: 1,
+      retryCount: 0,
+      isCanceled: 0,
+      lastError: '',
+      alarmSent: 0,
+      contentData: buildScheduleContentData(postId)
+    })
+
+    return createResponse({
+      taskId,
+      postId,
+      status: 'SCHEDULED'
+    })
+  }
+
+  if (path === '/content/schedule/cancel') {
+    requireCurrentUserId()
+    const taskId = toString(body.taskId)
+    const task = scheduleTasks.get(taskId)
+    if (!task) {
+      throw new Error(`No UI mock schedule task for ${taskId}`)
+    }
+    task.isCanceled = 1
+    task.status = 0
+    return createOperationResult(taskId, 'CANCELED')
+  }
+
+  if (path.endsWith('/rollback')) {
+    requireCurrentUserId()
+    const postId = decodeURIComponent(path.slice('/content/'.length, -'/rollback'.length))
+    const targetVersionId = toString(body.targetVersionId)
+    const versions = contentHistories.get(postId) ?? []
+    const target = versions.find((item) => item.versionId === targetVersionId)
+    const post = postRecords.get(postId)
+    if (!target || !post) {
+      throw new Error(`No UI mock rollback target for ${postId}`)
+    }
+    post.title = target.title
+    post.text = target.content
+    post.summary = target.content.slice(0, 120)
+    post.versionNum += 1
+    upsertHistoryVersion(postId, post.title, post.text)
+    return createOperationResult(postId, 'ROLLED_BACK')
   }
 
   throw new Error(`No UI mock handler for [POST] ${path}`)
@@ -942,7 +1434,7 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
 const handlePut = (path: string, body: Record<string, unknown>) => {
   if (path === '/content/draft') {
     const draftId = toString(body.draftId, `draft-${draftSeq++}`)
-    const userId = toString(body.userId, currentUserId)
+    const userId = toString(body.userId, requireCurrentUserId())
     drafts.set(draftId, {
       draftId,
       userId,
@@ -954,6 +1446,85 @@ const handlePut = (path: string, body: Record<string, unknown>) => {
   }
 
   throw new Error(`No UI mock handler for [PUT] ${path}`)
+}
+
+const handlePatch = (path: string, body: Record<string, unknown>) => {
+  if (path.startsWith('/content/draft/')) {
+    const draftId = decodeURIComponent(path.slice('/content/draft/'.length))
+    const draft = drafts.get(draftId)
+    if (!draft) {
+      throw new Error(`No UI mock draft for ${draftId}`)
+    }
+
+    draft.title = toString(body.title, draft.title)
+    draft.contentText = toString(body.diffContent, draft.contentText)
+    const mediaIds = parseMediaIds(body.mediaIds)
+    if (mediaIds.length > 0) {
+      draft.mediaIds = mediaIds
+    }
+
+    return createResponse({
+      serverVersion: String(toNumber(body.clientVersion, 0) + 1),
+      syncTime: Date.now()
+    })
+  }
+
+  if (path === '/content/schedule') {
+    requireCurrentUserId()
+    const taskId = toString(body.taskId)
+    const task = scheduleTasks.get(taskId)
+    if (!task) {
+      throw new Error(`No UI mock schedule task for ${taskId}`)
+    }
+
+    if (body.publishTime !== undefined) {
+      task.scheduleTime = toNumber(body.publishTime, task.scheduleTime)
+    }
+    if (body.contentData !== undefined) {
+      task.contentData = toString(body.contentData, task.contentData)
+    }
+    task.status = 1
+
+    return createResponse({
+      success: true,
+      status: 'UPDATED'
+    })
+  }
+
+  throw new Error(`No UI mock handler for [PATCH] ${path}`)
+}
+
+const handleDelete = (path: string) => {
+  if (path.startsWith('/comment/')) {
+    requireCurrentUserId()
+    const commentId = decodeURIComponent(path.slice('/comment/'.length))
+    if (!removeCommentById(commentId)) {
+      throw new Error(`No UI mock comment for ${commentId}`)
+    }
+    return createOperationResult(commentId, 'DELETED')
+  }
+
+  if (path.startsWith('/content/')) {
+    requireCurrentUserId()
+    const postId = decodeURIComponent(path.slice('/content/'.length))
+    if (!postRecords.delete(postId)) {
+      throw new Error(`No UI mock content for ${postId}`)
+    }
+    const index = timelineOrder.indexOf(postId)
+    if (index >= 0) {
+      timelineOrder.splice(index, 1)
+    }
+    drafts.delete(postId)
+    contentHistories.delete(postId)
+    for (const [taskId, task] of scheduleTasks.entries()) {
+      if (task.postId === postId) {
+        scheduleTasks.delete(taskId)
+      }
+    }
+    return createOperationResult(postId, 'DELETED')
+  }
+
+  throw new Error(`No UI mock handler for [DELETE] ${path}`)
 }
 
 export const mockRequest = async <T>(
@@ -981,9 +1552,11 @@ export const mockRequest = async <T>(
       result = handlePut(path, body)
       break
     case 'patch':
-      throw new Error(`No UI mock handler for [PATCH] ${path}`)
+      result = handlePatch(path, body)
+      break
     case 'delete':
-      throw new Error(`No UI mock handler for [DELETE] ${path}`)
+      result = handleDelete(path)
+      break
     default:
       throw new Error(`No UI mock handler for [${method.toUpperCase()}] ${path}`)
   }

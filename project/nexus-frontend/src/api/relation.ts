@@ -85,6 +85,10 @@ export const unfollowUser = (data: FollowRequestDTO): Promise<OperationResultDTO
   return http.post<OperationResultDTO>('/relation/unfollow', data);
 };
 
+export const blockUser = (data: FollowRequestDTO): Promise<OperationResultDTO> => {
+  return http.post<OperationResultDTO>('/relation/block', data);
+};
+
 export const checkRelationState = (
   targetUserIds: string[]
 ): Promise<RelationStateBatchResponseDTO> => {

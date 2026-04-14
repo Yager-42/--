@@ -20,19 +20,12 @@ public class LikeUnlikeMqConfig {
 
     public static final String DLX_EXCHANGE = EXCHANGE + ".dlx";
 
-    public static final String DLX_RK_PERSIST = "like.unlike.persist.dlx";
     public static final String DLX_RK_COUNT = "like.unlike.count.dlx";
 
-    public static final String DLQ_PERSIST = "like.unlike.persist.dlq";
     public static final String DLQ_COUNT = "like.unlike.count.dlq";
 
     public static final String RK_LIKE = "Like";
     public static final String RK_UNLIKE = "Unlike";
-
-    /**
-     * ConsumerGroup A: persist like relation to DB.
-     */
-    public static final String QUEUE_PERSIST = "like.unlike.persist.queue";
 
     /**
      * ConsumerGroup B: aggregate counts (BufferTrigger).
@@ -50,14 +43,6 @@ public class LikeUnlikeMqConfig {
     }
 
     @Bean
-    public Queue likeUnlikePersistQueue() {
-        Map<String, Object> args = new HashMap<>();
-        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
-        args.put("x-dead-letter-routing-key", DLX_RK_PERSIST);
-        return new Queue(QUEUE_PERSIST, true, false, false, args);
-    }
-
-    @Bean
     public Queue likeUnlikeCountQueue() {
         Map<String, Object> args = new HashMap<>();
         args.put("x-dead-letter-exchange", DLX_EXCHANGE);
@@ -66,33 +51,13 @@ public class LikeUnlikeMqConfig {
     }
 
     @Bean
-    public Queue likeUnlikePersistDlq() {
-        return new Queue(DLQ_PERSIST, true);
-    }
-
-    @Bean
     public Queue likeUnlikeCountDlq() {
         return new Queue(DLQ_COUNT, true);
     }
 
     @Bean
-    public Binding likeUnlikePersistDlqBinding(Queue likeUnlikePersistDlq, DirectExchange likeUnlikeDlxExchange) {
-        return BindingBuilder.bind(likeUnlikePersistDlq).to(likeUnlikeDlxExchange).with(DLX_RK_PERSIST);
-    }
-
-    @Bean
     public Binding likeUnlikeCountDlqBinding(Queue likeUnlikeCountDlq, DirectExchange likeUnlikeDlxExchange) {
         return BindingBuilder.bind(likeUnlikeCountDlq).to(likeUnlikeDlxExchange).with(DLX_RK_COUNT);
-    }
-
-    @Bean
-    public Binding likeUnlikePersistLikeBinding(Queue likeUnlikePersistQueue, DirectExchange likeUnlikeExchange) {
-        return BindingBuilder.bind(likeUnlikePersistQueue).to(likeUnlikeExchange).with(RK_LIKE);
-    }
-
-    @Bean
-    public Binding likeUnlikePersistUnlikeBinding(Queue likeUnlikePersistQueue, DirectExchange likeUnlikeExchange) {
-        return BindingBuilder.bind(likeUnlikePersistQueue).to(likeUnlikeExchange).with(RK_UNLIKE);
     }
 
     @Bean

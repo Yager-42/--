@@ -16,6 +16,7 @@ import cn.nexus.api.auth.dto.AuthAdminListResponseDTO;
 import cn.nexus.api.auth.dto.AuthGrantAdminRequestDTO;
 import cn.nexus.api.auth.dto.AuthMeResponseDTO;
 import cn.nexus.api.auth.dto.AuthPasswordLoginRequestDTO;
+import cn.nexus.api.auth.dto.AuthRefreshRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterResponseDTO;
 import cn.nexus.api.auth.dto.AuthSmsLoginRequestDTO;
@@ -36,6 +37,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import cn.dev33.satoken.session.SaSession;
 
 class AuthControllerTest {
 
@@ -89,7 +91,9 @@ class AuthControllerTest {
                 .build());
 
         try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
+            SaSession issuedRefreshSession = Mockito.mock(SaSession.class);
             stpUtil.when(StpUtil::getTokenValue).thenReturn("token-88");
+            stpUtil.when(() -> StpUtil.getTokenSessionByToken(Mockito.startsWith("rt_"))).thenReturn(issuedRefreshSession);
 
             Response<AuthTokenResponseDTO> response = controller.passwordLogin(AuthPasswordLoginRequestDTO.builder()
                     .phone("13800138000")
@@ -115,7 +119,9 @@ class AuthControllerTest {
                 .build());
 
         try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
+            SaSession issuedRefreshSession = Mockito.mock(SaSession.class);
             stpUtil.when(StpUtil::getTokenValue).thenReturn("token-89");
+            stpUtil.when(() -> StpUtil.getTokenSessionByToken(Mockito.startsWith("rt_"))).thenReturn(issuedRefreshSession);
 
             Response<AuthTokenResponseDTO> response = controller.smsLogin(AuthSmsLoginRequestDTO.builder()
                     .phone("13800138001")
@@ -125,7 +131,35 @@ class AuthControllerTest {
             assertEquals(ResponseCode.SUCCESS.getCode(), response.getCode());
             assertEquals(89L, response.getData().getUserId());
             assertEquals("token-89", response.getData().getToken());
+            assertNotNull(response.getData().getRefreshToken());
             stpUtil.verify(() -> StpUtil.login(89L));
+        }
+    }
+
+    @Test
+    void refresh_shouldIssueNewTokenWhenRefreshTokenValid() {
+        AuthService authService = Mockito.mock(AuthService.class);
+        AuthController controller = new AuthController(authService);
+        when(authService.me(90L)).thenReturn(AuthMeVO.builder().userId(90L).phone("13800138090").build());
+
+        try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
+            SaSession session = Mockito.mock(SaSession.class);
+            SaSession issuedRefreshSession = Mockito.mock(SaSession.class);
+            stpUtil.when(() -> StpUtil.getTokenSessionByToken("rt-90")).thenReturn(session);
+            stpUtil.when(() -> StpUtil.getTokenSessionByToken(Mockito.startsWith("rt_"))).thenReturn(issuedRefreshSession);
+            when(session.get("refreshUserId")).thenReturn("90");
+            stpUtil.when(StpUtil::getTokenValue).thenReturn("access-90");
+
+            Response<AuthTokenResponseDTO> response = controller.refresh(AuthRefreshRequestDTO.builder()
+                    .refreshToken("rt-90")
+                    .build());
+
+            assertEquals(ResponseCode.SUCCESS.getCode(), response.getCode());
+            assertEquals(90L, response.getData().getUserId());
+            assertEquals("access-90", response.getData().getToken());
+            assertNotNull(response.getData().getRefreshToken());
+            stpUtil.verify(() -> StpUtil.logoutByTokenValue("rt-90"));
+            stpUtil.verify(() -> StpUtil.login(90L));
         }
     }
 

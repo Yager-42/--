@@ -1,132 +1,82 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { markAsRead, type NotificationDTO } from '@/api/notification'
 import { useRouter } from 'vue-router'
 
 const props = defineProps<{
-  notification: NotificationDTO;
-}>();
+  notification: NotificationDTO
+}>()
 
-const router = useRouter();
+const emit = defineEmits<{
+  (event: 'read', notificationId: string): void
+}>()
 
-const handleClick = async () => {
-  if (!props.notification.isRead) {
+const router = useRouter()
+
+const typeText = computed(() => {
+  switch (props.notification.type) {
+    case 'LIKE':
+      return '点赞了你的内容'
+    case 'COMMENT':
+      return '评论了你'
+    case 'FOLLOW':
+      return '关注了你'
+    default:
+      return '向你发送了一条通知'
+  }
+})
+
+const timeText = computed(() => {
+  if (!props.notification.createTime) return '刚刚'
+  return new Date(props.notification.createTime).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+})
+
+const openTarget = async () => {
+  if (props.notification.hasUnread) {
     try {
-      await markAsRead(props.notification.notificationId);
-      props.notification.isRead = true;
-    } catch (err) {
-      console.error('Mark as read failed', err);
+      await markAsRead(props.notification.notificationId)
+      emit('read', props.notification.notificationId)
+    } catch (error) {
+      console.error('mark as read failed', error)
     }
   }
-  
-  // Navigation logic
+
+  if (props.notification.type === 'FOLLOW' && props.notification.senderId) {
+    void router.push(`/user/${props.notification.senderId}`)
+    return
+  }
+
   if (props.notification.targetId) {
-    router.push(`/content/${props.notification.targetId}`);
+    void router.push(`/content/${props.notification.targetId}`)
+    return
   }
-}
 
-const getActionText = (type: string) => {
-  switch (type) {
-    case 'LIKE': return '赞了你的帖子';
-    case 'COMMENT': return '评论了你';
-    case 'FOLLOW': return '开始关注你';
-    default: return '发来了通知';
-  }
-}
-
-const getActionIcon = (type: string) => {
-  switch (type) {
-    case 'LIKE': return '❤️';
-    case 'COMMENT': return '💬';
-    case 'FOLLOW': return '👤';
-    default: return '🔔';
-  }
+  void router.push('/notifications')
 }
 </script>
 
 <template>
-  <div class="notification-item" :class="{ 'unread': !notification.isRead }" @click="handleClick">
-    <div class="unread-dot"></div>
-    <img :src="notification.senderAvatar || 'https://via.placeholder.com/80'" class="sender-avatar" />
-    <div class="content">
-      <div class="main-text">
-        <span class="sender-name">{{ notification.senderName }}</span>
-        <span class="action-text text-secondary">{{ getActionText(notification.type) }}</span>
-      </div>
-      <p v-if="notification.content" class="action-body text-body">{{ notification.content }}</p>
-      <span class="time text-secondary">刚刚</span>
+  <article
+    class="grid min-h-[96px] cursor-pointer grid-cols-[3rem,minmax(0,1fr),auto] items-center gap-4 rounded-[28px] border p-4 transition"
+    :class="notification.hasUnread ? 'border-outline-variant/25 bg-surface-container-lowest' : 'border-outline-variant/10 bg-white/75'"
+    @click="openTarget"
+  >
+    <img :src="notification.senderAvatar || 'https://via.placeholder.com/80'" class="h-12 w-12 rounded-full object-cover" alt="avatar">
+
+    <div class="grid min-w-0 gap-1.5">
+      <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{{ timeText }}</p>
+      <p class="flex flex-wrap gap-2 leading-7 text-on-surface">
+        <strong class="font-semibold">{{ notification.senderName }}</strong>
+        <span>{{ typeText }}</span>
+      </p>
+      <p v-if="notification.content" class="line-clamp-2 text-sm leading-7 text-on-surface-variant">{{ notification.content }}</p>
     </div>
-    <div class="action-icon">{{ getActionIcon(notification.type) }}</div>
-  </div>
+
+    <span v-if="notification.hasUnread" class="h-2.5 w-2.5 rounded-full bg-primary" aria-label="未读" />
+  </article>
 </template>
-
-<style scoped>
-.notification-item {
-  display: flex;
-  align-items: center;
-  padding: 16px;
-  background: white;
-  margin-bottom: 8px;
-  border-radius: 16px;
-  position: relative;
-  transition: background 0.2s ease;
-  border: 0.5px solid rgba(0,0,0,0.05);
-}
-
-.notification-item:active {
-  background: #f5f5f7;
-}
-
-.unread-dot {
-  width: 6px;
-  height: 6px;
-  background: var(--apple-accent);
-  border-radius: 50%;
-  position: absolute;
-  left: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.unread .unread-dot {
-  opacity: 1;
-}
-
-.sender-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  margin-right: 12px;
-  object-fit: cover;
-}
-
-.content {
-  flex: 1;
-}
-
-.sender-name {
-  font-weight: 600;
-  margin-right: 6px;
-}
-
-.main-text {
-  font-size: 15px;
-}
-
-.action-body {
-  font-size: 14px;
-  margin-top: 4px;
-  line-height: 1.4;
-}
-
-.time {
-  font-size: 12px;
-  margin-top: 4px;
-}
-
-.action-icon {
-  font-size: 16px;
-  opacity: 0.6;
-}
-</style>

@@ -26,6 +26,7 @@ class AuthApiContractTest {
                 "logout",
                 "me",
                 "passwordLogin",
+                "refresh",
                 "register",
                 "revokeAdmin",
                 "sendSms",
@@ -36,6 +37,7 @@ class AuthApiContractTest {
         assertTrue(methodNames.contains("register"));
         assertTrue(methodNames.contains("passwordLogin"));
         assertTrue(methodNames.contains("smsLogin"));
+        assertTrue(methodNames.contains("refresh"));
         assertTrue(methodNames.contains("changePassword"));
         assertTrue(methodNames.contains("grantAdmin"));
         assertTrue(methodNames.contains("revokeAdmin"));

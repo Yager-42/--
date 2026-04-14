@@ -1,17 +1,19 @@
 package cn.nexus.domain.social.service;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
-import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.ArrayList;
@@ -36,10 +38,10 @@ import org.springframework.stereotype.Service;
 public class FeedCardAssembleService {
 
     private final IFeedCardRepository feedCardRepository;
-    private final IReactionCachePort reactionCachePort;
+    private final IObjectCounterPort objectCounterPort;
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
-    private final IReactionRepository reactionRepository;
+    private final IReactionCachePort reactionCachePort;
     private final RelationQueryService relationQueryService;
     private final IFeedFollowSeenRepository feedFollowSeenRepository;
 
@@ -76,12 +78,7 @@ public class FeedCardAssembleService {
         Set<Long> seenSet = Set.of();
         if (userId != null) {
             // 个性化状态只在登录用户场景计算；匿名流量直接跳过。
-            ReactionTargetVO template = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(0L)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            likedSet = reactionRepository.batchExists(template, userId, candidateIds);
+            likedSet = loadLikedSet(userId, candidateIds);
             followedSet = relationQueryService.batchFollowing(userId, new ArrayList<>(authorMap.keySet()));
             seenSet = feedFollowSeenRepository.batchSeen(userId, candidateIds);
         }
@@ -158,21 +155,21 @@ public class FeedCardAssembleService {
             return Map.of();
         }
 
-        List<ReactionTargetVO> targets = new ArrayList<>(candidateIds.size());
+        List<ObjectCounterTarget> targets = new ArrayList<>(candidateIds.size());
         for (Long postId : candidateIds) {
             if (postId == null) {
                 continue;
             }
-            targets.add(ReactionTargetVO.builder()
+            targets.add(ObjectCounterTarget.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(postId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .counterType(ObjectCounterType.LIKE)
                     .build());
         }
 
-        Map<String, Long> countByTag = reactionCachePort.batchGetCount(targets);
+        Map<String, Long> countByTag = objectCounterPort.batchGetCount(targets);
         Map<Long, Long> likeCountMap = new HashMap<>(candidateIds.size());
-        for (ReactionTargetVO target : targets) {
+        for (ObjectCounterTarget target : targets) {
             Long count = countByTag.get(target.hashTag());
             likeCountMap.put(target.getTargetId(), count == null ? 0L : count);
         }
@@ -198,6 +195,27 @@ public class FeedCardAssembleService {
             }
         }
         return authorMap;
+    }
+
+    private Set<Long> loadLikedSet(Long userId, List<Long> candidateIds) {
+        if (userId == null || candidateIds == null || candidateIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> likedSet = new LinkedHashSet<>();
+        for (Long postId : candidateIds) {
+            if (postId == null) {
+                continue;
+            }
+            ReactionTargetVO target = ReactionTargetVO.builder()
+                    .targetType(ReactionTargetTypeEnumVO.POST)
+                    .targetId(postId)
+                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .build();
+            if (reactionCachePort.getState(userId, target)) {
+                likedSet.add(postId);
+            }
+        }
+        return likedSet;
     }
 
 }

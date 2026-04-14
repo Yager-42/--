@@ -1,0 +1,332 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: nexus_social
+      TZ: Asia/Shanghai
+    command:
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./nexus/docs/nexus_final_mysql_schema.sql:/docker-entrypoint-initdb.d/00-nexus-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  mysql-extra-init:
+    image: mysql:8.4
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./docker/mysql/init-extra.sh:/init-extra.sh:ro
+      - ./nexus/docs/nexus_final_mysql_schema.sql:/schema/nexus-final-schema.sql:ro
+      - ./nexus/docs/migrations/20260409_01_drop_legacy_reaction_tables.sql:/schema/20260409_01_drop_legacy_reaction_tables.sql:ro
+      - ./docker/hotkey/init/schema.sql:/schema/hotkey-schema.sql:ro
+    entrypoint: ["bash", "/init-extra.sh"]
+    restart: "no"
+
+  redis:
+    image: redis/redis-stack-server:latest
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  gorse-master:
+    build:
+      context: .
+      dockerfile: docker/gorse/Dockerfile
+      target: master
+    image: nexus-gorse-master:0.5.6
+    restart: unless-stopped
+    depends_on:
+      mysql-extra-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command: >
+      -c /etc/gorse/config.toml
+      --log-path /var/log/gorse/master.log
+    ports:
+      - "8086:8086"
+      - "8088:8088"
+    volumes:
+      - ./docker/gorse/config.toml:/etc/gorse/config.toml:ro
+      - gorse-log:/var/log/gorse
+      - gorse-master-data:/var/lib/gorse
+
+  gorse-server:
+    build:
+      context: .
+      dockerfile: docker/gorse/Dockerfile
+      target: server
+    image: nexus-gorse-server:0.5.6
+    restart: unless-stopped
+    depends_on:
+      - gorse-master
+    command: >
+      --master-host gorse-master --master-port 8086
+      --http-host 0.0.0.0 --http-port 8087
+      --log-path /var/log/gorse/server.log
+    ports:
+      - "8087:8087"
+    volumes:
+      - gorse-log:/var/log/gorse
+      - gorse-server-data:/var/lib/gorse
+
+  gorse-worker:
+    build:
+      context: .
+      dockerfile: docker/gorse/Dockerfile
+      target: worker
+    image: nexus-gorse-worker:0.5.6
+    restart: unless-stopped
+    depends_on:
+      - gorse-master
+    command: >
+      --master-host gorse-master --master-port 8086
+      --http-host 0.0.0.0 --http-port 8089
+      --log-path /var/log/gorse/worker.log
+    ports:
+      - "8089:8089"
+    volumes:
+      - gorse-log:/var/log/gorse
+      - gorse-worker-data:/var/lib/gorse
+
+  rabbitmq:
+    build:
+      context: .
+      dockerfile: docker/rabbitmq/Dockerfile
+    image: nexus-rabbitmq:3.13.7-delayed
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  rabbitmq-init:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      sh -c "
+      set -eu;
+      until curl --silent --fail --show-error -u guest:guest http://rabbitmq:15672/api/overview >/dev/null; do sleep 2; done;
+      curl --fail --silent --show-error -u guest:guest -H 'content-type:application/json' -X PUT
+      http://rabbitmq:15672/api/exchanges/%2f/search.cdc.raw.exchange
+      -d '{\"type\":\"direct\",\"durable\":true,\"auto_delete\":false,\"internal\":false,\"arguments\":{}}';
+      curl --fail --silent --show-error -u guest:guest -H 'content-type:application/json' -X PUT
+      http://rabbitmq:15672/api/queues/%2f/search.cdc.raw.queue
+      -d '{\"durable\":true,\"auto_delete\":false,\"arguments\":{}}';
+      curl --fail --silent --show-error -u guest:guest -H 'content-type:application/json' -X POST
+      http://rabbitmq:15672/api/bindings/%2f/e/search.cdc.raw.exchange/q/search.cdc.raw.queue
+      -d '{\"routing_key\":\"search.cdc.raw\",\"arguments\":{}}';
+      curl --fail --silent --show-error -u guest:guest -H 'content-type:application/json' -X POST
+      http://rabbitmq:15672/api/bindings/%2f/e/search.cdc.raw.exchange/q/search.cdc.raw.queue
+      -d '{\"routing_key\":\"search_cdc_raw\",\"arguments\":{}}';
+      "
+    restart: "no"
+
+  canal-server:
+    image: canal/canal-server:v1.1.8
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./docker/canal/conf/canal.properties:/home/admin/canal-server/conf/canal.properties:ro
+      - ./docker/canal/conf/search_cdc_raw/instance.properties:/home/admin/canal-server/conf/search_cdc_raw/instance.properties:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ps -ef | grep -v grep | grep -q canal.deployer.CanalLauncher"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  zookeeper:
+    image: docker.1ms.run/confluentinc/cp-zookeeper:7.6.1
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.15
+    restart: unless-stopped
+    command: >
+      /usr/local/bin/etcd
+      --name etcd
+      --data-dir /etcd-data
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd:2379
+      --listen-peer-urls http://0.0.0.0:2380
+      --initial-advertise-peer-urls http://etcd:2380
+      --initial-cluster etcd=http://etcd:2380
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd-data:/etcd-data
+
+  hotkey-worker:
+    build:
+      context: .
+      dockerfile: docker/hotkey/Dockerfile
+      target: worker
+      additional_contexts:
+        hotkeysrc: ../.codex/tmp/l2cache-2.0.0
+    image: nexus-hotkey-worker:2.0.0
+    restart: unless-stopped
+    depends_on:
+      mysql-extra-init:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_started
+    environment:
+      etcdServer: http://etcd:2379
+      workerPath: nexus
+      nettyPort: "11111"
+      JAVA_TOOL_OPTIONS: -Dlocal.address=${HOTKEY_PUBLIC_IP:-}
+    ports:
+      - "11111:11111"
+      - "9902:9902"
+
+  hotkey-dashboard:
+    build:
+      context: .
+      dockerfile: docker/hotkey/Dockerfile
+      target: dashboard
+      additional_contexts:
+        hotkeysrc: ../.codex/tmp/l2cache-2.0.0
+    image: nexus-hotkey-dashboard:2.0.0
+    restart: unless-stopped
+    depends_on:
+      mysql-extra-init:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_started
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASS: root
+      etcdServer: http://etcd:2379
+    ports:
+      - "9901:9901"
+
+  cassandra:
+    image: cassandra:4.1
+    restart: unless-stopped
+    environment:
+      CASSANDRA_CLUSTER_NAME: nexus
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh 127.0.0.1 9042 -e 'DESCRIBE KEYSPACES' > /dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+
+  cassandra-init:
+    image: cassandra:4.1
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./nexus/docs/cassandra/schema.cql:/schema/schema.cql:ro
+    command: >
+      bash -c "
+      cqlsh cassandra 9042 -f /schema/schema.cql
+      "
+    restart: "no"
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 2; done;
+      /usr/bin/mc mb -p local/nexus || true;
+      /usr/bin/mc anonymous set public local/nexus || true;
+      "
+    restart: "no"
+
+volumes:
+  mysql-data:
+  etcd-data:
+  redis-data:
+  gorse-log:
+  gorse-master-data:
+  gorse-server-data:
+  gorse-worker-data:
+  rabbitmq-data:
+  zookeeper-data:
+  cassandra-data:
+  elasticsearch-data:
+  minio-data:

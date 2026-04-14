@@ -5,7 +5,6 @@ import cn.nexus.domain.social.adapter.port.IRecommendationPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedRecommendSessionRepository;
@@ -25,8 +24,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -49,8 +50,6 @@ public class FeedService implements IFeedService {
 
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
-    private static final int CANDIDATE_FACTOR = 3;
-    private static final int FOLLOW_SEEN_TTL_DAYS = 14;
     private static final int RELATION_BLOCK = 3;
 
     private final IContentRepository contentRepository;
@@ -60,7 +59,6 @@ public class FeedService implements IFeedService {
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedOutboxRepository feedOutboxRepository;
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
-    private final IFeedFollowSeenRepository feedFollowSeenRepository;
     private final IFeedInboxRebuildService feedInboxRebuildService;
     private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private final IFeedRecommendSessionRepository feedRecommendSessionRepository;
@@ -154,7 +152,13 @@ public class FeedService implements IFeedService {
      * @return 时间线结果 {@link FeedTimelineVO}
      */
     @Override
-    public FeedTimelineVO timeline(Long userId, String cursor, Integer limit, String feedType) {
+    public FeedTimelineVO timeline(Long userId,
+                                   String cursor,
+                                   Integer limit,
+                                   String feedType,
+                                   String direction,
+                                   Long cursorTs,
+                                   Long cursorPostId) {
         if (userId == null) {
             return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
         }
@@ -172,49 +176,7 @@ public class FeedService implements IFeedService {
         if ("NEIGHBORS".equalsIgnoreCase(normalizedFeedType)) {
             return neighborsTimeline(userId, cursor, normalizedLimit);
         }
-
-        boolean homePage = cursor == null || cursor.isBlank();
-        boolean rebuilt = false;
-        if (homePage) {
-            rebuilt = feedInboxRebuildService.rebuildIfNeeded(userId);
-        }
-
-        MaxIdCursor maxIdCursor = homePage ? new MaxIdCursor(null, null) : resolveMaxIdCursor(cursor);
-        if (!homePage && maxIdCursor == null) {
-            return FeedTimelineVO.builder().items(List.of()).nextCursor(null).build();
-        }
-
-        int scanFactor = homePage ? CANDIDATE_FACTOR * 2 : CANDIDATE_FACTOR;
-        int scanLimit = normalizedLimit * Math.max(1, scanFactor);
-        List<FeedInboxEntryVO> inboxCandidates = feedTimelineRepository.pageInboxEntries(
-                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), scanLimit
-        );
-
-        if (homePage && rebuilt) {
-            List<FeedInboxEntryVO> candidates = inboxCandidates == null ? List.of() : inboxCandidates;
-            candidates = filterFollowSeenCandidates(userId, candidates);
-            String nextCursor = candidates.isEmpty() || candidates.get(candidates.size() - 1).getPostId() == null
-                    ? null
-                    : candidates.get(candidates.size() - 1).getPostId().toString();
-            List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit, null, false);
-            markFollowSeen(userId, items);
-            return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
-        }
-
-        List<Long> followings = listFollowings(userId);
-        List<FeedInboxEntryVO> bigvCandidates = listBigVCandidates(userId, followings, maxIdCursor, scanLimit, normalizedLimit);
-        List<FeedInboxEntryVO> candidates = mergeAndDedup(inboxCandidates, bigvCandidates, scanLimit);
-        if (homePage) {
-            candidates = filterFollowSeenCandidates(userId, candidates);
-        }
-
-        String nextCursor = candidates.isEmpty() || candidates.get(candidates.size() - 1).getPostId() == null
-                ? null
-                : candidates.get(candidates.size() - 1).getPostId().toString();
-
-        List<FeedItemVO> items = buildTimelineItems(userId, source, candidates, normalizedLimit, followings, true);
-        markFollowSeen(userId, items);
-        return FeedTimelineVO.builder().items(items).nextCursor(nextCursor).build();
+        return followTimeline(userId, normalizedLimit, direction, cursorTs, cursorPostId);
     }
 
     /**
@@ -653,6 +615,14 @@ public class FeedService implements IFeedService {
         return ids;
     }
 
+    private boolean shouldUseBigVPool(List<Long> followings) {
+        if (!bigvPoolEnabled) {
+            return false;
+        }
+        int trigger = Math.max(0, bigvPoolTriggerFollowings);
+        return followings != null && followings.size() > trigger;
+    }
+
     private void writeRecommendReadFeedbackAsync(Long userId, List<FeedItemVO> items) {
         if (userId == null || items == null || items.isEmpty()) {
             return;
@@ -713,29 +683,6 @@ public class FeedService implements IFeedService {
         }
     }
 
-    private MaxIdCursor resolveMaxIdCursor(String cursor) {
-        Long postId = parseLong(cursor);
-        if (postId == null) {
-            return null;
-        }
-        ContentPostEntity post = contentRepository.findPost(postId);
-        if (post == null || post.getCreateTime() == null) {
-            return null;
-        }
-        return new MaxIdCursor(post.getCreateTime(), postId);
-    }
-
-    private Long parseLong(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return Long.parseLong(value.trim());
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
-    }
-
     private List<Long> listFollowings(Long userId) {
         int limit = Math.max(0, maxFollowings);
         if (limit == 0) {
@@ -753,176 +700,6 @@ public class FeedService implements IFeedService {
             filtered.add(id);
         }
         return filtered;
-    }
-
-    private List<FeedInboxEntryVO> listBigVCandidates(Long userId, List<Long> followings, MaxIdCursor cursor, int scanLimit, int normalizedLimit) {
-        if (followings == null || followings.isEmpty()) {
-            return List.of();
-        }
-        if (bigvFollowerThreshold <= 0) {
-            return List.of();
-        }
-
-        List<Long> mergedFollowings = followings;
-        boolean homePage = cursor != null && cursor.cursorTimeMs() == null && cursor.cursorPostId() == null;
-        if (homePage && followings.size() == maxFollowings) {
-            int limit = Math.max(0, maxBigvFollowings);
-            List<Long> bigvFollowings = relationRepository.listBigVFollowingIds(userId, bigvFollowerThreshold, limit);
-            if (bigvFollowings != null && !bigvFollowings.isEmpty()) {
-                Set<Long> seen = new HashSet<>(followings);
-                List<Long> merged = new ArrayList<>(followings.size() + bigvFollowings.size());
-                merged.addAll(followings);
-                for (Long id : bigvFollowings) {
-                    if (id == null || id.equals(userId)) {
-                        continue;
-                    }
-                    if (seen.add(id)) {
-                        merged.add(id);
-                    }
-                }
-                mergedFollowings = merged;
-            }
-        }
-
-        if (shouldUseBigVPool(mergedFollowings)) {
-            return listPoolCandidates(userId, mergedFollowings, cursor, normalizedLimit);
-        }
-        List<Long> bigvAuthors = pickBigVAuthors(mergedFollowings);
-        if (bigvAuthors.isEmpty()) {
-            return List.of();
-        }
-        int perLimit = Math.max(1, perBigvLimit);
-        List<FeedInboxEntryVO> outboxEntries = new ArrayList<>(Math.min(scanLimit, bigvAuthors.size() * perLimit));
-        for (Long authorId : bigvAuthors) {
-            if (authorId == null) {
-                continue;
-            }
-            outboxEntries.addAll(feedOutboxRepository.pageOutbox(authorId, cursor.cursorTimeMs(), cursor.cursorPostId(), perLimit));
-        }
-        return outboxEntries;
-    }
-
-    private boolean shouldUseBigVPool(List<Long> followings) {
-        if (!bigvPoolEnabled) {
-            return false;
-        }
-        int trigger = Math.max(0, bigvPoolTriggerFollowings);
-        return followings != null && followings.size() > trigger;
-    }
-
-    private List<FeedInboxEntryVO> listPoolCandidates(Long userId, List<Long> followings, MaxIdCursor cursor, int normalizedLimit) {
-        int buckets = Math.max(1, bigvPoolBuckets);
-        int fetchFactor = Math.max(1, bigvPoolFetchFactor);
-        int need = Math.max(1, normalizedLimit) * fetchFactor;
-        int perBucket = Math.max(1, need / buckets);
-
-        List<FeedInboxEntryVO> raw = new ArrayList<>(need);
-        for (int i = 0; i < buckets; i++) {
-            raw.addAll(feedBigVPoolRepository.pagePool(i, cursor.cursorTimeMs(), cursor.cursorPostId(), perBucket));
-        }
-        if (raw.isEmpty()) {
-            return List.of();
-        }
-
-        raw.sort(entryComparator());
-        if (raw.size() > need) {
-            raw = new ArrayList<>(raw.subList(0, need));
-        }
-
-        Set<Long> followingSet = new HashSet<>(followings);
-        List<Long> ids = new ArrayList<>(raw.size());
-        for (FeedInboxEntryVO entry : raw) {
-            if (entry == null || entry.getPostId() == null) {
-                continue;
-            }
-            ids.add(entry.getPostId());
-        }
-        if (ids.isEmpty()) {
-            return List.of();
-        }
-
-        List<ContentPostEntity> posts = contentRepository.listPostsByIds(ids);
-        if (posts.isEmpty()) {
-            cleanupMissingIndexes(userId, ids, List.of());
-            return List.of();
-        }
-
-        cleanupMissingIndexes(userId, ids, posts);
-
-        List<FeedInboxEntryVO> filtered = new ArrayList<>(posts.size());
-        for (ContentPostEntity post : posts) {
-            if (post == null || post.getPostId() == null || post.getCreateTime() == null || post.getUserId() == null) {
-                continue;
-            }
-            if (!followingSet.contains(post.getUserId())) {
-                continue;
-            }
-            filtered.add(FeedInboxEntryVO.builder().postId(post.getPostId()).publishTimeMs(post.getCreateTime()).build());
-        }
-        return filtered;
-    }
-
-    private List<Long> pickBigVAuthors(List<Long> followings) {
-        int limit = Math.max(0, maxBigvFollowings);
-        if (limit == 0) {
-            return List.of();
-        }
-        Map<Long, Integer> categories = feedAuthorCategoryRepository.batchGetCategory(followings);
-        List<Long> bigv = new ArrayList<>(Math.min(followings.size(), limit));
-        int threshold = Math.max(0, bigvFollowerThreshold);
-        for (Long authorId : followings) {
-            if (authorId == null) {
-                continue;
-            }
-            Integer category = categories == null ? null : categories.get(authorId);
-            if (category == null) {
-                int followerCount = relationRepository.countFollowerIds(authorId);
-                int newCategory = (threshold > 0 && followerCount >= threshold)
-                        ? FeedAuthorCategoryEnumVO.BIGV.getCode()
-                        : FeedAuthorCategoryEnumVO.NORMAL.getCode();
-                feedAuthorCategoryRepository.setCategory(authorId, newCategory);
-                category = newCategory;
-            }
-            if (category == FeedAuthorCategoryEnumVO.BIGV.getCode()) {
-                bigv.add(authorId);
-            }
-            if (bigv.size() >= limit) {
-                break;
-            }
-        }
-        return bigv.isEmpty() ? List.of() : bigv;
-    }
-
-    private List<FeedInboxEntryVO> mergeAndDedup(List<FeedInboxEntryVO> inbox, List<FeedInboxEntryVO> extra, int limit) {
-        int normalizedLimit = Math.max(1, limit);
-        List<FeedInboxEntryVO> merged = new ArrayList<>();
-        if (inbox != null && !inbox.isEmpty()) {
-            merged.addAll(inbox);
-        }
-        if (extra != null && !extra.isEmpty()) {
-            merged.addAll(extra);
-        }
-        if (merged.isEmpty()) {
-            return List.of();
-        }
-
-        merged.removeIf(e -> e == null || e.getPostId() == null || e.getPublishTimeMs() == null);
-        if (merged.isEmpty()) {
-            return List.of();
-        }
-
-        merged.sort(entryComparator());
-        Set<Long> seen = new HashSet<>();
-        List<FeedInboxEntryVO> dedup = new ArrayList<>(Math.min(merged.size(), normalizedLimit));
-        for (FeedInboxEntryVO entry : merged) {
-            if (seen.add(entry.getPostId())) {
-                dedup.add(entry);
-            }
-            if (dedup.size() >= normalizedLimit) {
-                break;
-            }
-        }
-        return dedup;
     }
 
     private Comparator<FeedInboxEntryVO> entryComparator() {
@@ -1038,55 +815,6 @@ public class FeedService implements IFeedService {
                 || relationRepository.findRelation(targetId, sourceId, RELATION_BLOCK) != null;
     }
 
-    private List<FeedInboxEntryVO> filterFollowSeenCandidates(Long userId, List<FeedInboxEntryVO> candidates) {
-        if (userId == null || candidates == null || candidates.isEmpty()) {
-            return candidates == null ? List.of() : candidates;
-        }
-        List<FeedInboxEntryVO> filtered = new ArrayList<>(candidates.size());
-        for (FeedInboxEntryVO entry : candidates) {
-            if (entry == null || entry.getPostId() == null) {
-                continue;
-            }
-            try {
-                if (feedFollowSeenRepository.isSeen(userId, entry.getPostId())) {
-                    continue;
-                }
-            } catch (Exception e) {
-                // best-effort：读取失败不影响主链路
-                log.warn("feed follow seen check failed, userId={}, postId={}", userId, entry.getPostId(), e);
-            }
-            filtered.add(entry);
-        }
-        return filtered;
-    }
-
-    private void markFollowSeen(Long userId, List<FeedItemVO> items) {
-        if (userId == null || items == null || items.isEmpty()) {
-            return;
-        }
-        boolean touched = false;
-        for (FeedItemVO item : items) {
-            if (item == null || item.getPostId() == null) {
-                continue;
-            }
-            try {
-                feedFollowSeenRepository.markSeen(userId, item.getPostId());
-                touched = true;
-            } catch (Exception e) {
-                // best-effort：失败不影响主链路
-                log.warn("feed follow mark seen failed, userId={}, postId={}", userId, item.getPostId(), e);
-            }
-        }
-        if (!touched) {
-            return;
-        }
-        try {
-            feedFollowSeenRepository.expire(userId, FOLLOW_SEEN_TTL_DAYS);
-        } catch (Exception e) {
-            log.warn("feed follow seen expire failed, userId={}", userId, e);
-        }
-    }
-
     private void cleanupMissingIndexes(Long userId, List<Long> candidateIds, List<ContentPostEntity> foundPosts) {
         if (userId == null || candidateIds == null || candidateIds.isEmpty()) {
             return;
@@ -1159,6 +887,150 @@ public class FeedService implements IFeedService {
         return Math.min(limit, MAX_LIMIT);
     }
 
+    private FeedTimelineVO followTimeline(Long userId, int normalizedLimit, String direction, Long cursorTs, Long cursorPostId) {
+        boolean refresh = direction == null || direction.isBlank() || "REFRESH".equalsIgnoreCase(direction);
+        if (!refresh && (cursorTs == null || cursorPostId == null)) {
+            return FeedTimelineVO.builder()
+                    .items(List.of())
+                    .nextCursor(null)
+                    .nextCursorTs(null)
+                    .nextCursorPostId(null)
+                    .hasMore(false)
+                    .build();
+        }
+        if (refresh) {
+            feedInboxRebuildService.rebuildIfNeeded(userId);
+        }
+
+        MaxIdCursor maxIdCursor = refresh ? new MaxIdCursor(null, null) : new MaxIdCursor(cursorTs, cursorPostId);
+        List<Long> followings = listFollowings(userId);
+        AuthorBuckets authorBuckets = splitAuthorsByCategory(followings);
+
+        List<FeedInboxEntryVO> inboxEntries = feedTimelineRepository.pageInboxEntries(
+                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+        );
+
+        List<SourceCursor> sources = new ArrayList<>(1 + authorBuckets.bigvAuthors().size());
+        sources.add(new SourceCursor(inboxEntries));
+        for (Long authorId : authorBuckets.bigvAuthors()) {
+            List<FeedInboxEntryVO> outboxEntries = feedOutboxRepository.pageOutbox(
+                    authorId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+            );
+            sources.add(new SourceCursor(outboxEntries));
+        }
+
+        MergeResult mergeResult = mergeFollowCandidates(sources, normalizedLimit);
+        List<FeedItemVO> items = buildTimelineItems(
+                userId,
+                "FOLLOW",
+                mergeResult.entries(),
+                normalizedLimit,
+                followings,
+                true
+        );
+
+        FeedInboxEntryVO last = mergeResult.lastEntry();
+        return FeedTimelineVO.builder()
+                .items(items)
+                .nextCursor(null)
+                .nextCursorTs(last == null ? null : last.getPublishTimeMs())
+                .nextCursorPostId(last == null ? null : last.getPostId())
+                .hasMore(mergeResult.hasMore())
+                .build();
+    }
+
+    private AuthorBuckets splitAuthorsByCategory(List<Long> followings) {
+        if (followings == null || followings.isEmpty()) {
+            return new AuthorBuckets(List.of(), List.of());
+        }
+        Map<Long, Integer> categories = feedAuthorCategoryRepository.batchGetCategory(followings);
+        List<Long> normalAuthors = new ArrayList<>(followings.size());
+        List<Long> bigvAuthors = new ArrayList<>();
+        int threshold = Math.max(0, bigvFollowerThreshold);
+        for (Long authorId : followings) {
+            if (authorId == null) {
+                continue;
+            }
+            Integer category = categories == null ? null : categories.get(authorId);
+            if (category == null) {
+                int followerCount = relationRepository.countFollowerIds(authorId);
+                int newCategory = (threshold > 0 && followerCount >= threshold)
+                        ? FeedAuthorCategoryEnumVO.BIGV.getCode()
+                        : FeedAuthorCategoryEnumVO.NORMAL.getCode();
+                feedAuthorCategoryRepository.setCategory(authorId, newCategory);
+                category = newCategory;
+            }
+            if (category == FeedAuthorCategoryEnumVO.BIGV.getCode()) {
+                bigvAuthors.add(authorId);
+            } else {
+                normalAuthors.add(authorId);
+            }
+        }
+        return new AuthorBuckets(normalAuthors, bigvAuthors);
+    }
+
+    private MergeResult mergeFollowCandidates(List<SourceCursor> sources, int limit) {
+        int normalizedLimit = Math.max(1, limit);
+        java.util.PriorityQueue<SourceCursor> queue = new java.util.PriorityQueue<>(
+                (left, right) -> entryComparator().compare(left.peek(), right.peek())
+        );
+        for (SourceCursor source : sources) {
+            if (source != null && source.hasNext()) {
+                queue.offer(source);
+            }
+        }
+        List<FeedInboxEntryVO> result = new ArrayList<>(normalizedLimit);
+        Set<Long> seenPostIds = new HashSet<>();
+        while (!queue.isEmpty() && result.size() < normalizedLimit) {
+            SourceCursor source = queue.poll();
+            FeedInboxEntryVO next = source.pop();
+            if (next != null && next.getPostId() != null && next.getPublishTimeMs() != null && seenPostIds.add(next.getPostId())) {
+                result.add(next);
+            }
+            if (source.hasNext()) {
+                queue.offer(source);
+            }
+        }
+        boolean hasMore = !queue.isEmpty();
+        FeedInboxEntryVO last = result.isEmpty() ? null : result.get(result.size() - 1);
+        return new MergeResult(result, last, hasMore);
+    }
+
     private record MaxIdCursor(Long cursorTimeMs, Long cursorPostId) {
+    }
+
+    private record AuthorBuckets(List<Long> normalAuthors, List<Long> bigvAuthors) {
+    }
+
+    private record MergeResult(List<FeedInboxEntryVO> entries, FeedInboxEntryVO lastEntry, boolean hasMore) {
+    }
+
+    private static final class SourceCursor {
+        private final Deque<FeedInboxEntryVO> entries;
+
+        private SourceCursor(List<FeedInboxEntryVO> entries) {
+            this.entries = new ArrayDeque<>();
+            if (entries == null || entries.isEmpty()) {
+                return;
+            }
+            for (FeedInboxEntryVO entry : entries) {
+                if (entry == null || entry.getPostId() == null || entry.getPublishTimeMs() == null) {
+                    continue;
+                }
+                this.entries.addLast(entry);
+            }
+        }
+
+        private FeedInboxEntryVO peek() {
+            return entries.peekFirst();
+        }
+
+        private FeedInboxEntryVO pop() {
+            return entries.pollFirst();
+        }
+
+        private boolean hasNext() {
+            return !entries.isEmpty();
+        }
     }
 }

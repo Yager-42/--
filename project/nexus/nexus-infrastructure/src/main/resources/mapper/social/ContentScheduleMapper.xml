@@ -42,7 +42,7 @@
         SELECT task_id, user_id, post_id, content_data, schedule_time, status, retry_count, idempotent_token, is_canceled, last_error, alarm_sent
         FROM content_schedule
         WHERE status = 0
-          AND schedule_time <= #{before}
+          AND schedule_time &lt;= #{before}
         <if test="limit != null">
             ORDER BY schedule_time ASC
             LIMIT #{limit}

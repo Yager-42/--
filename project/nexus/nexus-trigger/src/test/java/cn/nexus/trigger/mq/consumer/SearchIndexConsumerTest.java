@@ -1,28 +1,15 @@
 package cn.nexus.trigger.mq.consumer;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
-import cn.nexus.domain.social.adapter.repository.IContentRepository;
-import cn.nexus.domain.social.adapter.repository.IReactionRepository;
-import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
-import cn.nexus.domain.social.model.entity.ContentPostEntity;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
-import cn.nexus.domain.social.model.valobj.UserBriefVO;
-import cn.nexus.trigger.search.support.SearchDocumentAssembler;
-import cn.nexus.types.enums.ContentPostStatusEnumVO;
-import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
-import cn.nexus.types.event.PostDeletedEvent;
-import cn.nexus.types.event.PostPublishedEvent;
-import cn.nexus.types.event.PostUpdatedEvent;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
+import cn.nexus.trigger.search.support.SearchIndexUpsertService;
+import cn.nexus.types.event.search.PostChangedCdcEvent;
 import cn.nexus.types.event.UserNicknameChangedEvent;
-import java.util.List;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
@@ -41,125 +28,81 @@ class SearchIndexConsumerTest {
 
     @Test
     void onUserNicknameChanged_shouldReloadLatestNicknameFromUserBase() {
-        ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
-        IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        SearchIndexConsumer consumer = new SearchIndexConsumer(
-                searchEnginePort,
-                Mockito.mock(IContentRepository.class),
-                userBaseRepository,
-                Mockito.mock(IReactionRepository.class),
-                Mockito.mock(SearchDocumentAssembler.class));
-        when(userBaseRepository.listByUserIds(List.of(8L)))
-                .thenReturn(List.of(UserBriefVO.builder().userId(8L).nickname("  new-name  ").build()));
+        SearchIndexUpsertService upsertService = Mockito.mock(SearchIndexUpsertService.class);
+        SearchIndexConsumer consumer = new SearchIndexConsumer(upsertService);
+        when(upsertService.updateAuthorNickname(8L)).thenReturn(2L);
 
         UserNicknameChangedEvent event = new UserNicknameChangedEvent();
         event.setUserId(8L);
         event.setTsMs(1L);
         consumer.onUserNicknameChanged(event);
 
-        verify(searchEnginePort).updateAuthorNickname(8L, "new-name");
+        verify(upsertService).updateAuthorNickname(8L);
     }
 
     @Test
-    void onPostPublished_shouldSoftDeleteWhenPostNotIndexable() {
-        ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
-        IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
-        SearchIndexConsumer consumer = new SearchIndexConsumer(
-                searchEnginePort,
-                contentRepository,
-                Mockito.mock(IUserBaseRepository.class),
-                Mockito.mock(IReactionRepository.class),
-                Mockito.mock(SearchDocumentAssembler.class));
-        when(contentRepository.findPost(101L)).thenReturn(ContentPostEntity.builder()
-                .postId(101L)
-                .userId(9L)
-                .status(ContentPostStatusEnumVO.PUBLISHED.getCode())
-                .visibility(ContentPostVisibilityEnumVO.PUBLIC.getCode())
-                .title("")
-                .publishTime(10L)
-                .build());
+    void onPostChanged_shouldSoftDeleteWhenPostNotIndexable() {
+        SearchIndexUpsertService upsertService = Mockito.mock(SearchIndexUpsertService.class);
+        ReliableMqConsumerRecordService recordService = mock(ReliableMqConsumerRecordService.class);
+        when(recordService.start(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenReturn(true);
+        SearchIndexCdcConsumer consumer = new SearchIndexCdcConsumer(
+                upsertService,
+                recordService,
+                new ObjectMapper());
+        when(upsertService.upsertPost(101L))
+                .thenReturn(new SearchIndexUpsertService.SearchIndexAction(101L, false, true, "NOT_INDEXABLE"));
 
-        PostPublishedEvent event = new PostPublishedEvent();
+        PostChangedCdcEvent event = new PostChangedCdcEvent();
         event.setPostId(101L);
-        event.setAuthorId(9L);
-        event.setPublishTimeMs(10L);
-        consumer.onPostPublished(event);
+        event.setTsMs(10L);
+        event.setSource("canal");
+        event.setTable("content_post");
+        event.setEventId("mysql-bin.000001:1:101");
+        consumer.onPostChanged(event);
 
-        verify(searchEnginePort).softDelete(101L);
-        verify(searchEnginePort, never()).upsert(any());
+        verify(upsertService).upsertPost(101L);
     }
 
     @Test
-    void onPostUpdated_shouldAssembleDocumentAndClampLikeCount() {
-        ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
-        IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
-        IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IReactionRepository reactionRepository = Mockito.mock(IReactionRepository.class);
-        SearchDocumentAssembler assembler = Mockito.mock(SearchDocumentAssembler.class);
-        SearchIndexConsumer consumer = new SearchIndexConsumer(
-                searchEnginePort,
-                contentRepository,
-                userBaseRepository,
-                reactionRepository,
-                assembler);
+    void onPostChanged_shouldDelegateToUpsertService() {
+        SearchIndexUpsertService upsertService = Mockito.mock(SearchIndexUpsertService.class);
+        ReliableMqConsumerRecordService recordService = mock(ReliableMqConsumerRecordService.class);
+        when(recordService.start(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenReturn(true);
+        SearchIndexCdcConsumer consumer = new SearchIndexCdcConsumer(
+                upsertService,
+                recordService,
+                new ObjectMapper());
+        when(upsertService.upsertPost(202L))
+                .thenReturn(new SearchIndexUpsertService.SearchIndexAction(202L, true, false, null));
 
-        ContentPostEntity post = ContentPostEntity.builder()
-                .postId(202L)
-                .userId(20L)
-                .title("title")
-                .summary("summary")
-                .contentText("body")
-                .postTypes(List.of("tech"))
-                .mediaInfo("m1")
-                .status(ContentPostStatusEnumVO.PUBLISHED.getCode())
-                .visibility(ContentPostVisibilityEnumVO.PUBLIC.getCode())
-                .publishTime(20L)
-                .build();
-        when(contentRepository.findPost(202L)).thenReturn(post);
-        when(userBaseRepository.listByUserIds(List.of(20L)))
-                .thenReturn(List.of(UserBriefVO.builder().userId(20L).nickname("author").avatarUrl("avatar").build()));
-        when(reactionRepository.getCount(any(ReactionTargetVO.class))).thenReturn(-5L);
-        SearchDocumentVO document = SearchDocumentVO.builder().contentId(202L).authorNickname("author").build();
-        when(assembler.assemble(eq(202L), eq(20L), eq("title"), eq("summary"), eq("body"),
-                eq(List.of("tech")), eq("avatar"), eq("author"), eq(20L), eq(0L), eq("m1")))
-                .thenReturn(document);
-
-        PostUpdatedEvent event = new PostUpdatedEvent();
+        PostChangedCdcEvent event = new PostChangedCdcEvent();
         event.setPostId(202L);
-        event.setOperatorId(20L);
         event.setTsMs(30L);
-        consumer.onPostUpdated(event);
+        event.setSource("canal");
+        event.setTable("content_post");
+        event.setEventId("mysql-bin.000001:1:202");
+        consumer.onPostChanged(event);
 
-        verify(assembler).assemble(eq(202L), eq(20L), eq("title"), eq("summary"), eq("body"),
-                eq(List.of("tech")), eq("avatar"), eq("author"), eq(20L), eq(0L), eq("m1"));
-        verify(searchEnginePort).upsert(document);
+        verify(upsertService).upsertPost(202L);
     }
 
     @Test
-    void onPostDeleted_shouldSoftDeleteWhenEventValid() {
-        ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
-        SearchIndexConsumer consumer = new SearchIndexConsumer(
-                searchEnginePort,
-                Mockito.mock(IContentRepository.class),
-                Mockito.mock(IUserBaseRepository.class),
-                Mockito.mock(IReactionRepository.class),
-                Mockito.mock(SearchDocumentAssembler.class));
+    void onPostChanged_shouldRejectInvalidEvent() {
+        SearchIndexCdcConsumer consumer = new SearchIndexCdcConsumer(
+                mock(SearchIndexUpsertService.class),
+                mock(ReliableMqConsumerRecordService.class),
+                new ObjectMapper());
 
-        PostDeletedEvent event = new PostDeletedEvent();
+        PostChangedCdcEvent event = new PostChangedCdcEvent();
         event.setPostId(303L);
-        event.setOperatorId(3L);
-        event.setTsMs(30L);
-        consumer.onPostDeleted(event);
 
-        verify(searchEnginePort).softDelete(303L);
+        assertThrows(AmqpRejectAndDontRequeueException.class, () -> consumer.onPostChanged(event));
     }
 
     private SearchIndexConsumer newConsumer() {
         return new SearchIndexConsumer(
-                Mockito.mock(ISearchEnginePort.class),
-                Mockito.mock(IContentRepository.class),
-                Mockito.mock(IUserBaseRepository.class),
-                Mockito.mock(IReactionRepository.class),
-                Mockito.mock(SearchDocumentAssembler.class));
+                Mockito.mock(SearchIndexUpsertService.class));
     }
 }

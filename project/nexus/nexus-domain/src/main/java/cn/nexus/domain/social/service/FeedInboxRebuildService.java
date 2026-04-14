@@ -2,9 +2,11 @@ package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
+import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,6 +29,7 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
 
     private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IContentRepository contentRepository;
+    private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
     private final IFeedTimelineRepository feedTimelineRepository;
 
     /**
@@ -107,13 +110,32 @@ public class FeedInboxRebuildService implements IFeedInboxRebuildService {
             return targets;
         }
 
-        for (Long targetId : followings) {
+        List<Long> normalAuthors = filterNormalAuthors(followings);
+        for (Long targetId : normalAuthors) {
             if (targetId == null || targetId.equals(userId)) {
                 continue;
             }
             targets.add(targetId);
         }
         return targets;
+    }
+
+    private List<Long> filterNormalAuthors(List<Long> followings) {
+        if (followings == null || followings.isEmpty()) {
+            return List.of();
+        }
+        List<Long> filtered = new ArrayList<>(followings.size());
+        java.util.Map<Long, Integer> categories = feedAuthorCategoryRepository.batchGetCategory(followings);
+        for (Long authorId : followings) {
+            if (authorId == null) {
+                continue;
+            }
+            Integer category = categories == null ? null : categories.get(authorId);
+            if (category == null || category == FeedAuthorCategoryEnumVO.NORMAL.getCode()) {
+                filtered.add(authorId);
+            }
+        }
+        return filtered;
     }
 
     private List<ContentPostEntity> collectRecentPosts(List<Long> targets) {

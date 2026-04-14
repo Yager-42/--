@@ -11,7 +11,13 @@ import cn.nexus.domain.social.model.valobj.FeedTimelineVO;
  */
 public interface IFeedService {
 
-    FeedTimelineVO timeline(Long userId, String cursor, Integer limit, String feedType);
+    FeedTimelineVO timeline(Long userId,
+                            String cursor,
+                            Integer limit,
+                            String feedType,
+                            String direction,
+                            Long cursorTs,
+                            Long cursorPostId);
 
     FeedTimelineVO profile(Long targetId, Long visitorId, String cursor, Integer limit);
 }

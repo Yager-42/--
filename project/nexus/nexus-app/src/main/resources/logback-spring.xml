@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <!-- 简化日志配置，占位可按需替换 -->
-    <include resource="org/springframework/boot/logging/logback/base.xml"/>
+    <!-- 只引入默认变量和控制台 appender，避免 base.xml 重复定义 FILE appender。 -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
     <springProperty scope="context" name="LOG_PATH" source="logging.file.path" defaultValue="logs"/>
     <property name="LOG_FILE" value="${LOG_PATH}/nexus.log"/>
 

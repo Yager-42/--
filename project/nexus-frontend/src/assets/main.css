@@ -1,65 +1,200 @@
-/* Apple Style Global CSS Variables */
-:root {
-  /* Colors */
-  --apple-bg: #ffffff;
-  --apple-card-bg: #f5f5f7;
-  --apple-text: #1d1d1f;
-  --apple-text-secondary: #86868b;
-  --apple-blur-bg: rgba(255, 255, 255, 0.72);
-  --apple-accent: #0066cc; /* Apple Blue */
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=Public+Sans:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
 
-  /* Spacing */
-  --safe-area-inset-top: env(safe-area-inset-top);
-  --safe-area-inset-bottom: env(safe-area-inset-bottom);
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-  /* Animations */
-  --spring-easing: cubic-bezier(0.32, 0.72, 0, 1);
-  --spring-duration: 0.6s;
+@layer base {
+  :root {
+    color-scheme: light;
+    --font-display: 'Newsreader', 'STSong', 'Songti SC', serif;
+    --font-body: 'Public Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --font-serif: 'Newsreader', 'STSong', 'Songti SC', serif;
+    --font-sans: 'Public Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --text-primary: #2f342d;
+    --text-secondary: #5c6058;
+    --text-muted: #787c73;
+    --text-on-dark: #fcf8e4;
+    --brand-primary: #615f50;
+    --brand-primary-solid: #615f50;
+    --brand-danger: #9e422c;
+    --feedback-success: #476450;
+    --feedback-danger: #9e422c;
+    --feedback-info: #52667b;
+    --bg-surface: rgba(255, 255, 255, 0.82);
+    --bg-elevated: #f4f4ee;
+    --bg-overlay: rgba(255, 255, 255, 0.78);
+    --prototype-bg: #f8f6f1;
+    --prototype-surface: #fffdf8;
+    --prototype-ink: #191814;
+    --prototype-muted: #5f5b50;
+    --prototype-line: rgba(25, 24, 20, 0.12);
+    --border-soft: rgba(175, 179, 170, 0.24);
+    --border-strong: rgba(120, 124, 115, 0.28);
+    --border-ghost: rgba(175, 179, 170, 0.16);
+    --radius-md: 1rem;
+    --radius-lg: 1.5rem;
+    --radius-xl: 2rem;
+    --radius-panel: 1.75rem;
+    --shadow-card: 0 18px 40px -24px rgba(47, 52, 45, 0.12);
+    --shadow-float: 0 28px 56px -24px rgba(47, 52, 45, 0.16);
+    --shadow-soft: 0 18px 40px -24px rgba(47, 52, 45, 0.12);
+    --shadow-elevated: 0 28px 56px -24px rgba(47, 52, 45, 0.12);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #app {
+    min-height: 100%;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    background: var(--prototype-bg);
+    color: var(--prototype-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    margin: 0;
+    font-family: var(--font-display);
+    letter-spacing: -0.03em;
+  }
+
+  p {
+    margin: 0;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  img {
+    display: block;
+    max-width: 100%;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    border: 0;
+    background: transparent;
+  }
+
+  textarea {
+    resize: vertical;
+  }
+
+  ::selection {
+    background: rgba(122, 98, 69, 0.16);
+  }
+
+  :focus-visible {
+    outline: 2px solid rgba(122, 98, 69, 0.32);
+    outline-offset: 3px;
+  }
 }
 
-/* Global Reset */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-  -webkit-tap-highlight-color: transparent;
+@layer components {
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 350, 'GRAD' 0, 'opsz' 24;
+    line-height: 1;
+  }
+
+  .ghost-border {
+    box-shadow: inset 0 0 0 1px rgba(175, 179, 170, 0.15);
+  }
+
+  .zen-gradient-cta {
+    @apply bg-gradient-to-br from-primary to-primary-dim text-on-primary shadow-lg shadow-primary/10;
+  }
+
+  .soft-panel {
+    @apply rounded-3xl border border-outline-variant/10 bg-surface-container-low/80 shadow-soft;
+  }
+
+  .section-kicker {
+    color: var(--prototype-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+  }
+
+  .section-title {
+    @apply text-3xl font-bold tracking-tight text-on-surface md:text-5xl;
+  }
+
+  .section-copy {
+    @apply text-sm leading-7 text-on-surface-variant md:text-base;
+  }
+
+  .text-large-title {
+    @apply text-3xl font-bold tracking-tight text-on-surface md:text-5xl;
+  }
+
+  .text-headline {
+    @apply text-2xl font-bold tracking-tight text-on-surface md:text-3xl;
+  }
+
+  .text-body {
+    @apply text-sm leading-7 text-on-surface md:text-base;
+  }
+
+  .text-secondary {
+    @apply text-on-surface-variant;
+  }
+
+  .spinner {
+    @apply h-5 w-5 animate-spin rounded-full border-2 border-outline-variant/25 border-t-primary;
+  }
 }
 
-html, body {
-  height: 100%;
-  width: 100%;
-  overflow: hidden; /* Prevent default scrolling */
-  background-color: var(--apple-bg);
-  color: var(--apple-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei";
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer utilities {
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
 }
 
-#app {
-  height: 100%;
-  width: 100%;
-}
-
-/* Typography Utilities */
-.text-large-title {
-  font-size: 34px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.text-headline {
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.text-body {
-  font-size: 17px;
-  font-weight: 400;
-  line-height: 1.4;
-}
-
-.text-secondary {
-  color: var(--apple-text-secondary);
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -1,10 +1,10 @@
 package cn.nexus.trigger.mq.consumer.strategy;
 
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
-import cn.nexus.trigger.mq.config.CountPostLikeMqConfig;
+import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
 import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import cn.nexus.types.event.interaction.ReactionCountSnapshotEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,21 +22,18 @@ import java.util.List;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class SnapshotPostLikeCountAggregateStrategy implements PostLikeCountAggregateStrategy {
+public class SnapshotPostLikeCountAggregateStrategy {
 
-    private final IReactionCachePort reactionCachePort;
+    private final IObjectCounterPort objectCounterPort;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
 
-    @Override
     public void handle(List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
             return;
         }
 
         LinkedHashSet<Long> postIds = new LinkedHashSet<>();
-        LinkedHashSet<Long> creatorIds = new LinkedHashSet<>();
-
         for (Message m : messages) {
             LikeUnlikePostEvent e = parse(m);
             if (e == null) {
@@ -45,42 +42,26 @@ public class SnapshotPostLikeCountAggregateStrategy implements PostLikeCountAggr
             if (e.getPostId() != null) {
                 postIds.add(e.getPostId());
             }
-            if (e.getPostCreatorId() != null) {
-                creatorIds.add(e.getPostCreatorId());
-            }
         }
 
-        if (postIds.isEmpty() && creatorIds.isEmpty()) {
+        if (postIds.isEmpty()) {
             return;
         }
 
-        List<ReactionCountSnapshotEvent> snapshots = new ArrayList<>(postIds.size() + creatorIds.size());
+        List<ReactionCountSnapshotEvent> snapshots = new ArrayList<>(postIds.size());
 
         for (Long postId : postIds) {
-            ReactionTargetVO target = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(postId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            long cnt = reactionCachePort.getCountFromRedis(target);
+            long cnt = objectCounterPort.getCount(counterTarget(postId));
             snapshots.add(snapshot("POST", postId, "LIKE", cnt));
-        }
-
-        for (Long creatorId : creatorIds) {
-            ReactionTargetVO target = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.USER)
-                    .targetId(creatorId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            long cnt = reactionCachePort.getCountFromRedis(target);
-            snapshots.add(snapshot("USER", creatorId, "LIKE", cnt));
         }
 
         if (snapshots.isEmpty()) {
             return;
         }
 
-        rabbitTemplate.convertAndSend(CountPostLikeMqConfig.EXCHANGE, CountPostLikeMqConfig.ROUTING_KEY, snapshots);
+        rabbitTemplate.convertAndSend(CountPostLike2SearchIndexMqConfig.EXCHANGE,
+                CountPostLike2SearchIndexMqConfig.ROUTING_KEY,
+                snapshots);
     }
 
     private LikeUnlikePostEvent parse(Message m) {
@@ -107,5 +88,12 @@ public class SnapshotPostLikeCountAggregateStrategy implements PostLikeCountAggr
         e.setCount(Math.max(0L, cnt));
         return e;
     }
-}
 
+    private ObjectCounterTarget counterTarget(Long postId) {
+        return ObjectCounterTarget.builder()
+                .targetType(ReactionTargetTypeEnumVO.POST)
+                .targetId(postId)
+                .counterType(ObjectCounterType.LIKE)
+                .build();
+    }
+}

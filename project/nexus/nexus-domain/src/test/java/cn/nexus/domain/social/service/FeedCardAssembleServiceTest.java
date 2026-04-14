@@ -6,18 +6,19 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
-import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.List;
 import java.util.Map;
@@ -30,19 +31,19 @@ class FeedCardAssembleServiceTest {
     @Test
     void assemble_shouldLoadLikeCountFromReactionCacheBatch() {
         IFeedCardRepository feedCardRepository = Mockito.mock(IFeedCardRepository.class);
-        IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
+        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IReactionRepository reactionRepository = Mockito.mock(IReactionRepository.class);
+        IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
         RelationQueryService relationQueryService = Mockito.mock(RelationQueryService.class);
         IFeedFollowSeenRepository feedFollowSeenRepository = Mockito.mock(IFeedFollowSeenRepository.class);
 
         FeedCardAssembleService service = new FeedCardAssembleService(
                 feedCardRepository,
-                reactionCachePort,
+                objectCounterPort,
                 contentRepository,
                 userBaseRepository,
-                reactionRepository,
+                reactionCachePort,
                 relationQueryService,
                 feedFollowSeenRepository
         );
@@ -57,16 +58,16 @@ class FeedCardAssembleServiceTest {
                 .thenReturn(Map.of(101L, base));
         when(userBaseRepository.listByUserIds(List.of(201L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(201L).nickname("author").avatarUrl("a.png").build()));
-        when(reactionRepository.batchExists(any(), eq(1L), eq(List.of(101L)))).thenReturn(Set.of());
+        when(reactionCachePort.getState(eq(1L), any(ReactionTargetVO.class))).thenReturn(false);
         when(relationQueryService.batchFollowing(eq(1L), eq(List.of(201L)))).thenReturn(Set.of());
         when(feedFollowSeenRepository.batchSeen(eq(1L), eq(List.of(101L)))).thenReturn(Set.of());
 
-        ReactionTargetVO target = ReactionTargetVO.builder()
+        ObjectCounterTarget target = ObjectCounterTarget.builder()
                 .targetType(ReactionTargetTypeEnumVO.POST)
                 .targetId(101L)
-                .reactionType(ReactionTypeEnumVO.LIKE)
+                .counterType(ObjectCounterType.LIKE)
                 .build();
-        when(reactionCachePort.batchGetCount(any()))
+        when(objectCounterPort.batchGetCount(any()))
                 .thenReturn(Map.of(target.hashTag(), 8L));
 
         List<FeedItemVO> items = service.assemble(
@@ -78,6 +79,6 @@ class FeedCardAssembleServiceTest {
 
         assertEquals(1, items.size());
         assertEquals(8L, items.get(0).getLikeCount());
-        verify(reactionCachePort).batchGetCount(any());
+        verify(objectCounterPort).batchGetCount(any());
     }
 }

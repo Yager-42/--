@@ -98,39 +98,6 @@ public class InteractionController implements IInteractionApi {
     }
 
     /**
-     * 查询点赞用户列表。
-     *
-     * @param requestDTO 请求参数。类型：{@link ReactionLikersRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @GetMapping("/interact/reaction/likers")
-    @Override
-    public Response<ReactionLikersResponseDTO> reactionLikers(ReactionLikersRequestDTO requestDTO) {
-        try {
-            ReactionLikersVO vo = interactionService.reactionLikers(
-                    requestDTO.getTargetId(),
-                    requestDTO.getTargetType(),
-                    requestDTO.getType(),
-                    requestDTO.getCursor(),
-                    requestDTO.getLimit()
-            );
-            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                    ReactionLikersResponseDTO.builder()
-                            .items(vo.getItems().stream().map(this::toReactionLikerDTO).collect(Collectors.toList()))
-                            .nextCursor(vo.getNextCursor())
-                            .build());
-        } catch (AppException e) {
-            return Response.<ReactionLikersResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
-        } catch (Exception e) {
-            log.error("reaction likers api failed, req={}", requestDTO, e);
-            return Response.<ReactionLikersResponseDTO>builder()
-                    .code(ResponseCode.UN_ERROR.getCode())
-                    .info(ResponseCode.UN_ERROR.getInfo())
-                    .build();
-        }
-    }
-
-    /**
      * 创建评论并返回结果。
      *
      * @param requestDTO 请求参数。类型：{@link CommentRequestDTO}
@@ -330,15 +297,6 @@ public class InteractionController implements IInteractionApi {
                 .lastCommentId(vo.getLastCommentId())
                 .lastActorUserId(vo.getLastActorUserId())
                 .unreadCount(vo.getUnreadCount())
-                .build();
-    }
-
-    private ReactionLikerDTO toReactionLikerDTO(ReactionLikerVO vo) {
-        return ReactionLikerDTO.builder()
-                .userId(vo.getUserId())
-                .nickname(vo.getNickname())
-                .avatar(vo.getAvatarUrl())
-                .likedAt(vo.getLikedAt())
                 .build();
     }
 

@@ -2,12 +2,12 @@ package cn.nexus.infrastructure.adapter.social.repository;
 
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
+import cn.nexus.infrastructure.config.HotKeyStoreBridge;
 import cn.nexus.infrastructure.config.SocialCacheHotTtlProperties;
 import cn.nexus.infrastructure.support.SingleFlight;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -41,6 +41,7 @@ public class FeedCardRepository implements IFeedCardRepository {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final SocialCacheHotTtlProperties socialCacheHotTtlProperties;
+    private final HotKeyStoreBridge hotKeyStoreBridge;
 
     private final Cache<Long, FeedCardBaseVO> l1 = Caffeine.newBuilder()
             .maximumSize(10000)
@@ -235,7 +236,7 @@ public class FeedCardRepository implements IFeedCardRepository {
 
     private boolean isHotKeySafe(String hotkey) {
         try {
-            return JdHotKeyStore.isHotKey(hotkey);
+            return hotKeyStoreBridge.isHotKey(hotkey);
         } catch (Exception e) {
             log.warn("jd-hotkey isHotKey failed, hotkey={}", hotkey, e);
             return false;

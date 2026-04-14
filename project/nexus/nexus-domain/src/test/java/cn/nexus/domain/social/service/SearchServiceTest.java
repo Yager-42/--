@@ -6,10 +6,14 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
+import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
-import cn.nexus.domain.social.adapter.repository.IReactionRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineQueryVO;
@@ -19,7 +23,6 @@ import cn.nexus.domain.social.model.valobj.SearchSuggestVO;
 import cn.nexus.types.exception.AppException;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -29,15 +32,17 @@ class SearchServiceTest {
 
     private ISearchEnginePort searchEnginePort;
     private IFeedCardStatRepository feedCardStatRepository;
-    private IReactionRepository reactionRepository;
+    private IObjectCounterPort objectCounterPort;
+    private IReactionCachePort reactionCachePort;
     private SearchService searchService;
 
     @BeforeEach
     void setUp() {
         searchEnginePort = Mockito.mock(ISearchEnginePort.class);
         feedCardStatRepository = Mockito.mock(IFeedCardStatRepository.class);
-        reactionRepository = Mockito.mock(IReactionRepository.class);
-        searchService = new SearchService(searchEnginePort, feedCardStatRepository, reactionRepository);
+        objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        reactionCachePort = Mockito.mock(IReactionCachePort.class);
+        searchService = new SearchService(searchEnginePort, feedCardStatRepository, objectCounterPort, reactionCachePort);
     }
 
     @Test
@@ -60,8 +65,7 @@ class SearchServiceTest {
         when(feedCardStatRepository.getBatch(List.of(101L))).thenReturn(Map.of(
                 101L, FeedCardStatVO.builder().postId(101L).likeCount(8L).build()
         ));
-        when(reactionRepository.batchExists(any(ReactionTargetVO.class), Mockito.eq(9L), Mockito.eq(List.of(101L))))
-                .thenReturn(Set.of(101L));
+        when(reactionCachePort.getState(Mockito.eq(9L), any(ReactionTargetVO.class))).thenReturn(true);
 
         SearchResultVO result = searchService.search(9L, "  hello   world  ", 5, "a, b,a", "cursor");
 
@@ -87,7 +91,7 @@ class SearchServiceTest {
                 .hits(List.of(SearchEngineResultVO.SearchHitVO.builder().source(doc).build()))
                 .build());
         when(feedCardStatRepository.getBatch(List.of(101L))).thenReturn(Map.of());
-        when(reactionRepository.getCount(any())).thenReturn(12L);
+        when(objectCounterPort.getCount(target(101L))).thenReturn(12L);
 
         SearchResultVO result = searchService.search(null, "keyword", null, null, null);
 
@@ -107,5 +111,13 @@ class SearchServiceTest {
     @Test
     void search_shouldRejectInvalidSize() {
         assertThrows(AppException.class, () -> searchService.search(1L, "ok", 0, null, null));
+    }
+
+    private ObjectCounterTarget target(Long postId) {
+        return ObjectCounterTarget.builder()
+                .targetType(ReactionTargetTypeEnumVO.POST)
+                .targetId(postId)
+                .counterType(ObjectCounterType.LIKE)
+                .build();
     }
 }

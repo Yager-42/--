@@ -7,7 +7,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.social.adapter.port.IRelationCachePort;
+import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
@@ -31,7 +32,7 @@ class UserProfilePageQueryServiceTest {
         IUserProfileRepository userProfileRepository = Mockito.mock(IUserProfileRepository.class);
         IUserStatusRepository userStatusRepository = Mockito.mock(IUserStatusRepository.class);
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
-        IRelationCachePort relationCachePort = Mockito.mock(IRelationCachePort.class);
+        IUserCounterPort userCounterPort = Mockito.mock(IUserCounterPort.class);
         IRelationPolicyPort relationPolicyPort = Mockito.mock(IRelationPolicyPort.class);
         IRiskService riskService = Mockito.mock(IRiskService.class);
         Executor aggregationExecutor = Runnable::run;
@@ -40,7 +41,7 @@ class UserProfilePageQueryServiceTest {
                 userProfileRepository,
                 userStatusRepository,
                 relationRepository,
-                relationCachePort,
+                userCounterPort,
                 relationPolicyPort,
                 riskService,
                 aggregationExecutor);
@@ -56,7 +57,7 @@ class UserProfilePageQueryServiceTest {
         IUserProfileRepository userProfileRepository = Mockito.mock(IUserProfileRepository.class);
         IUserStatusRepository userStatusRepository = Mockito.mock(IUserStatusRepository.class);
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
-        IRelationCachePort relationCachePort = Mockito.mock(IRelationCachePort.class);
+        IUserCounterPort userCounterPort = Mockito.mock(IUserCounterPort.class);
         IRelationPolicyPort relationPolicyPort = Mockito.mock(IRelationPolicyPort.class);
         IRiskService riskService = Mockito.mock(IRiskService.class);
         Executor aggregationExecutor = Runnable::run;
@@ -65,7 +66,7 @@ class UserProfilePageQueryServiceTest {
                 userProfileRepository,
                 userStatusRepository,
                 relationRepository,
-                relationCachePort,
+                userCounterPort,
                 relationPolicyPort,
                 riskService,
                 aggregationExecutor);
@@ -79,8 +80,8 @@ class UserProfilePageQueryServiceTest {
                 .avatarUrl("a2")
                 .build());
         when(userStatusRepository.getStatus(2L)).thenReturn("ACTIVE");
-        when(relationCachePort.getFollowingCount(2L)).thenReturn(11L);
-        when(relationCachePort.getFollowerCount(2L)).thenReturn(22L);
+        when(userCounterPort.getCount(2L, UserCounterType.FOLLOWING)).thenReturn(11L);
+        when(userCounterPort.getCount(2L, UserCounterType.FOLLOWER)).thenReturn(22L);
         when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().id(10L).status(1).build());
         when(riskService.userStatus(2L)).thenReturn(UserRiskStatusVO.builder()
                 .status("NORMAL")
@@ -105,7 +106,7 @@ class UserProfilePageQueryServiceTest {
         IUserProfileRepository userProfileRepository = Mockito.mock(IUserProfileRepository.class);
         IUserStatusRepository userStatusRepository = Mockito.mock(IUserStatusRepository.class);
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
-        IRelationCachePort relationCachePort = Mockito.mock(IRelationCachePort.class);
+        IUserCounterPort userCounterPort = Mockito.mock(IUserCounterPort.class);
         IRelationPolicyPort relationPolicyPort = Mockito.mock(IRelationPolicyPort.class);
         IRiskService riskService = Mockito.mock(IRiskService.class);
         Executor aggregationExecutor = Runnable::run;
@@ -114,7 +115,7 @@ class UserProfilePageQueryServiceTest {
                 userProfileRepository,
                 userStatusRepository,
                 relationRepository,
-                relationCachePort,
+                userCounterPort,
                 relationPolicyPort,
                 riskService,
                 aggregationExecutor);
@@ -126,8 +127,8 @@ class UserProfilePageQueryServiceTest {
                 .avatarUrl("a1")
                 .build());
         when(userStatusRepository.getStatus(1L)).thenReturn("ACTIVE");
-        when(relationCachePort.getFollowingCount(1L)).thenReturn(2L);
-        when(relationCachePort.getFollowerCount(1L)).thenReturn(3L);
+        when(userCounterPort.getCount(1L, UserCounterType.FOLLOWING)).thenReturn(2L);
+        when(userCounterPort.getCount(1L, UserCounterType.FOLLOWER)).thenReturn(3L);
         when(riskService.userStatus(1L)).thenReturn(UserRiskStatusVO.builder().status("NORMAL").build());
 
         UserProfilePageVO res = svc.query(1L, 1L);
@@ -142,7 +143,7 @@ class UserProfilePageQueryServiceTest {
         IUserProfileRepository userProfileRepository = Mockito.mock(IUserProfileRepository.class);
         IUserStatusRepository userStatusRepository = Mockito.mock(IUserStatusRepository.class);
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
-        IRelationCachePort relationCachePort = Mockito.mock(IRelationCachePort.class);
+        IUserCounterPort userCounterPort = Mockito.mock(IUserCounterPort.class);
         IRelationPolicyPort relationPolicyPort = Mockito.mock(IRelationPolicyPort.class);
         IRiskService riskService = Mockito.mock(IRiskService.class);
         Executor aggregationExecutor = Runnable::run;
@@ -151,7 +152,7 @@ class UserProfilePageQueryServiceTest {
                 userProfileRepository,
                 userStatusRepository,
                 relationRepository,
-                relationCachePort,
+                userCounterPort,
                 relationPolicyPort,
                 riskService,
                 aggregationExecutor);
@@ -165,8 +166,8 @@ class UserProfilePageQueryServiceTest {
                 .avatarUrl("a2")
                 .build());
         when(userStatusRepository.getStatus(2L)).thenReturn("ACTIVE");
-        when(relationCachePort.getFollowingCount(2L)).thenReturn(11L);
-        when(relationCachePort.getFollowerCount(2L)).thenReturn(22L);
+        when(userCounterPort.getCount(2L, UserCounterType.FOLLOWING)).thenReturn(11L);
+        when(userCounterPort.getCount(2L, UserCounterType.FOLLOWER)).thenReturn(22L);
         when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().id(10L).status(1).build());
         when(riskService.userStatus(2L)).thenThrow(new AppException(ResponseCode.UN_ERROR.getCode(), "risk boom"));
 

@@ -25,11 +25,6 @@ spring:
     port: 5672
     username: guest
     password: guest
-  kafka:
-    bootstrap-servers: 127.0.0.1:9092
-    consumer:
-      group-id: nexus-like-pipeline
-      auto-offset-reset: earliest
   ai:
     dashscope:
       api-key: ${AI_DASHSCOPE_API_KEY:}
@@ -123,6 +118,16 @@ risk:
 
 # Search & Discovery（ES + MQ + Redis）
 search:
+  index:
+    cdc:
+      raw:
+        queue: ${SEARCH_INDEX_CDC_RAW_QUEUE:search.cdc.raw.queue}
+      publish:
+        exchange: ${SEARCH_INDEX_CDC_PUBLISH_EXCHANGE:search.cdc.exchange}
+        routingKey: ${SEARCH_INDEX_CDC_PUBLISH_ROUTING_KEY:post.changed}
+      filter:
+        schema: ${SEARCH_INDEX_CDC_FILTER_SCHEMA:nexus_social}
+        tables: ${SEARCH_INDEX_CDC_FILTER_TABLES:content_post,content_post_type}
   es:
     endpoints: http://127.0.0.1:9200
     indexAlias: zhiguang_content_index
@@ -141,11 +146,6 @@ search:
       enabled: true
       redisKey: search:backfill:cursor
 
-reaction:
-  sync:
-    mode: redis
-  count:
-    model: snapshot
 
 storage:
   type: minio
@@ -213,5 +213,3 @@ mq:
 mq-consumer:
   like-unlike:
     rate-limit: 200
-  count-like2db:
-    rate-limit: 50

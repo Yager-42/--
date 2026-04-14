@@ -1,0 +1,81 @@
+logging:
+  level:
+    cn.nexus: INFO
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/nexus_social?useSSL=false&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  cassandra:
+    keyspace-name: nexus_kv
+    contact-points: 127.0.0.1
+    port: 9042
+    local-datacenter: datacenter1
+    schema-action: NONE
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: guest
+    password: guest
+  sql:
+    init:
+      mode: never
+
+search:
+  es:
+    endpoints: http://127.0.0.1:9200
+    indexAlias: zhiguang_content_index_it
+  backfill:
+    enabled: false
+
+feed:
+  recommend:
+    baseUrl: http://127.0.0.1:8087
+    backfill:
+      enabled: false
+
+comment:
+  hot:
+    rebuild:
+      postId: 0
+
+hotkey:
+  enabled: false
+
+leaf:
+  name: nexus
+  segment:
+    enable: true
+  jdbc:
+    url: jdbc:mysql://127.0.0.1:3306/nexus_social?useSSL=false&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
+  snowflake:
+    enabled: true
+    zk-address: 127.0.0.1:2181
+    port: 2222
+
+reaction:
+  sync:
+    mode: rabbit
+
+storage:
+  type: minio
+
+minio:
+  media:
+    endpoint: http://127.0.0.1:9000
+    accessKey: minioadmin
+    secretKey: minioadmin
+    bucket: nexus
+    basePath: content
+    expirySeconds: 900

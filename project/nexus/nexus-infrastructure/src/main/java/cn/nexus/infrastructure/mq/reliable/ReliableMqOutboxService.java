@@ -3,6 +3,7 @@ package cn.nexus.infrastructure.mq.reliable;
 import cn.nexus.infrastructure.dao.social.IReliableMqOutboxDao;
 import cn.nexus.infrastructure.dao.social.po.ReliableMqOutboxPO;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,12 @@ public class ReliableMqOutboxService {
     private final IReliableMqOutboxDao outboxDao;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
+
+    @PostConstruct
+    void init() {
+        // Reliable MQ 的 payload 可能包含 BaseEvent.occurredAt(Instant)，默认 ObjectMapper 无法反序列化会导致 publishReady 空转。
+        objectMapper.findAndRegisterModules();
+    }
 
     /**
      * 保存一条待发送消息到 Outbox（不直接发送）。

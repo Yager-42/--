@@ -1,9 +1,13 @@
 package cn.nexus.trigger.mq.consumer;
 
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IInteractionCommentInboxPort;
 import cn.nexus.domain.social.adapter.repository.ICommentHotRankRepository;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
 import lombok.RequiredArgsConstructor;
@@ -15,7 +19,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * 点赞数变更事件消费者：更新一级评论 like_count + 刷新热榜分数（可选）。
+ * 点赞数变更事件消费者：同步一级评论 like_count 派生列并刷新热榜分数。
  *
  * @author rr
  * @author codex
@@ -31,6 +35,7 @@ public class CommentLikeChangedConsumer {
     private final IInteractionCommentInboxPort inboxPort;
     private final ICommentRepository commentRepository;
     private final ICommentHotRankRepository hotRankRepository;
+    private final IObjectCounterPort objectCounterPort;
 
     /**
      * 消费单条消息。
@@ -48,20 +53,22 @@ public class CommentLikeChangedConsumer {
             return;
         }
 
+        long likeCount = objectCounterPort.increment(target(event.getRootCommentId(), ObjectCounterType.LIKE), event.getDelta());
         commentRepository.addLikeCount(event.getRootCommentId(), event.getDelta());
         CommentBriefVO root = commentRepository.getBrief(event.getRootCommentId());
         if (root == null) {
             return;
         }
-        registerHotRankAfterCommit(event.getPostId(), event.getRootCommentId(), root);
+        long replyCount = objectCounterPort.getCount(target(event.getRootCommentId(), ObjectCounterType.REPLY));
+        registerHotRankAfterCommit(event.getPostId(), event.getRootCommentId(), root, likeCount, replyCount);
     }
 
-    private void registerHotRankAfterCommit(Long postId, Long rootCommentId, CommentBriefVO root) {
+    private void registerHotRankAfterCommit(Long postId, Long rootCommentId, CommentBriefVO root, long likeCount, long replyCount) {
         if (postId == null || rootCommentId == null || root == null) {
             return;
         }
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            refreshHotRankBestEffort(postId, rootCommentId, root);
+            refreshHotRankBestEffort(postId, rootCommentId, root, likeCount, replyCount);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -71,18 +78,18 @@ public class CommentLikeChangedConsumer {
              */
             @Override
             public void afterCommit() {
-                refreshHotRankBestEffort(postId, rootCommentId, root);
+                refreshHotRankBestEffort(postId, rootCommentId, root, likeCount, replyCount);
             }
         });
     }
 
-    private void refreshHotRankBestEffort(Long postId, Long rootCommentId, CommentBriefVO root) {
+    private void refreshHotRankBestEffort(Long postId, Long rootCommentId, CommentBriefVO root, long likeCount, long replyCount) {
         try {
             if (root.getStatus() == null || root.getStatus() != 1) {
                 hotRankRepository.remove(postId, rootCommentId);
                 return;
             }
-            double score = safe(root.getLikeCount()) * 10D + safe(root.getReplyCount()) * 20D;
+            double score = safe(likeCount) * 10D + safe(replyCount) * 20D;
             hotRankRepository.upsert(postId, rootCommentId, score);
         } catch (Exception e) {
             // 热榜是派生缓存：失败不影响主流程，避免用它拖死 MQ 消费。
@@ -90,7 +97,15 @@ public class CommentLikeChangedConsumer {
         }
     }
 
-    private long safe(Long v) {
-        return v == null ? 0L : v;
+    private ObjectCounterTarget target(Long commentId, ObjectCounterType counterType) {
+        return ObjectCounterTarget.builder()
+                .targetType(ReactionTargetTypeEnumVO.COMMENT)
+                .targetId(commentId)
+                .counterType(counterType)
+                .build();
+    }
+
+    private long safe(long v) {
+        return Math.max(0L, v);
     }
 }

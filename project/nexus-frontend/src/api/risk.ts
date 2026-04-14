@@ -1,21 +1,27 @@
-import http from '@/utils/http';
-import type { ApiResponse } from './types';
+﻿import http from '@/utils/http'
 
 export interface UserRiskStatusResponseDTO {
-  status: 'NORMAL' | 'LIMITED' | 'BANNED';
-  capabilities: string[];
+  status: 'NORMAL' | 'LIMITED' | 'BANNED'
+  capabilities: string[]
 }
 
 export interface RiskAppealRequestDTO {
-  decisionId: string;
-  punishId: string;
-  content: string;
+  decisionId: string
+  punishId: string
+  content: string
 }
 
-export const fetchUserRiskStatus = () => {
-  return http.get<ApiResponse<UserRiskStatusResponseDTO>>('/risk/user/status');
+export interface RiskAppealResponseDTO {
+  appealId?: string
+  status?: string
 }
 
-export const submitAppeal = (data: RiskAppealRequestDTO) => {
-  return http.post<ApiResponse<any>>('/risk/appeals', data);
+export const fetchUserRiskStatus = (): Promise<UserRiskStatusResponseDTO> => {
+  return http.get<UserRiskStatusResponseDTO>('/risk/user/status')
+}
+
+export const submitAppeal = (
+  data: RiskAppealRequestDTO
+): Promise<RiskAppealResponseDTO> => {
+  return http.post<RiskAppealResponseDTO>('/risk/appeals', data)
 }

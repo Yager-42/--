@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import cn.nexus.domain.social.adapter.port.IContentCacheEvictPort;
 import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
+import cn.nexus.infrastructure.config.HotKeyStoreBridge;
 import cn.nexus.infrastructure.config.SocialCacheHotTtlProperties;
 import cn.nexus.infrastructure.dao.social.IContentDraftDao;
 import cn.nexus.infrastructure.dao.social.IContentHistoryDao;
@@ -124,6 +125,7 @@ class ContentRepositoryTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<IContentCacheEvictPort> provider = Mockito.mock(ObjectProvider.class);
         SocialCacheHotTtlProperties properties = new SocialCacheHotTtlProperties();
+        HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
         properties.setContentPostSeconds(0L);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
         return new ContentRepository(
@@ -136,7 +138,8 @@ class ContentRepositoryTest {
                 stringRedisTemplate,
                 new ObjectMapper(),
                 provider,
-                properties
+                properties,
+                hotKeyStoreBridge
         );
     }
 }

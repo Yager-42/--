@@ -1,0 +1,221 @@
+logging:
+  level:
+    root: INFO
+    cn.nexus: INFO
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://mysql:3306/nexus_social?useSSL=false&characterEncoding=utf-8&serverTimezone=Asia/Shanghai}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  cassandra:
+    keyspace-name: ${SPRING_CASSANDRA_KEYSPACE_NAME:nexus_kv}
+    contact-points: ${SPRING_CASSANDRA_CONTACT_POINTS:cassandra}
+    port: ${SPRING_CASSANDRA_PORT:9042}
+    local-datacenter: ${SPRING_CASSANDRA_LOCAL_DATACENTER:datacenter1}
+    schema-action: ${SPRING_CASSANDRA_SCHEMA_ACTION:NONE}
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      database: ${SPRING_DATA_REDIS_DATABASE:0}
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:rabbitmq}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:guest}
+    password: ${SPRING_RABBITMQ_PASSWORD:guest}
+    listener:
+      missing-topics-fatal: false
+  ai:
+    dashscope:
+      api-key: ${AI_DASHSCOPE_API_KEY:}
+  cloud:
+    nacos:
+      config:
+        enabled: ${SPRING_CLOUD_NACOS_CONFIG_ENABLED:false}
+  sql:
+    init:
+      mode: never
+
+hotkey:
+  appName: ${HOTKEY_APP_NAME:}
+  etcdServer: ${HOTKEY_ETCD_SERVER:}
+  pushPeriodMs: ${HOTKEY_PUSH_PERIOD_MS:500}
+
+mybatis:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+social:
+  cache:
+    hot-ttl:
+      content-post-seconds: 300
+      reaction-count-seconds: 0
+      feed-card-seconds: 7200
+
+feed:
+  inbox:
+    maxSize: 1000
+    ttlDays: 14
+  outbox:
+    maxSize: 1000
+    ttlDays: 14
+  corefans:
+    ttlDays: 30
+  fanout:
+    batchSize: 200
+  rebuild:
+    perFollowingLimit: 20
+    inboxSize: 200
+    maxFollowings: 2000
+    lockSeconds: 30
+  follow:
+    compensate:
+      recentPosts: 20
+  bigv:
+    followerThreshold: 500000
+    coreFanMaxPush: 2000
+    pull:
+      maxBigvFollowings: 200
+      perBigvLimit: 50
+    pool:
+      enabled: false
+      buckets: 4
+      maxSizePerBucket: 500000
+      ttlDays: 7
+      fetchFactor: 30
+      triggerFollowings: 200
+  recommend:
+    baseUrl: ${FEED_RECOMMEND_BASE_URL:}
+    connectTimeoutMs: ${FEED_RECOMMEND_CONNECT_TIMEOUT_MS:200}
+    readTimeoutMs: ${FEED_RECOMMEND_READ_TIMEOUT_MS:500}
+    sessionTtlMinutes: 20
+    prefetchFactor: 5
+    scanFactor: 10
+    maxAppendRounds: 3
+    backfill:
+      enabled: false
+      pageSize: 500
+  global:
+    latest:
+      maxSize: 20000
+
+risk:
+  llm:
+    text-model: ${RISK_LLM_TEXT_MODEL:qwen-plus}
+    image-model: ${RISK_LLM_IMAGE_MODEL:qwen-vl-plus}
+    budgetPerMinute: 200
+    cacheTtlSeconds: 86400
+    inflightLockSeconds: 30
+  autoPunish:
+    enabled: false
+    minConfidence: 0.95
+    durationSeconds: 600
+  sample:
+    passPercent: 0
+    workStartHour: 9
+    workEndHour: 21
+    salt: ${RISK_SAMPLE_SALT:}
+
+search:
+  es:
+    endpoints: ${SEARCH_ES_ENDPOINTS:http://elasticsearch:9200}
+    indexAlias: zhiguang_content_index
+  index:
+    cdc:
+      raw:
+        queue: ${SEARCH_INDEX_CDC_RAW_QUEUE:search.cdc.raw.queue}
+      publish:
+        exchange: ${SEARCH_INDEX_CDC_PUBLISH_EXCHANGE:search.cdc.exchange}
+        routingKey: ${SEARCH_INDEX_CDC_PUBLISH_ROUTING_KEY:post.changed}
+      filter:
+        schema: ${SEARCH_INDEX_CDC_FILTER_SCHEMA:nexus_social}
+        tables: ${SEARCH_INDEX_CDC_FILTER_TABLES:content_post,content_post_type}
+  mq:
+    concurrency: 2
+    prefetch: 20
+    retry:
+      maxAttempts: 5
+      initialIntervalMs: 1000
+      multiplier: 3.0
+      maxIntervalMs: 60000
+  backfill:
+    enabled: true
+    pageSize: 500
+    checkpoint:
+      enabled: true
+      redisKey: search:backfill:cursor
+
+
+storage:
+  type: ${STORAGE_TYPE:minio}
+
+minio:
+  media:
+    endpoint: ${MINIO_MEDIA_ENDPOINT:http://minio:9000}
+    accessKey: ${MINIO_MEDIA_ACCESS_KEY:minioadmin}
+    secretKey: ${MINIO_MEDIA_SECRET_KEY:minioadmin}
+    bucket: ${MINIO_MEDIA_BUCKET:nexus}
+    basePath: ${MINIO_MEDIA_BASE_PATH:content}
+    expirySeconds: ${MINIO_MEDIA_EXPIRY_SECONDS:900}
+
+aliyun:
+  oss:
+    media:
+      endpoint: ${ALIYUN_OSS_ENDPOINT:oss-cn-shanghai.aliyuncs.com}
+      accessKey: ${ALIYUN_OSS_ACCESS_KEY:}
+      secretKey: ${ALIYUN_OSS_SECRET_KEY:}
+      bucket: ${ALIYUN_OSS_BUCKET:}
+      basePath: content
+      expirySeconds: 900
+
+leaf:
+  name: ${LEAF_NAME:nexus}
+  segment:
+    enable: ${LEAF_SEGMENT_ENABLE:true}
+  jdbc:
+    url: ${LEAF_JDBC_URL:jdbc:mysql://mysql:3306/nexus_social?useSSL=false&characterEncoding=utf-8&serverTimezone=Asia/Shanghai}
+    username: ${LEAF_JDBC_USERNAME:root}
+    password: ${LEAF_JDBC_PASSWORD:root}
+  snowflake:
+    enabled: ${LEAF_SNOWFLAKE_ENABLED:true}
+    enable: ${LEAF_SNOWFLAKE_ENABLED:true}
+    zk-address: ${LEAF_SNOWFLAKE_ZK_ADDRESS:zookeeper:2181}
+    port: ${LEAF_SNOWFLAKE_PORT:2222}
+
+sa-token:
+  token-name: Authorization
+  token-prefix: Bearer
+  is-log: false
+
+auth:
+  admin:
+    bootstrap-phones: []
+  sms:
+    phone-send-limit-1m: 1
+    phone-send-limit-1h: 5
+    phone-send-limit-1d: 10
+    ip-send-limit-1m: 5
+    ip-send-limit-1d: 50
+  login:
+    fail-threshold: 5
+    lock-seconds: 900
+
+mq:
+  like-unlike:
+    consumer:
+      concurrency: 1
+      prefetch: 1000
+      batch-size: 1000
+      receive-timeout-ms: 1000
+      retry:
+        max-attempts: 5
+        initial-interval-ms: 200
+        multiplier: 2.0
+        max-interval-ms: 5000
+
+mq-consumer:
+  like-unlike:
+    rate-limit: 200

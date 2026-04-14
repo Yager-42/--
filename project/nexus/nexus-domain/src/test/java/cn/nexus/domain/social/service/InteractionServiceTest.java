@@ -25,13 +25,11 @@ import cn.nexus.domain.social.model.valobj.CommentViewVO;
 import cn.nexus.domain.social.model.valobj.NotificationListVO;
 import cn.nexus.domain.social.model.valobj.NotificationVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
-import cn.nexus.domain.social.model.valobj.ReactionLikersVO;
 import cn.nexus.domain.social.model.valobj.ReactionResultVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.RiskDecisionVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.types.event.interaction.CommentCreatedEvent;
-import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
 import cn.nexus.types.event.interaction.EventType;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
 import cn.nexus.types.event.interaction.RootReplyCountChangedEvent;
@@ -132,7 +130,7 @@ class InteractionServiceTest {
     }
 
     @Test
-    void react_shouldPublishCommentLikeChangedEventForCommentTarget() {
+    void react_shouldDelegateCommentTargetWithoutPublishingCommentLikeChangedEvent() {
         ISocialIdPort socialIdPort = Mockito.mock(ISocialIdPort.class);
         IReactionLikeService reactionLikeService = Mockito.mock(IReactionLikeService.class);
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
@@ -149,20 +147,18 @@ class InteractionServiceTest {
                 commentHotRankRepository, contentRepository, riskService, commentEventPort, interactionNotifyEventPort,
                 interactionNotificationRepository, userBaseRepository);
 
-        when(socialIdPort.now()).thenReturn(1000L);
         when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder().commentId(101L).postId(9L).status(1).build());
         when(reactionLikeService.applyReaction(any(), any(), any(), any()))
                 .thenReturn(ReactionResultVO.builder().delta(1).currentCount(3L).build());
 
         service.react(1L, 101L, "COMMENT", "LIKE", "ADD", "req-1");
 
-        ArgumentCaptor<CommentLikeChangedEvent> captor = ArgumentCaptor.forClass(CommentLikeChangedEvent.class);
-        verify(commentEventPort).publish(captor.capture());
-        CommentLikeChangedEvent event = captor.getValue();
-        assertEquals(101L, event.getRootCommentId());
-        assertEquals(9L, event.getPostId());
-        assertEquals(1L, event.getDelta());
-        assertEquals(1000L, event.getTsMs());
+        ArgumentCaptor<ReactionTargetVO> captor = ArgumentCaptor.forClass(ReactionTargetVO.class);
+        verify(reactionLikeService).applyReaction(Mockito.eq(1L), captor.capture(), Mockito.any(), Mockito.eq("req-1"));
+        assertEquals(101L, captor.getValue().getTargetId());
+        assertEquals("COMMENT", captor.getValue().getTargetType().getCode());
+        assertEquals("LIKE", captor.getValue().getReactionType().getCode());
+        Mockito.verifyNoInteractions(commentEventPort, interactionNotifyEventPort);
     }
 
     @Test
@@ -249,36 +245,6 @@ class InteractionServiceTest {
 
         assertEquals("READ_ALL", service.readAllNotifications(9L).getStatus());
         verify(interactionNotificationRepository).markReadAll(9L);
-    }
-
-    @Test
-    void reactionLikers_shouldDelegateForCommentTarget() {
-        IReactionLikeService reactionLikeService = Mockito.mock(IReactionLikeService.class);
-        ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
-        InteractionService service = new InteractionService(
-                Mockito.mock(ISocialIdPort.class),
-                reactionLikeService,
-                commentRepository,
-                Mockito.mock(ICommentPinRepository.class),
-                Mockito.mock(ICommentHotRankRepository.class),
-                Mockito.mock(IContentRepository.class),
-                Mockito.mock(IRiskService.class),
-                Mockito.mock(ICommentEventPort.class),
-                Mockito.mock(IInteractionNotifyEventPort.class),
-                Mockito.mock(IInteractionNotificationRepository.class),
-                Mockito.mock(IUserBaseRepository.class));
-        when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder().commentId(101L).postId(9L).status(1).build());
-        ReactionLikersVO expected = ReactionLikersVO.builder().items(List.of()).nextCursor("next").build();
-        ArgumentCaptor<ReactionTargetVO> captor = ArgumentCaptor.forClass(ReactionTargetVO.class);
-        when(reactionLikeService.queryLikers(any(), Mockito.eq("cursor-1"), Mockito.eq(10))).thenReturn(expected);
-
-        ReactionLikersVO result = service.reactionLikers(101L, "COMMENT", "LIKE", "cursor-1", 10);
-
-        assertSame(expected, result);
-        verify(reactionLikeService).queryLikers(captor.capture(), Mockito.eq("cursor-1"), Mockito.eq(10));
-        assertEquals(101L, captor.getValue().getTargetId());
-        assertEquals("COMMENT", captor.getValue().getTargetType().getCode());
-        assertEquals("LIKE", captor.getValue().getReactionType().getCode());
     }
 
     @Test

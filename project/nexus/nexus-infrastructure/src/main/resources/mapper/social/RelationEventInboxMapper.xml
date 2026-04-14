@@ -25,7 +25,7 @@
     <delete id="deleteOlderThan">
         DELETE FROM relation_event_inbox
         WHERE status = #{status}
-          AND update_time < #{before}
+          AND update_time &lt; #{before}
     </delete>
 
 </mapper>

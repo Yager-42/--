@@ -1,5 +1,6 @@
 package cn.nexus.trigger.http.auth;
 
+import cn.dev33.satoken.session.SaSession;
 import cn.dev33.satoken.annotation.SaCheckRole;
 import cn.dev33.satoken.stp.StpUtil;
 import cn.nexus.api.auth.IAuthApi;
@@ -9,6 +10,7 @@ import cn.nexus.api.auth.dto.AuthChangePasswordRequestDTO;
 import cn.nexus.api.auth.dto.AuthGrantAdminRequestDTO;
 import cn.nexus.api.auth.dto.AuthMeResponseDTO;
 import cn.nexus.api.auth.dto.AuthPasswordLoginRequestDTO;
+import cn.nexus.api.auth.dto.AuthRefreshRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterResponseDTO;
 import cn.nexus.api.auth.dto.AuthSmsLoginRequestDTO;
@@ -49,6 +51,9 @@ public class AuthController implements IAuthApi {
 
     private static final String TOKEN_NAME = "Authorization";
     private static final String TOKEN_PREFIX = "Bearer";
+    private static final String REFRESH_TOKEN_PREFIX = "rt_";
+    private static final String REFRESH_USER_ID_KEY = "refreshUserId";
+    private static final long REFRESH_TOKEN_EXPIRE_SECONDS = 30L * 24L * 60L * 60L;
     private static final int SMS_EXPIRE_SECONDS = 300;
 
     private final AuthService authService;
@@ -146,6 +151,38 @@ public class AuthController implements IAuthApi {
             return Response.<AuthTokenResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
         } catch (Exception e) {
             log.error("auth sms login failed, req={}", requestDTO, e);
+            return Response.<AuthTokenResponseDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
+    }
+
+    @PostMapping("/refresh")
+    @Override
+    public Response<AuthTokenResponseDTO> refresh(@RequestBody AuthRefreshRequestDTO requestDTO) {
+        try {
+            String refreshToken = requestDTO == null ? null : requestDTO.getRefreshToken();
+            Long userId = resolveRefreshUserId(refreshToken);
+            if (userId == null) {
+                return Response.<AuthTokenResponseDTO>builder()
+                        .code(ResponseCode.ILLEGAL_PARAMETER.getCode())
+                        .info("refreshToken 无效或已过期")
+                        .build();
+            }
+
+            authService.me(userId);
+            StpUtil.logoutByTokenValue(refreshToken);
+            StpUtil.login(userId);
+            return Response.success(
+                    ResponseCode.SUCCESS.getCode(),
+                    ResponseCode.SUCCESS.getInfo(),
+                    buildTokenResponse(userId)
+            );
+        } catch (AppException e) {
+            return Response.<AuthTokenResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("auth refresh failed, req={}", requestDTO, e);
             return Response.<AuthTokenResponseDTO>builder()
                     .code(ResponseCode.UN_ERROR.getCode())
                     .info(ResponseCode.UN_ERROR.getInfo())
@@ -283,12 +320,53 @@ public class AuthController implements IAuthApi {
 
     private AuthTokenResponseDTO buildTokenResponse(AuthLoginResultVO loginResult) {
         StpUtil.login(loginResult.getUserId());
+        return buildTokenResponse(loginResult.getUserId());
+    }
+
+    private AuthTokenResponseDTO buildTokenResponse(Long userId) {
+        String refreshToken = issueRefreshToken(userId);
         return AuthTokenResponseDTO.builder()
-                .userId(loginResult.getUserId())
+                .userId(userId)
                 .tokenName(TOKEN_NAME)
                 .tokenPrefix(TOKEN_PREFIX)
                 .token(StpUtil.getTokenValue())
+                .refreshToken(refreshToken)
                 .build();
+    }
+
+    private String issueRefreshToken(Long userId) {
+        String refreshToken = REFRESH_TOKEN_PREFIX + userId + "_" + System.nanoTime();
+        SaSession session = StpUtil.getTokenSessionByToken(refreshToken);
+        session.set(REFRESH_USER_ID_KEY, String.valueOf(userId));
+        session.updateTimeout(REFRESH_TOKEN_EXPIRE_SECONDS);
+        return refreshToken;
+    }
+
+    private Long resolveRefreshUserId(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            return null;
+        }
+
+        SaSession session;
+        try {
+            session = StpUtil.getTokenSessionByToken(refreshToken.trim());
+        } catch (Exception e) {
+            return null;
+        }
+        if (session == null) {
+            return null;
+        }
+
+        Object userIdValue = session.get(REFRESH_USER_ID_KEY);
+        if (userIdValue == null) {
+            return null;
+        }
+
+        try {
+            return Long.parseLong(String.valueOf(userIdValue));
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private AuthAdminDTO toAdminDto(AuthAdminVO admin) {

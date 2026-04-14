@@ -17,4 +17,7 @@ import java.util.List;
 public class FeedTimelineResponseDTO {
     private List<FeedItemDTO> items;
     private String nextCursor;
+    private Long nextCursorTs;
+    private Long nextCursorPostId;
+    private Boolean hasMore;
 }

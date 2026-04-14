@@ -17,4 +17,5 @@ public class AuthTokenResponseDTO {
     private String tokenName;
     private String tokenPrefix;
     private String token;
+    private String refreshToken;
 }

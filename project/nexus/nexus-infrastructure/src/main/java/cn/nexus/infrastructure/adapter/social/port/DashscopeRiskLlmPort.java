@@ -15,6 +15,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
@@ -30,6 +31,7 @@ import java.util.List;
  */
 @Slf4j
 @Component
+@Profile("!wsl")
 @RequiredArgsConstructor
 public class DashscopeRiskLlmPort implements IRiskLlmPort {
 

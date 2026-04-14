@@ -19,7 +19,7 @@
                update_time AS updateTime
         FROM relation_event_outbox
         WHERE status = #{status}
-          AND (next_retry_time IS NULL OR next_retry_time <= #{now})
+          AND (next_retry_time IS NULL OR next_retry_time &lt;= #{now})
         ORDER BY update_time ASC
         LIMIT #{limit}
     </select>
@@ -43,6 +43,6 @@
     <delete id="deleteOlderThan">
         DELETE FROM relation_event_outbox
         WHERE status = #{status}
-          AND update_time < #{before}
+          AND update_time &lt; #{before}
     </delete>
 </mapper>

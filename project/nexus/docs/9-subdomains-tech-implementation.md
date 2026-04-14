@@ -1318,151 +1318,90 @@ flowchart TD
 
 ---
 
-## 6. 子领域 5：点赞/反应（Reaction Like）
+## 6. 子领域 5：点赞 / 反应（Reaction Like）
+
+当前实现已经切到 Redis 真相源模型。
 
 入口代码：
-- HTTP：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`（`/interact/reaction`）
-- 领域服务（入口聚合）：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
-- 点赞子域服务：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
-- 延迟落库消费者：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ReactionSyncConsumer.java`
+- HTTP：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
+- 领域服务：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
+- 点赞服务：`project/nexus/nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
+- 事件日志消费者：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ReactionEventLogConsumer.java`
+- Redis 恢复启动器：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/job/social/ReactionRedisRecoveryRunner.java`
 
-关键依赖（你可以理解为“它要去问谁/改谁”）：
-- `IReactionCachePort`：Redis 原子更新（计数 + 是否点赞 + ops 记录）
-- `IReactionDelayPort`：投递“延迟同步”消息
-- `IReactionRepository`：MySQL 落库（事实表 + 计数表）
-- `IInteractionNotifyEventPort`：点赞通知事件（LIKE_ADDED）
-- `IRecommendFeedbackEventPort`：推荐反馈事件（unlike 只走推荐，不走通知）
-- `ICommentRepository`：当目标是评论时，用于校验“只能赞根评” + 回表拿 postId
+关键依赖：
+- `IReactionCachePort`：Redis 原子更新当前 state 与 count
+- `ReactionEventLogMqPort`：异步投递 reaction event log 消息
+- `ICommentRepository`：评论目标校验与派生信息读取
+- `CommentLikeChangedConsumer`：评论点赞后的派生侧效应
 
-关键设计（先讲清楚）：
-- 动作不是 toggle：`ADD` 表示“我要变成已赞”；`REMOVE` 表示“我要变成未赞”
-- **在线以 Redis 为准**：写入/查询都走 Redis；MySQL 是“延迟一致”（后台慢慢补）
-- `delta` 才是黄金信号：`+1/-1/0` 表示这次真实变更了没有（0=重复点）
-- 当前只支持 `LIKE`：其它 reactionType 会直接 `0002`（未实现）
-
----
-
-### 6.1 `POST /api/v1/interact/reaction`（点赞/取消点赞）
-
-入口：`InteractionController.react()` → `InteractionService.react()` → `ReactionLikeService.applyReaction()`
-
-处理步骤（按代码主线）：
-1. `UserContext.requireUserId()` 拿 userId
-2. 解析 target：
-   - 校验 `targetId/targetType/type` 都合法
-   - 如果是评论：必须存在且 `status=1`，并且 **必须是根评（rootId==null）**，否则直接拒绝
-3. 解析 action：只能是 `ADD/REMOVE`，否则 `0002`
-4. `reactionCachePort.applyAtomic(...)`：Redis 原子更新（返回 currentCount + delta + firstPending）
-5. 如果 `firstPending=true`：投递延迟消息（窗口期后触发 `syncTarget` 落库）
-6. 旁路事件（都不阻塞主链路，失败只打日志）：
-   - `delta==+1`：发布通知事件 `LIKE_ADDED`
-   - `delta==-1`：发布推荐反馈 `unlike`（只对 POST）
-7. 如果目标是评论且 `delta!=0`：发布 `CommentLikeChangedEvent(delta)`（异步更新评论 like_count + 热榜）
-8. 返回：`requestId/currentCount/success=true`
-
-极端情况：
-- 重复点“已赞”：`delta=0`，不会发通知（避免刷屏）
-- Redis 写成功但 MySQL 还没同步：接口仍返回 success=true（这是设计语义，不是 bug）
-- 回复评论不允许点赞：会直接 `0002`（业务约束写死在 `InteractionService.parseTarget`）
-
-流程图：
-```mermaid
-flowchart TD
-  A["请求 POST /interact/reaction"] --> B["UserContext.requireUserId"]
-  B --> C["InteractionService.parseTarget<br/>校验 targetType/type"]
-  C --> D{目标是评论?}
-  D -- 是 --> E["回表 getBrief<br/>必须根评且 status=1"]
-  D -- 否 --> F["解析 action ADD/REMOVE"]
-  E --> F
-  F --> G["ReactionLikeService.applyReaction<br/>Redis 原子更新"]
-  G --> H{firstPending?}
-  H -- 是 --> I["投递延迟同步消息"]
-  H -- 否 --> J["跳过"]
-  G --> K{delta==+1?}
-  K -- 是 --> L["发布 LIKE_ADDED 通知事件(旁路)"]
-  K -- 否 --> M["不发通知"]
-  G --> N{delta==-1 且 target=POST?}
-  N -- 是 --> O["发布 unlike 推荐反馈(旁路)"]
-  N -- 否 --> P["跳过"]
-  G --> Q{target=COMMENT 且 delta!=0?}
-  Q -- 是 --> R["发布 CommentLikeChangedEvent(旁路)"]
-  Q -- 否 --> S["返回响应"]
-  R --> S
-```
+当前固定语义：
+- Redis 是唯一在线真相源。
+- MySQL 不保存最终点赞事实表和最终计数表。
+- MySQL 只保存追加式 `interaction_reaction_event_log`。
+- RabbitMQ 只负责异步交接 event log 与其它旁路事件。
+- `delta in {-1, 1}` 表示发生了有效状态变化；`delta = 0` 表示幂等空操作。
 
 ---
 
-### 6.2 `GET /api/v1/interact/reaction/state`（查询：我是否点过赞 + 当前计数）
+### 6.1 `POST /api/v1/interact/reaction`
 
-入口：`InteractionController.reactionState()` → `InteractionService.reactionState()` → `ReactionLikeService.queryState()`
+入口：
+`InteractionController.react()` -> `InteractionService.react()` -> `ReactionLikeService.applyReaction()`
 
 处理步骤：
-1. `UserContext.requireUserId()` 拿 userId
-2. 同 6.1 的 target 校验（评论必须是根评且存在）
-3. Redis 查询：
-   - `state = reactionCachePort.getState(userId, target)`
-   - `count = reactionCachePort.getCount(target)`
-4. 返回 `state/currentCount`
+1. 校验 `userId`、`targetType`、`targetId`、`action`。
+2. 如果目标是评论，校验评论存在且符合业务约束。
+3. 调用 `reactionCachePort.applyAtomic(...)` 先改 Redis。
+4. 如果 `delta != 0`，best-effort 发出：
+   - reaction event log 消息
+   - post like/unlike 旁路消息
+   - comment like changed 消息
+   - 通知或推荐反馈消息
+5. 返回 `success=true` 与 Redis 中的新计数。
 
-极端情况：
-- Redis 不可用：会抛异常，被 Controller catch 后返回 `0001`（未知失败）
-
-流程图：
-```mermaid
-flowchart TD
-  A["请求 GET /interact/reaction/state"] --> B["UserContext.requireUserId"]
-  B --> C["parseTarget 校验"]
-  C --> D["ReactionLikeService.queryState<br/>Redis getState+getCount"]
-  D --> E["返回 state + currentCount"]
-```
+语义：
+- API 成功判定点是 Redis 更新成功。
+- MySQL event log 追加失败不会回滚本次在线结果。
+- 幂等重复点赞/取消点赞返回成功，但 `delta = 0`，不会追加 event log。
 
 ---
 
-#### 6.3（异步）点赞为什么要“延迟落库”（Redis 在线，MySQL 慢慢补）
+### 6.2 `GET /api/v1/interact/reaction/state`
 
-入口链路：
-- 写点赞时 `firstPending=true` → `reactionDelayPort.sendDelay(...)`
-- 消费延迟消息：`ReactionSyncConsumer.onMessage(rawMessage)` → `ReactionLikeService.syncTarget(target)`
+入口：
+`InteractionController.reactionState()` -> `InteractionService.reactionState()` -> `ReactionLikeService.queryState()`
 
-处理步骤（按代码）：
-1. Consumer 解析 rawMessage（JSON）：拿到 `targetType/targetId/reactionType/attempt`
-   - 解析失败：直接发 DLQ（避免无限重试）
-2. 用 Redis 做互斥锁：`interact:reaction:lock:<hashTag>`（防同一个 target 并发 sync）
-   - 拿不到锁：reschedule（attempt+1），最多 30 次，否则 DLQ
-3. `ReactionLikeService.syncTarget(target)`（事务）：
-   - `snapshotOps` 冻结一份 ops 快照
-   - 读取快照：拆出 `addUserIds/removeUserIds`
-   - MySQL 批量 upsert/delete
-   - 用 Redis 计数覆盖写 MySQL count
-   - 清理快照与同步标记
-   - 如果同步期间又产生新 ops：再投递一次延迟同步（避免丢更新）
+处理步骤：
+1. 校验用户与目标。
+2. 从 Redis 读取当前 liked state。
+3. 从 Redis 读取当前 count。
+4. 直接返回 `state/currentCount`。
 
-极端情况：
-- 同步失败：会自动重试（最多 30 次，每次延迟 1s），最终进 DLQ 便于排查
-- 这个链路保证“最终一致”，但不保证“秒级一致”（这是成本/吞吐的取舍）
-
-流程图：
-```mermaid
-flowchart TD
-  A["firstPending=true"] --> B["sendDelay(target, windowMs)"]
-  B --> C["ReactionSyncConsumer"]
-  C --> D{消息可解析?}
-  D -- 否 --> E["发 DLQ"]
-  D -- 是 --> F["抢 Redis 锁<br/>interact:reaction:lock:hashTag"]
-  F --> G{拿到锁?}
-  G -- 否 --> H["reschedule attempt+1<br/>>30 则 DLQ"]
-  G -- 是 --> I["ReactionLikeService.syncTarget"]
-  I --> J["snapshotOps + 读快照"]
-  J --> K["MySQL 批量 upsert/delete"]
-  K --> L["覆盖写 count"]
-  L --> M{还有新 ops?}
-  M -- 是 --> N["再投递一次延迟同步"]
-  M -- 否 --> O["结束"]
-```
+语义：
+- 在线读不再回查 MySQL 当前事实表或计数表。
+- Redis 不可用时，本接口直接失败，而不是降级到 DB 真相。
 
 ---
 
-## 7. 子领域 6：通知（站内通知收件箱/已读）
+### 6.3 异步 event log 与恢复
+
+异步落库：
+1. `ReactionLikeService` 在 Redis 生效后，best-effort 投递 `ReactionEventLogMessage`。
+2. `ReactionEventLogConsumer` 消费并追加到 `interaction_reaction_event_log`。
+3. 以 `event_id` 幂等，重复消息视为成功。
+
+恢复：
+1. `ReactionRedisRecoveryRunner` 启动时按 `seq` 升序扫描 event log。
+2. Redis 维护每个 stream family 的 checkpoint。
+3. 宕机或冷启动后，从 checkpoint 之后继续回放。
+
+语义：
+- MySQL event log 用于审计和 Redis 重建。
+- 它不是在线读写的真相源。
+- 旧的 `ReactionSyncConsumer`、`IReactionDelayPort`、`syncTarget()` 延迟同步链路已经下线。
+
+---## 7. 子领域 6：通知（站内通知收件箱/已读）
 
 入口代码：
 - HTTP：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`（`/notification/*`）

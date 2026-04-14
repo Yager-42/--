@@ -3,6 +3,7 @@ package cn.nexus.infrastructure.mq.reliable;
 import cn.nexus.infrastructure.dao.social.IReliableMqReplayRecordDao;
 import cn.nexus.infrastructure.dao.social.po.ReliableMqReplayRecordPO;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import java.util.Date;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +28,11 @@ public class ReliableMqReplayService {
     private final IReliableMqReplayRecordDao replayRecordDao;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
+
+    @PostConstruct
+    void init() {
+        objectMapper.findAndRegisterModules();
+    }
 
     public void recordFailure(String consumerName,
                               String originalQueue,

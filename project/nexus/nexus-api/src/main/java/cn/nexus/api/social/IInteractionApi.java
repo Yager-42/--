@@ -13,8 +13,6 @@ public interface IInteractionApi {
 
     Response<ReactionStateResponseDTO> reactionState(ReactionStateRequestDTO requestDTO);
 
-    Response<ReactionLikersResponseDTO> reactionLikers(ReactionLikersRequestDTO requestDTO);
-
     Response<CommentResponseDTO> comment(CommentRequestDTO requestDTO);
 
     Response<OperationResultDTO> pinComment(PinCommentRequestDTO requestDTO);

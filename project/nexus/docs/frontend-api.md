@@ -172,7 +172,6 @@ export async function uploadFile(file: File): Promise<string> {
 | `POST` | `/api/v1/interact/comment` | 是 | `` | `InteractionController#comment` | `CommentRequestDTO` | `CommentResponseDTO` |
 | `POST` | `/api/v1/interact/comment/pin` | 是 | `` | `InteractionController#pinComment` | `PinCommentRequestDTO` | `OperationResultDTO` |
 | `POST` | `/api/v1/interact/reaction` | 是 | `` | `InteractionController#react` | `ReactionRequestDTO` | `ReactionResponseDTO` |
-| `GET` | `/api/v1/interact/reaction/likers` | 是 | `` | `InteractionController#reactionLikers` | `` | `ReactionLikersResponseDTO` |
 | `GET` | `/api/v1/interact/reaction/state` | 是 | `` | `InteractionController#reactionState` | `` | `ReactionStateResponseDTO` |
 | `POST` | `/api/v1/interaction/poll/create` | 是 | `` | `InteractionController#createPoll` | `PollCreateRequestDTO` | `PollCreateResponseDTO` |
 | `POST` | `/api/v1/interaction/poll/vote` | 是 | `` | `InteractionController#vote` | `PollVoteRequestDTO` | `PollVoteResponseDTO` |
@@ -399,21 +398,6 @@ export async function uploadFile(file: File): Promise<string> {
     - `requestId`: `String`
     - `currentCount`: `Long`
     - `success`: `boolean`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
-
-#### `GET /api/v1/interact/reaction/likers`
-
-- 鉴权：需要登录
-- Query 参数（来自 DTO 字段）：
-  - `targetId`: `Long`
-  - `targetType`: `String`
-  - `type`: `String`
-  - `cursor`: `String`
-  - `limit`: `Integer`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `items`: `List<ReactionLikerDTO>`
-    - `nextCursor`: `String`
 - 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
 
 #### `GET /api/v1/interact/reaction/state`
@@ -1612,8 +1596,6 @@ export async function uploadFile(file: File): Promise<string> {
 - `PublishAttemptResponseDTO`
 - `PublishContentRequestDTO`
 - `PublishContentResponseDTO`
-- `ReactionLikerDTO`
-- `ReactionLikersResponseDTO`
 - `ReactionRequestDTO`
 - `ReactionResponseDTO`
 - `ReactionStateResponseDTO`
@@ -2810,47 +2792,6 @@ export async function uploadFile(file: File): Promise<string> {
   "attemptId": 0,
   "versionNum": 0,
   "status": "string"
-}
-```
-
-### `ReactionLikerDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionLikerDTO.java`
-- 字段：
-  - `userId`: `Long`
-  - `nickname`: `String`
-  - `avatar`: `String`
-  - `likedAt`: `Long`
-
-示例 JSON：
-```json
-{
-  "userId": 0,
-  "nickname": "string",
-  "avatar": "string",
-  "likedAt": 0
-}
-```
-
-### `ReactionLikersResponseDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionLikersResponseDTO.java`
-- 字段：
-  - `items`: `List<ReactionLikerDTO>`
-  - `nextCursor`: `String`
-
-示例 JSON：
-```json
-{
-  "items": [
-    {
-      "userId": 0,
-      "nickname": "string",
-      "avatar": "string",
-      "likedAt": 0
-    }
-  ],
-  "nextCursor": "string"
 }
 ```
 

@@ -1,179 +1,219 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { Motion } from '@motionone/vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import ZenButton from '@/components/primitives/ZenButton.vue'
+import ZenIcon from '@/components/primitives/ZenIcon.vue'
 import { fetchSuggest } from '@/api/search'
+import SearchSuggestionPanel from '@/components/search/SearchSuggestionPanel.vue'
 
-const props = defineProps<{
-  isExpanded: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    modelValue?: string
+    isExpanded: boolean
+    placeholder?: string
+  }>(),
+  {
+    modelValue: '',
+    placeholder: '搜索帖子、作者、关键词'
+  }
+)
 
-const emit = defineEmits(['expand', 'collapse', 'search']);
-const keyword = ref('');
-const suggestions = ref<string[]>([]);
-const showSuggestions = ref(false);
-let debounceTimer: any = null;
+const emit = defineEmits<{
+  (event: 'update:modelValue', value: string): void
+  (event: 'expand'): void
+  (event: 'collapse'): void
+  (event: 'search', keyword: string): void
+}>()
+
+const keyword = ref(props.modelValue)
+const loading = ref(false)
+const suggestions = ref<string[]>([])
+const showPanel = ref(false)
+const requestFailed = ref('')
+let timer: number | null = null
+let requestSequence = 0
+let activeRequestId = 0
+
+const canSearch = computed(() => keyword.value.trim().length > 0)
+
+const clearPendingDebounce = () => {
+  if (timer) {
+    window.clearTimeout(timer)
+    timer = null
+  }
+}
+
+const cancelActiveRequest = () => {
+  activeRequestId = ++requestSequence
+}
+
+const closePanel = (options?: { cancelPending?: boolean }) => {
+  if (options?.cancelPending) {
+    clearPendingDebounce()
+    cancelActiveRequest()
+  }
+  showPanel.value = false
+  suggestions.value = []
+  loading.value = false
+  requestFailed.value = ''
+}
+
+const submit = () => {
+  const value = keyword.value.trim()
+  if (!value) return
+  emit('search', value)
+  closePanel({ cancelPending: true })
+}
+
+const clear = () => {
+  keyword.value = ''
+  closePanel({ cancelPending: true })
+  emit('collapse')
+}
 
 const onFocus = () => {
-  emit('expand');
-  if (keyword.value) showSuggestions.value = true;
+  emit('expand')
+  if (keyword.value.trim()) {
+    showPanel.value = true
+    if (suggestions.value.length === 0 && !loading.value && !requestFailed.value) {
+      void loadSuggestions()
+    }
+  }
 }
 
 const onBlur = () => {
-  setTimeout(() => {
-    showSuggestions.value = false;
-    if (!keyword.value) {
-      emit('collapse');
+  window.setTimeout(() => {
+    closePanel({ cancelPending: true })
+    if (!keyword.value.trim()) {
+      emit('collapse')
     }
-  }, 200);
+  }, 140)
 }
 
-const onInput = () => {
-  if (debounceTimer) clearTimeout(debounceTimer);
-  
-  if (!keyword.value) {
-    suggestions.value = [];
-    showSuggestions.value = false;
-    return;
+const selectSuggestion = (item: string) => {
+  keyword.value = item
+  submit()
+}
+
+const loadSuggestions = async () => {
+  const query = keyword.value.trim()
+  if (!query) {
+    closePanel({ cancelPending: true })
+    return
   }
-  
-  debounceTimer = setTimeout(async () => {
-    try {
-      const res: any = await fetchSuggest(keyword.value);
-      suggestions.value = res.suggestions || [];
-      showSuggestions.value = suggestions.value.length > 0;
-    } catch (err) {
-      console.error('Fetch suggestions failed', err);
+
+  const requestId = ++requestSequence
+  activeRequestId = requestId
+  loading.value = true
+  requestFailed.value = ''
+  showPanel.value = true
+
+  try {
+    const response = await fetchSuggest(query, 8)
+    if (requestId !== activeRequestId) {
+      return
     }
-  }, 300);
+    suggestions.value = Array.isArray(response.items) ? response.items : []
+  } catch (error) {
+    if (requestId !== activeRequestId) {
+      return
+    }
+    requestFailed.value = error instanceof Error ? error.message : '搜索建议加载失败'
+    suggestions.value = []
+  } finally {
+    if (requestId === activeRequestId) {
+      loading.value = false
+    }
+  }
 }
 
-const selectSuggest = (s: string) => {
-  keyword.value = s;
-  showSuggestions.value = false;
-  emit('search', s);
-}
+watch(
+  () => props.modelValue,
+  (value) => {
+    const nextValue = value ?? ''
+    if (nextValue !== keyword.value) {
+      keyword.value = nextValue
+    }
+  }
+)
+
+watch(keyword, (value) => {
+  emit('update:modelValue', value)
+
+  clearPendingDebounce()
+  timer = window.setTimeout(() => {
+    void loadSuggestions()
+  }, 220)
+})
+
+watch(
+  () => props.isExpanded,
+  (expanded) => {
+    if (!expanded) {
+      closePanel({ cancelPending: true })
+    }
+  }
+)
+
+onBeforeUnmount(() => {
+  clearPendingDebounce()
+})
 </script>
 
 <template>
-  <div class="search-outer-container">
-    <Motion
-      class="search-container"
-      :animate="{ width: isExpanded ? 'calc(100vw - 32px)' : '32px' }"
-      :transition="{ duration: 0.4, easing: [0.32, 0.72, 0, 1] }"
+  <div class="relative w-full">
+    <label
+      class="grid min-h-[56px] w-full grid-cols-[20px,minmax(0,1fr),auto,auto] items-center gap-3 rounded-full border border-outline-variant/12 bg-surface-container-lowest/85 px-4 py-1.5 shadow-soft transition"
+      :class="isExpanded ? 'bg-white/90' : ''"
+      aria-label="搜索内容"
     >
-      <div class="search-box" :class="{ 'expanded': isExpanded }">
-        <span class="search-icon">🔍</span>
-        <input 
-          v-model="keyword"
-          type="text" 
-          placeholder="搜索" 
-          class="search-input"
-          @focus="onFocus"
-          @blur="onBlur"
-          @input="onInput"
-        />
-      </div>
-    </Motion>
+      <ZenIcon name="search" :size="18" class="text-on-surface-variant" />
 
-    <div v-if="showSuggestions && isExpanded" class="suggestions-overlay">
-      <div 
-        v-for="(s, i) in suggestions" 
-        :key="i" 
-        class="suggest-item"
-        @click="selectSuggest(s)"
+      <input
+        v-model="keyword"
+        type="search"
+        inputmode="search"
+        class="w-full min-w-0 border-none bg-transparent text-sm text-on-surface outline-none placeholder:text-outline-variant/80"
+        :placeholder="placeholder"
+        :aria-expanded="showPanel"
+        aria-controls="search-suggestion-panel"
+        @focus="onFocus"
+        @blur="onBlur"
+        @keydown.enter.prevent="submit"
       >
-        <span class="suggest-icon">🔍</span>
-        <span class="suggest-text">{{ s }}</span>
-      </div>
+
+      <button
+        v-if="keyword"
+        type="button"
+        class="grid h-9 w-9 place-items-center rounded-full text-on-surface-variant transition hover:bg-surface-container-low"
+        aria-label="清空搜索"
+        @mousedown.prevent
+        @click="clear"
+      >
+        <ZenIcon name="close" :size="18" />
+      </button>
+
+      <ZenButton
+        variant="primary"
+        class="min-h-[42px] min-w-[88px] px-4 text-xs sm:text-sm"
+        :disabled="!canSearch"
+        @mousedown.prevent
+        @click="submit"
+      >
+        搜索
+      </ZenButton>
+    </label>
+
+    <div class="absolute inset-x-0 top-[calc(100%+10px)] z-50">
+      <SearchSuggestionPanel
+        panel-id="search-suggestion-panel"
+        :open="showPanel"
+        :loading="loading"
+        :items="suggestions"
+        :query="keyword"
+        :error-message="requestFailed"
+        @select="selectSuggestion"
+        @retry="loadSuggestions"
+      />
     </div>
   </div>
 </template>
-
-<style scoped>
-.search-outer-container {
-  position: relative;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.search-container {
-  height: 32px;
-  position: relative;
-  z-index: 100;
-}
-
-.search-box {
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.05);
-  border-radius: 16px;
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  transition: background 0.3s ease;
-}
-
-.search-box.expanded {
-  background: white;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.1);
-}
-
-.search-icon {
-  font-size: 14px;
-  margin-right: 6px;
-  opacity: 0.6;
-}
-
-.search-input {
-  flex: 1;
-  border: none;
-  background: none;
-  font-size: 15px;
-  outline: none;
-  width: 0;
-  opacity: 0;
-}
-
-.expanded .search-input {
-  width: 100%;
-  opacity: 1;
-}
-
-.suggestions-overlay {
-  position: absolute;
-  top: 40px;
-  left: 0;
-  width: 100%;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border-radius: 16px;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-  overflow: hidden;
-  z-index: 1000;
-  border: 0.5px solid rgba(0,0,0,0.05);
-}
-
-.suggest-item {
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  cursor: pointer;
-  border-bottom: 0.5px solid rgba(0,0,0,0.05);
-}
-
-.suggest-item:active {
-  background: rgba(0,0,0,0.02);
-}
-
-.suggest-icon {
-  opacity: 0.4;
-  font-size: 12px;
-}
-
-.suggest-text {
-  font-size: 15px;
-  font-weight: 500;
-}
-</style>

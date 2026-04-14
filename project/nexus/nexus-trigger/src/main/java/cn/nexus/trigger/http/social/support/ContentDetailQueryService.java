@@ -1,13 +1,13 @@
 package cn.nexus.trigger.http.social.support;
 
 import cn.nexus.api.social.content.dto.ContentDetailResponseDTO;
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
+import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.infrastructure.support.SingleFlight;
 import cn.nexus.types.enums.ResponseCode;
@@ -45,16 +45,16 @@ public class ContentDetailQueryService {
 
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
-    private final IReactionCachePort reactionCachePort;
+    private final IObjectCounterPort objectCounterPort;
     private final Executor aggregationExecutor;
 
     public ContentDetailQueryService(IContentRepository contentRepository,
                                     IUserBaseRepository userBaseRepository,
-                                    IReactionCachePort reactionCachePort,
+                                    IObjectCounterPort objectCounterPort,
                                     @Qualifier("aggregationExecutor") Executor aggregationExecutor) {
         this.contentRepository = contentRepository;
         this.userBaseRepository = userBaseRepository;
-        this.reactionCachePort = reactionCachePort;
+        this.objectCounterPort = objectCounterPort;
         this.aggregationExecutor = aggregationExecutor;
     }
 
@@ -147,12 +147,12 @@ public class ContentDetailQueryService {
             return 0L;
         }
         try {
-            ReactionTargetVO target = ReactionTargetVO.builder()
+            ObjectCounterTarget target = ObjectCounterTarget.builder()
                     .targetType(ReactionTargetTypeEnumVO.POST)
                     .targetId(postId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
+                    .counterType(ObjectCounterType.LIKE)
                     .build();
-            return reactionCachePort.getCount(target);
+            return objectCounterPort.getCount(target);
         } catch (Exception e) {
             log.warn("load like count failed, postId={}", postId, e);
             return 0L;

@@ -3,6 +3,8 @@ package cn.nexus.integration.consistency;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
@@ -57,11 +59,11 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
         int expected = likers.size();
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             publishPendingReliableMqMessages();
-            assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(expected);
+            assertThat(readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE)).isEqualTo(expected);
             assertThat(queryReactionEventLogCount("POST", postId, "LIKE")).isEqualTo(expected);
         });
 
-        long redisCount = readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}");
+        long redisCount = readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE);
         long eventLogCount = queryReactionEventLogCount("POST", postId, "LIKE");
 
         assertThat(redisCount).isEqualTo(expected);
@@ -87,7 +89,6 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(queryActiveFollowEdgeCount(follower.userId(), followee.userId())).isEqualTo(1L));
-
         ObjectNode batchReq = JsonNodeFactory.instance.objectNode();
         batchReq.putArray("targetUserIds").add(followee.userId());
         JsonNode stateBatch = assertSuccess(postJson("/api/v1/relation/state/batch", batchReq, follower.token()));

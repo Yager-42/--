@@ -1,7 +1,8 @@
 package cn.nexus.domain.social.service;
 
+import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
-import cn.nexus.domain.social.adapter.port.IPostLikeCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionCommentLikeChangedMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionEventLogMqPort;
@@ -51,10 +52,10 @@ public class ReactionLikeService implements IReactionLikeService {
     private final IReactionCommentLikeChangedMqPort reactionCommentLikeChangedMqPort;
     private final IReactionNotifyMqPort reactionNotifyMqPort;
     private final IReactionRecommendFeedbackMqPort reactionRecommendFeedbackMqPort;
-    private final IPostLikeCachePort postLikeCachePort;
     private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort;
     private final IPostAuthorPort postAuthorPort;
     private final IReactionEventLogMqPort reactionEventLogMqPort;
+    private final IUserCounterPort userCounterPort;
 
     /**
      * 统一点赞/取消点赞入口。
@@ -127,14 +128,7 @@ public class ReactionLikeService implements IReactionLikeService {
         if (postId == null || creatorId == null || delta == 0) {
             return;
         }
-        try {
-            postLikeCachePort.applyCreatorLikeDelta(creatorId, delta);
-        } catch (Exception e) {
-            // Best-effort side effect: failure should not block the main like/unlike path.
-            if (log.isDebugEnabled()) {
-                log.debug("apply creator like delta failed, requestId={}, creatorId={}, delta={}", requestId, creatorId, delta, e);
-            }
-        }
+        incrementLikeReceivedBestEffort(requestId, creatorId, delta);
 
         LikeUnlikePostEvent event = new LikeUnlikePostEvent();
         event.setEventId(requestId);
@@ -160,7 +154,11 @@ public class ReactionLikeService implements IReactionLikeService {
             return;
         }
         Long rootCommentId = target.getTargetId();
-        Long postId = loadCommentPostId(rootCommentId);
+        CommentBriefVO commentBrief = loadCommentBrief(rootCommentId);
+        if (commentBrief != null && commentBrief.getUserId() != null) {
+            incrementLikeReceivedBestEffort(requestId, commentBrief.getUserId(), delta);
+        }
+        Long postId = commentBrief == null ? null : commentBrief.getPostId();
         if (postId != null) {
             publishCommentLikeChanged(requestId, rootCommentId, postId, delta, nowMs);
         }
@@ -263,15 +261,12 @@ public class ReactionLikeService implements IReactionLikeService {
         }
     }
 
-    private Long loadCommentPostId(Long commentId) {
+    private CommentBriefVO loadCommentBrief(Long commentId) {
         if (commentId == null) {
             return null;
         }
         try {
-            CommentBriefVO brief = commentRepository.getBrief(commentId);
-            if (brief != null) {
-                return brief.getPostId();
-            }
+            return commentRepository.getBrief(commentId);
         } catch (Exception e) {
             // Best-effort lookup: comment might be deleted/hidden or DAO might transiently fail.
             if (log.isDebugEnabled()) {
@@ -279,6 +274,20 @@ public class ReactionLikeService implements IReactionLikeService {
             }
         }
         return null;
+    }
+
+    private void incrementLikeReceivedBestEffort(String requestId, Long ownerUserId, long delta) {
+        if (ownerUserId == null || delta == 0) {
+            return;
+        }
+        try {
+            userCounterPort.increment(ownerUserId, UserCounterType.LIKE_RECEIVED, delta);
+        } catch (Exception e) {
+            if (log.isDebugEnabled()) {
+                log.debug("increment like received failed, requestId={}, ownerUserId={}, delta={}",
+                        requestId, ownerUserId, delta, e);
+            }
+        }
     }
 
     private void publishCommentLikeChanged(String requestId, Long rootCommentId, Long postId, long delta, long nowMs) {

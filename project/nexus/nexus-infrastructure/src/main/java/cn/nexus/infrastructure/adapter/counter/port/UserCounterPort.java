@@ -3,8 +3,12 @@ package cn.nexus.infrastructure.adapter.counter.port;
 import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisOperations;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisSchema;
+import java.util.HashMap;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -19,9 +23,8 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class UserCounterPort implements IUserCounterPort {
 
-    private static final String KEY_PREFIX = "counter:user:";
-    private static final long BASE_TTL_SECONDS = 1800;
-    private static final long JITTER_SECONDS = 300;
+    private static final long REBUILD_LOCK_SECONDS = 15L;
+    private static final long REBUILD_RATE_LIMIT_SECONDS = 30L;
 
     private final StringRedisTemplate redisTemplate;
     private final IRelationRepository relationRepository;
@@ -31,15 +34,7 @@ public class UserCounterPort implements IUserCounterPort {
         if (userId == null || counterType == null) {
             return 0L;
         }
-        String key = key(userId, counterType);
-        Long cached = parseLong(redisTemplate.opsForValue().get(key));
-        if (cached != null && cached >= 0) {
-            return cached;
-        }
-        long rebuilt = rebuild(userId, counterType);
-        redisTemplate.opsForValue().set(key, String.valueOf(rebuilt));
-        expire(key);
-        return rebuilt;
+        return snapshotValue(userId, counterType);
     }
 
     @Override
@@ -50,14 +45,14 @@ public class UserCounterPort implements IUserCounterPort {
         if (delta == 0) {
             return getCount(userId, counterType);
         }
-        String key = key(userId, counterType);
-        Long updated = redisTemplate.opsForValue().increment(key, delta);
-        long safe = updated == null ? 0L : Math.max(0L, updated);
-        if (safe != (updated == null ? 0L : updated)) {
-            redisTemplate.opsForValue().set(key, "0");
+        CountRedisOperations operations = new CountRedisOperations(redisTemplate);
+        String aggregationBucket = CountRedisKeys.userAggregationBucket(counterType);
+        if (aggregationBucket != null) {
+            operations.addAggregationDelta(aggregationBucket, String.valueOf(userId), delta);
         }
-        expire(key);
-        return safe;
+        long updated = Math.max(0L, snapshotValue(userId, counterType) + delta);
+        writeSnapshotValue(userId, counterType, updated);
+        return updated;
     }
 
     @Override
@@ -65,9 +60,7 @@ public class UserCounterPort implements IUserCounterPort {
         if (userId == null || counterType == null) {
             return;
         }
-        String key = key(userId, counterType);
-        redisTemplate.opsForValue().set(key, String.valueOf(Math.max(0L, count)));
-        expire(key);
+        writeSnapshotValue(userId, counterType, Math.max(0L, count));
     }
 
     @Override
@@ -75,34 +68,101 @@ public class UserCounterPort implements IUserCounterPort {
         if (userId == null || counterType == null) {
             return;
         }
-        redisTemplate.delete(key(userId, counterType));
+        redisTemplate.delete(CountRedisKeys.userSnapshot(userId));
     }
 
-    private long rebuild(Long userId, UserCounterType counterType) {
-        return switch (counterType) {
-            case FOLLOWING -> relationRepository.countActiveRelationsBySource(userId, 1);
-            case FOLLOWER -> relationRepository.countFollowerIds(userId);
-            case POST, LIKE_RECEIVED, FAVORITE_RECEIVED -> 0L;
-        };
-    }
-
-    private String key(Long userId, UserCounterType counterType) {
-        return KEY_PREFIX + counterType.getCode() + ":" + userId;
-    }
-
-    private void expire(String key) {
-        long ttl = BASE_TTL_SECONDS + ThreadLocalRandom.current().nextLong(JITTER_SECONDS + 1);
-        redisTemplate.expire(key, ttl, TimeUnit.SECONDS);
-    }
-
-    private Long parseLong(Object raw) {
-        if (raw == null) {
-            return null;
+    private long snapshotValue(Long userId, UserCounterType counterType) {
+        if (userId == null || counterType == null) {
+            return 0L;
+        }
+        String key = CountRedisKeys.userSnapshot(userId);
+        if (key == null) {
+            return 0L;
+        }
+        String rawSnapshot = redisTemplate.opsForValue().get(key);
+        if (rawSnapshot == null || rawSnapshot.isBlank()) {
+            return rebuildSnapshotValueIfSupported(userId, counterType, key);
         }
         try {
-            return Long.parseLong(String.valueOf(raw));
-        } catch (NumberFormatException ignored) {
-            return null;
+            Map<String, Long> snapshot = decodeRawSnapshot(rawSnapshot);
+            Long value = snapshot.get(counterType.getCode());
+            if (needsRebuild(counterType, value, snapshot, rawSnapshot)) {
+                return rebuildSnapshotValueIfSupported(userId, counterType, key);
+            }
+            return value == null ? 0L : Math.max(0L, value);
+        } catch (Exception ignored) {
+            return rebuildSnapshotValueIfSupported(userId, counterType, key);
         }
+    }
+
+    private void writeSnapshotValue(Long userId, UserCounterType counterType, long count) {
+        if (userId == null || counterType == null) {
+            return;
+        }
+        String key = CountRedisKeys.userSnapshot(userId);
+        if (key == null) {
+            return;
+        }
+        CountRedisOperations operations = new CountRedisOperations(redisTemplate);
+        Map<String, Long> snapshot = operations.readUserSnapshot(key, CountRedisSchema.user());
+        snapshot.put(counterType.getCode(), Math.max(0L, count));
+        operations.writeUserSnapshot(key, snapshot, CountRedisSchema.user());
+    }
+
+    private boolean needsRebuild(UserCounterType counterType, Long value, Map<String, Long> snapshot, String rawSnapshot) {
+        return supportsRelationRebuild(counterType)
+                && (value == null
+                || snapshot == null
+                || snapshot.size() < CountRedisSchema.user().slotCount()
+                || CountRedisCodec.fromRedisValue(rawSnapshot).length != CountRedisSchema.user().totalPayloadBytes());
+    }
+
+    private boolean supportsRelationRebuild(UserCounterType counterType) {
+        return counterType == UserCounterType.FOLLOWING || counterType == UserCounterType.FOLLOWER;
+    }
+
+    private Map<String, Long> rebuildUserSnapshot(Long userId) {
+        Map<String, Long> rebuilt = CountRedisSchema.userSnapshotDefaults();
+        rebuilt.put(UserCounterType.FOLLOWING.getCode(),
+                Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1)));
+        rebuilt.put(UserCounterType.FOLLOWER.getCode(),
+                Math.max(0L, relationRepository.countFollowerIds(userId)));
+        return rebuilt;
+    }
+
+    private long rebuildSnapshotValueIfSupported(Long userId, UserCounterType counterType, String key) {
+        if (!supportsRelationRebuild(counterType)) {
+            return 0L;
+        }
+        CountRedisOperations operations = new CountRedisOperations(redisTemplate);
+        String rateLimitKey = CountRedisKeys.userRebuildRateLimit(userId);
+        if (rateLimitKey == null || !operations.tryAcquireRateLimit(rateLimitKey, REBUILD_RATE_LIMIT_SECONDS)) {
+            return 0L;
+        }
+        String rebuildLockKey = CountRedisKeys.userRebuildLock(userId);
+        if (rebuildLockKey == null || !operations.tryAcquireRebuildLock(rebuildLockKey, REBUILD_LOCK_SECONDS)) {
+            return 0L;
+        }
+        try {
+            Map<String, Long> rebuilt = rebuildUserSnapshot(userId);
+            operations.writeUserSnapshot(key, rebuilt, CountRedisSchema.user());
+            Long rebuiltValue = rebuilt.get(counterType.getCode());
+            return rebuiltValue == null ? 0L : Math.max(0L, rebuiltValue);
+        } finally {
+            operations.releaseRebuildLock(rebuildLockKey);
+        }
+    }
+
+    private Map<String, Long> decodeRawSnapshot(String rawSnapshot) {
+        CountRedisSchema schema = CountRedisSchema.user();
+        long[] decoded = CountRedisCodec.decodeSlots(
+                CountRedisCodec.fromRedisValue(rawSnapshot),
+                schema.slotCount());
+        Map<String, Long> snapshot = new HashMap<>(schema.slotCount());
+        String[] fieldNames = schema.orderedFieldNames();
+        for (int i = 0; i < fieldNames.length; i++) {
+            snapshot.put(fieldNames[i], decoded[i]);
+        }
+        return snapshot;
     }
 }

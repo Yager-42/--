@@ -4,14 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
-import cn.nexus.domain.social.adapter.port.IPostLikeCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionCommentLikeChangedMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionEventLogMqPort;
@@ -59,7 +60,7 @@ class ReactionLikeServiceTest {
         assertEquals(1, result.getDelta());
         assertEquals("rid-99", result.getRequestId());
         verify(fixture.reactionCachePort).applyAtomic(1L, target, 1);
-        verify(fixture.postLikeCachePort).applyCreatorLikeDelta(1L, 1);
+        verify(fixture.userCounterPort).increment(1L, UserCounterType.LIKE_RECEIVED, 1L);
 
         ArgumentCaptor<ReactionEventLogRecordVO> captor = ArgumentCaptor.forClass(ReactionEventLogRecordVO.class);
         verify(fixture.reactionEventLogMqPort).publish(captor.capture());
@@ -82,7 +83,7 @@ class ReactionLikeServiceTest {
         when(fixture.socialIdPort.nextId()).thenReturn(199L);
         when(fixture.socialIdPort.now()).thenReturn(2000L);
         when(fixture.commentRepository.getBrief(201L))
-                .thenReturn(CommentBriefVO.builder().commentId(201L).postId(301L).build());
+                .thenReturn(CommentBriefVO.builder().commentId(201L).postId(301L).userId(9L).build());
         when(fixture.reactionCachePort.applyAtomic(2L, target, 1))
                 .thenReturn(ReactionApplyResultVO.builder()
                         .currentCount(3L)
@@ -96,7 +97,7 @@ class ReactionLikeServiceTest {
         assertEquals(1, result.getDelta());
         assertEquals("rid-199", result.getRequestId());
         verify(fixture.reactionCachePort).applyAtomic(2L, target, 1);
-        verify(fixture.postLikeCachePort, never()).applyCreatorLikeDelta(Mockito.anyLong(), Mockito.anyInt());
+        verify(fixture.userCounterPort).increment(9L, UserCounterType.LIKE_RECEIVED, 1L);
         verify(fixture.reactionCommentLikeChangedMqPort).publish(org.mockito.ArgumentMatchers.<CommentLikeChangedEvent>argThat(e -> e != null
                 && e.getEventId() != null
                 && !e.getEventId().isBlank()
@@ -111,7 +112,7 @@ class ReactionLikeServiceTest {
 
         when(fixture.socialIdPort.now()).thenReturn(2000L);
         when(fixture.commentRepository.getBrief(201L))
-                .thenReturn(CommentBriefVO.builder().commentId(201L).postId(301L).build());
+                .thenReturn(CommentBriefVO.builder().commentId(201L).postId(301L).userId(9L).build());
         when(fixture.reactionCachePort.applyAtomic(2L, target, 1))
                 .thenReturn(ReactionApplyResultVO.builder()
                         .currentCount(3L)
@@ -130,6 +131,52 @@ class ReactionLikeServiceTest {
         assertEquals(301L, captor.getValue().getPostId());
         assertEquals(1L, captor.getValue().getDelta());
         assertEquals(2000L, captor.getValue().getTsMs());
+    }
+
+    @Test
+    void applyReaction_commentUnlike_shouldDecrementCommentAuthorLikeReceived() {
+        Fixture fixture = new Fixture();
+        ReactionTargetVO target = commentTarget(201L);
+
+        when(fixture.socialIdPort.nextId()).thenReturn(399L);
+        when(fixture.socialIdPort.now()).thenReturn(4000L);
+        when(fixture.commentRepository.getBrief(201L))
+                .thenReturn(CommentBriefVO.builder().commentId(201L).postId(301L).userId(9L).build());
+        when(fixture.reactionCachePort.applyAtomic(2L, target, 0))
+                .thenReturn(ReactionApplyResultVO.builder()
+                        .currentCount(2L)
+                        .delta(-1)
+                        .firstPending(false)
+                        .build());
+
+        ReactionResultVO result = fixture.service.applyReaction(2L, target, ReactionActionEnumVO.REMOVE, null);
+
+        assertEquals(2L, result.getCurrentCount());
+        assertEquals(-1, result.getDelta());
+        verify(fixture.userCounterPort).increment(9L, UserCounterType.LIKE_RECEIVED, -1L);
+    }
+
+    @Test
+    void applyReaction_commentLike_shouldSkipCounterSideEffectsWhenToggleIsIneffective() {
+        Fixture fixture = new Fixture();
+        ReactionTargetVO target = commentTarget(201L);
+
+        when(fixture.socialIdPort.nextId()).thenReturn(299L);
+        when(fixture.socialIdPort.now()).thenReturn(3000L);
+        when(fixture.reactionCachePort.applyAtomic(2L, target, 1))
+                .thenReturn(ReactionApplyResultVO.builder()
+                        .currentCount(3L)
+                        .delta(0)
+                        .firstPending(false)
+                        .build());
+
+        ReactionResultVO result = fixture.service.applyReaction(2L, target, ReactionActionEnumVO.ADD, null);
+
+        assertEquals(3L, result.getCurrentCount());
+        assertEquals(0, result.getDelta());
+        verify(fixture.reactionCommentLikeChangedMqPort, never()).publish(any(CommentLikeChangedEvent.class));
+        verify(fixture.reactionNotifyMqPort, never()).publish(any());
+        verify(fixture.userCounterPort, never()).increment(anyLong(), any(), anyLong());
     }
 
     @Test
@@ -160,8 +207,6 @@ class ReactionLikeServiceTest {
         assertEquals(12L, state.getCurrentCount());
         verify(fixture.reactionCachePort).getState(1L, target);
         verify(fixture.reactionCachePort).getCount(target);
-        verify(fixture.reactionCachePort, never()).bitmapShardExists(Mockito.anyLong(), any());
-        verify(fixture.reactionCachePort, never()).setState(Mockito.anyLong(), any(), anyBoolean());
     }
 
     @Test
@@ -207,10 +252,10 @@ class ReactionLikeServiceTest {
         private final IReactionCommentLikeChangedMqPort reactionCommentLikeChangedMqPort = Mockito.mock(IReactionCommentLikeChangedMqPort.class);
         private final IReactionNotifyMqPort reactionNotifyMqPort = Mockito.mock(IReactionNotifyMqPort.class);
         private final IReactionRecommendFeedbackMqPort reactionRecommendFeedbackMqPort = Mockito.mock(IReactionRecommendFeedbackMqPort.class);
-        private final IPostLikeCachePort postLikeCachePort = Mockito.mock(IPostLikeCachePort.class);
         private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort = Mockito.mock(IReactionLikeUnlikeMqPort.class);
         private final IPostAuthorPort postAuthorPort = Mockito.mock(IPostAuthorPort.class);
         private final IReactionEventLogMqPort reactionEventLogMqPort = Mockito.mock(IReactionEventLogMqPort.class);
+        private final IUserCounterPort userCounterPort = Mockito.mock(IUserCounterPort.class);
         private final ReactionLikeService service = new ReactionLikeService(
                 reactionCachePort,
                 commentRepository,
@@ -218,10 +263,10 @@ class ReactionLikeServiceTest {
                 reactionCommentLikeChangedMqPort,
                 reactionNotifyMqPort,
                 reactionRecommendFeedbackMqPort,
-                postLikeCachePort,
                 reactionLikeUnlikeMqPort,
                 postAuthorPort,
-                reactionEventLogMqPort
+                reactionEventLogMqPort,
+                userCounterPort
         );
     }
 }

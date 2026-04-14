@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.ICommentDao;
@@ -63,7 +64,7 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         publishPendingReliableMqMessages();
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(1L);
+            assertThat(readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE)).isEqualTo(1L);
             assertThat(queryReactionEventLogCount("POST", postId, "LIKE")).isEqualTo(1L);
         });
 
@@ -118,7 +119,7 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         publishPendingReliableMqMessages();
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(readRedisLong("interact:reaction:cnt:{COMMENT:" + rootCommentId + ":LIKE}")).isEqualTo(1L);
+            assertThat(readObjectSnapshotCount(ReactionTargetTypeEnumVO.COMMENT, rootCommentId, ObjectCounterType.LIKE)).isEqualTo(1L);
             assertThat(queryReactionEventLogCount("COMMENT", rootCommentId, "LIKE")).isEqualTo(1L);
             assertThat(commentHotRankRepository.topIds(postId, 10)).contains(rootCommentId);
             assertThat(commentDao.selectBriefById(rootCommentId).getLikeCount()).isEqualTo(1L);
@@ -309,14 +310,14 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             publishPendingReliableMqMessages();
-            assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(1L);
+            assertThat(readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE)).isEqualTo(1L);
             assertThat(queryReactionEventLogCount("POST", postId, "LIKE")).isEqualTo(1L);
             assertThat(notificationUnreadCount(author.userId(), "POST_LIKED", "POST", postId)).isGreaterThanOrEqualTo(1L);
         });
 
         assertThat(result.failure()).isEqualTo(0);
         assertThat(result.success()).isEqualTo(result.totalRequests());
-        assertThat(readRedisLong("interact:reaction:cnt:{POST:" + postId + ":LIKE}")).isEqualTo(1L);
+        assertThat(readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE)).isEqualTo(1L);
     }
 
     private long seedPublishedPost(long authorId) {

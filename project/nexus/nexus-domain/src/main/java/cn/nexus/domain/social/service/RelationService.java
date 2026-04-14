@@ -7,6 +7,7 @@ import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IRelationEventOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
+import cn.nexus.domain.social.adapter.repository.IUserCounterRepairOutboxRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
 import cn.nexus.domain.social.model.valobj.FollowResultVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
@@ -40,6 +41,7 @@ public class RelationService implements IRelationService {
     private final ISocialIdPort socialIdPort;
     private final IRelationRepository relationRepository;
     private final IRelationEventOutboxRepository relationEventOutboxRepository;
+    private final IUserCounterRepairOutboxRepository userCounterRepairOutboxRepository;
     private final IRelationPolicyPort relationPolicyPort;
     private final IRelationAdjacencyCachePort adjacencyCachePort;
     private final IUserCounterPort userCounterPort;
@@ -96,8 +98,8 @@ public class RelationService implements IRelationService {
         // 缓存和邻接门面一定要等事务提交后再碰，避免回滚时出现“库没成功，缓存先脏了”。
         afterCommit(() -> {
             adjacencyCachePort.addFollow(sourceId, targetId, nowMs);
-            userCounterPort.increment(sourceId, UserCounterType.FOLLOWING, 1);
-            userCounterPort.increment(targetId, UserCounterType.FOLLOWER, 1);
+            updateUserCounterWithRepair(sourceId, targetId, UserCounterType.FOLLOWING, 1, "FOLLOW", eventId);
+            updateUserCounterWithRepair(targetId, sourceId, UserCounterType.FOLLOWER, 1, "FOLLOW", eventId);
         });
         return FollowResultVO.builder().status("ACTIVE").build();
     }
@@ -137,8 +139,8 @@ public class RelationService implements IRelationService {
         // 写侧不精确删除 Feed inbox，而是把“取关立刻生效”的责任交给事件链路和读侧过滤。
         afterCommit(() -> {
             adjacencyCachePort.removeFollow(sourceId, targetId);
-            userCounterPort.increment(sourceId, UserCounterType.FOLLOWING, -1);
-            userCounterPort.increment(targetId, UserCounterType.FOLLOWER, -1);
+            updateUserCounterWithRepair(sourceId, targetId, UserCounterType.FOLLOWING, -1, "UNFOLLOW", eventId);
+            updateUserCounterWithRepair(targetId, sourceId, UserCounterType.FOLLOWER, -1, "UNFOLLOW", eventId);
         });
         return FollowResultVO.builder().status("UNFOLLOWED").build();
     }
@@ -189,12 +191,12 @@ public class RelationService implements IRelationService {
             adjacencyCachePort.removeFollow(sourceId, targetId);
             adjacencyCachePort.removeFollow(targetId, sourceId);
             if (forwardFollow) {
-                userCounterPort.increment(sourceId, UserCounterType.FOLLOWING, -1);
-                userCounterPort.increment(targetId, UserCounterType.FOLLOWER, -1);
+                updateUserCounterWithRepair(sourceId, targetId, UserCounterType.FOLLOWING, -1, "BLOCK", eventId);
+                updateUserCounterWithRepair(targetId, sourceId, UserCounterType.FOLLOWER, -1, "BLOCK", eventId);
             }
             if (reverseFollow) {
-                userCounterPort.increment(targetId, UserCounterType.FOLLOWING, -1);
-                userCounterPort.increment(sourceId, UserCounterType.FOLLOWER, -1);
+                updateUserCounterWithRepair(targetId, sourceId, UserCounterType.FOLLOWING, -1, "BLOCK", eventId);
+                updateUserCounterWithRepair(sourceId, targetId, UserCounterType.FOLLOWER, -1, "BLOCK", eventId);
             }
         });
         return OperationResultVO.builder()
@@ -261,5 +263,19 @@ public class RelationService implements IRelationService {
                 action.run();
             }
         });
+    }
+
+    private void updateUserCounterWithRepair(Long ownerUserId,
+                                             Long relatedUserId,
+                                             UserCounterType counterType,
+                                             long delta,
+                                             String operation,
+                                             Long eventId) {
+        try {
+            userCounterPort.increment(ownerUserId, counterType, delta);
+        } catch (Exception e) {
+            userCounterRepairOutboxRepository.save(ownerUserId, relatedUserId,
+                    operation, "COUNT_REDIS_WRITE_FAILED", eventId == null ? null : String.valueOf(eventId));
+        }
     }
 }

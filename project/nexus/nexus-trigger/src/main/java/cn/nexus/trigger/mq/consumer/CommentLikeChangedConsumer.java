@@ -53,7 +53,7 @@ public class CommentLikeChangedConsumer {
             return;
         }
 
-        long likeCount = objectCounterPort.getCount(target(event.getRootCommentId(), ObjectCounterType.LIKE));
+        long likeCount = objectCounterPort.increment(target(event.getRootCommentId(), ObjectCounterType.LIKE), event.getDelta());
         commentRepository.addLikeCount(event.getRootCommentId(), event.getDelta());
         CommentBriefVO root = commentRepository.getBrief(event.getRootCommentId());
         if (root == null) {

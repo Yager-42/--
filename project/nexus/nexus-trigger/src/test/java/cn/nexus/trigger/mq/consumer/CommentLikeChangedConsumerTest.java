@@ -41,7 +41,7 @@ class CommentLikeChangedConsumerTest {
         event.setDelta(1L);
 
         when(inboxPort.save("evt-like-1", "COMMENT_LIKE_CHANGED", null)).thenReturn(true);
-        when(objectCounterPort.getCount(target(101L, ObjectCounterType.LIKE))).thenReturn(6L);
+        when(objectCounterPort.increment(target(101L, ObjectCounterType.LIKE), 1L)).thenReturn(6L);
         when(objectCounterPort.getCount(target(101L, ObjectCounterType.REPLY))).thenReturn(4L);
         when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder()
                 .commentId(101L)
@@ -51,7 +51,7 @@ class CommentLikeChangedConsumerTest {
 
         consumer.onMessage(event);
 
-        verify(objectCounterPort).getCount(target(101L, ObjectCounterType.LIKE));
+        verify(objectCounterPort).increment(target(101L, ObjectCounterType.LIKE), 1L);
         verify(commentRepository).addLikeCount(101L, 1L);
         verify(objectCounterPort).getCount(target(101L, ObjectCounterType.REPLY));
         verify(hotRankRepository).upsert(88L, 101L, 140D);
@@ -79,7 +79,7 @@ class CommentLikeChangedConsumerTest {
 
         consumer.onMessage(event);
 
-        verify(objectCounterPort, never()).getCount(any());
+        verify(objectCounterPort, never()).increment(any(), Mockito.anyLong());
         verify(commentRepository, never()).addLikeCount(Mockito.anyLong(), Mockito.anyLong());
         verify(hotRankRepository, never()).upsert(Mockito.anyLong(), Mockito.anyLong(), Mockito.anyDouble());
     }
@@ -103,7 +103,7 @@ class CommentLikeChangedConsumerTest {
         event.setDelta(1L);
 
         when(inboxPort.save("evt-like-idem", "COMMENT_LIKE_CHANGED", null)).thenReturn(true, false);
-        when(objectCounterPort.getCount(target(101L, ObjectCounterType.LIKE))).thenReturn(6L);
+        when(objectCounterPort.increment(target(101L, ObjectCounterType.LIKE), 1L)).thenReturn(6L);
         when(objectCounterPort.getCount(target(101L, ObjectCounterType.REPLY))).thenReturn(4L);
         when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder()
                 .commentId(101L)
@@ -114,7 +114,7 @@ class CommentLikeChangedConsumerTest {
         consumer.onMessage(event);
         consumer.onMessage(event);
 
-        verify(objectCounterPort, Mockito.times(1)).getCount(target(101L, ObjectCounterType.LIKE));
+        verify(objectCounterPort, Mockito.times(1)).increment(target(101L, ObjectCounterType.LIKE), 1L);
         verify(commentRepository, Mockito.times(1)).addLikeCount(101L, 1L);
         verify(hotRankRepository, Mockito.times(1)).upsert(88L, 101L, 140D);
     }

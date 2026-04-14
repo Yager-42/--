@@ -1,5 +1,8 @@
 package cn.nexus.integration.support;
 
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
+import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
 import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
@@ -8,6 +11,10 @@ import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.user.adapter.port.IUserEventOutboxPort;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisSchema;
 import cn.nexus.infrastructure.adapter.social.repository.CommentHotRankRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedGlobalLatestRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedOutboxRepository;
@@ -265,6 +272,48 @@ public abstract class RealBusinessIntegrationTestSupport {
             return Math.max(0L, Long.parseLong(raw.trim()));
         } catch (Exception e) {
             throw new IllegalStateException("read redis value failed, key=" + key, e);
+        }
+    }
+
+    protected long readObjectSnapshotCount(ReactionTargetTypeEnumVO targetType, Long targetId, ObjectCounterType counterType) {
+        if (targetType == null || targetId == null || counterType == null) {
+            return 0L;
+        }
+        ObjectCounterTarget target = ObjectCounterTarget.builder()
+                .targetType(targetType)
+                .targetId(targetId)
+                .counterType(counterType)
+                .build();
+        String key = CountRedisKeys.objectSnapshot(target);
+        CountRedisSchema schema = CountRedisSchema.forObject(targetType);
+        int slot = schema == null ? -1 : schema.slotOf(counterType);
+        return readSnapshotSlot(key, schema, slot);
+    }
+
+    protected long readUserSnapshotCount(Long userId, UserCounterType counterType) {
+        if (userId == null || counterType == null) {
+            return 0L;
+        }
+        String key = CountRedisKeys.userSnapshot(userId);
+        CountRedisSchema schema = CountRedisSchema.user();
+        int slot = schema.slotOf(counterType);
+        return readSnapshotSlot(key, schema, slot);
+    }
+
+    private long readSnapshotSlot(String key, CountRedisSchema schema, int slot) {
+        if (key == null || key.isBlank() || schema == null || slot < 0) {
+            return 0L;
+        }
+        try {
+            String raw = stringRedisTemplate.opsForValue().get(key);
+            byte[] bytes = CountRedisCodec.fromRedisValue(raw);
+            long[] values = CountRedisCodec.decodeSlots(bytes, schema.slotCount());
+            if (slot >= values.length) {
+                return 0L;
+            }
+            return Math.max(0L, values[slot]);
+        } catch (Exception e) {
+            throw new IllegalStateException("read count redis snapshot failed, key=" + key + ", slot=" + slot, e);
         }
     }
 

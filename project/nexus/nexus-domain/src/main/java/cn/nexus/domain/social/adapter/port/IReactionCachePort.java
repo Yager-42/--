@@ -24,12 +24,6 @@ public interface IReactionCachePort {
 
     boolean getState(Long userId, ReactionTargetVO target);
 
-    boolean bitmapShardExists(Long userId, ReactionTargetVO target);
-
-    void setState(Long userId, ReactionTargetVO target, boolean state);
-
-    void setCount(ReactionTargetVO target, long count);
-
     boolean applyRecoveryEvent(Long userId,
                                ReactionTargetVO target,
                                int desiredState);

@@ -1,41 +1,36 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.model.valobj.ReactionApplyResultVO;
+import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
+import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
 import cn.nexus.infrastructure.config.HotKeyStoreBridge;
 import cn.nexus.infrastructure.support.SingleFlight;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.time.Duration;
-import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
-/**
- * 点赞缓存端口 Redis 实现。
- *
- * Redis 是在线真相源；MySQL 不再参与计数读取或写路径确认。
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class ReactionCachePort implements IReactionCachePort {
 
-    private static final String KEY_BM_PREFIX = "interact:reaction:bm:";
     private static final long BIT_SHARD_SIZE = 1_000_000L;
-    private static final String KEY_CNT_PREFIX = "interact:reaction:cnt:";
-    private static final String KEY_RECOVERY_CP_PREFIX = "interact:reaction:recovery:cp:";
-    private static final String KEY_WINDOW_MS_PREFIX = "interact:reaction:window_ms:";
-
-    private static final long WINDOW_MS_MIN = 1_000L;
-    private static final long WINDOW_MS_MAX = 600_000L;
-
+    private static final String KEY_RECOVERY_CP_PREFIX = "count:replay:checkpoint:";
     private static final String HOTKEY_PREFIX = "like__";
     private static final int L1_MAX_SIZE = 100_000;
     private static final Duration L1_TTL = Duration.ofSeconds(2);
@@ -51,32 +46,23 @@ public class ReactionCachePort implements IReactionCachePort {
     private final SingleFlight singleFlight = new SingleFlight();
 
     @Override
-    public ReactionApplyResultVO applyAtomic(Long userId,
-                                             ReactionTargetVO target,
-                                             int desiredState) {
-        if (userId == null || target == null || userId < 0) {
+    public ReactionApplyResultVO applyAtomic(Long userId, ReactionTargetVO target, int desiredState) {
+        if (!supportsLikeFact(target) || userId == null || userId < 0 || (desiredState != 0 && desiredState != 1)) {
             return null;
         }
 
-        long shard = userId / BIT_SHARD_SIZE;
-        long offset = userId % BIT_SHARD_SIZE;
-        List<String> keys = List.of(
-                bmKey(target, shard),
-                cntKey(target)
-        );
-        List<String> argv = List.of(
-                String.valueOf(desiredState),
-                String.valueOf(offset)
-        );
-
-        List<?> res = stringRedisTemplate.execute(APPLY_ATOMIC_SCRIPT, keys, argv.toArray());
-        long currentCount = listLong(res, 0, -1L);
-        if (currentCount < 0) {
-            return null;
+        String bitmapKey = bitmapKey(target, userId);
+        long offset = offset(userId);
+        boolean nextState = desiredState == 1;
+        // Use Redis SETBIT returned previous state as the atomic source of truth for effective delta.
+        Boolean previousState = stringRedisTemplate.opsForValue().setBit(bitmapKey, offset, nextState);
+        boolean currentState = Boolean.TRUE.equals(previousState);
+        int delta = currentState == nextState ? 0 : (nextState ? 1 : -1);
+        if (delta != 0) {
+            countCache.invalidate(hotkeyKey(target));
         }
 
-        int delta = (int) listLong(res, 1, 0L);
-        countCache.invalidate(hotkeyKey(target));
+        long currentCount = getCountFromRedis(target);
         return ReactionApplyResultVO.builder()
                 .currentCount(currentCount)
                 .delta(delta)
@@ -86,10 +72,9 @@ public class ReactionCachePort implements IReactionCachePort {
 
     @Override
     public long getCount(ReactionTargetVO target) {
-        if (target == null) {
+        if (!supportsLikeFact(target)) {
             return 0L;
         }
-
         String hotkey = hotkeyKey(target);
         boolean hot = isHotKeySafe(hotkey);
         if (hot) {
@@ -98,12 +83,11 @@ public class ReactionCachePort implements IReactionCachePort {
                 return cached;
             }
         }
-
-        long cnt = singleFlight.execute(target.hashTag(), () -> redisCountOnly(target));
+        long count = singleFlight.execute(target.hashTag(), () -> countBitmapFacts(target));
         if (hot) {
-            countCache.put(hotkey, cnt);
+            countCache.put(hotkey, count);
         }
-        return cnt;
+        return count;
     }
 
     @Override
@@ -111,106 +95,35 @@ public class ReactionCachePort implements IReactionCachePort {
         if (targets == null || targets.isEmpty()) {
             return Map.of();
         }
-
-        List<String> keys = new ArrayList<>(targets.size());
+        Map<String, Long> result = new HashMap<>(targets.size());
         for (ReactionTargetVO target : targets) {
-            keys.add(target == null ? null : cntKey(target));
-        }
-
-        List<String> values;
-        try {
-            values = stringRedisTemplate.opsForValue().multiGet(keys);
-        } catch (Exception e) {
-            log.warn("batchGetCount redis multiGet failed", e);
-            values = null;
-        }
-
-        java.util.HashMap<String, Long> result = new java.util.HashMap<>(targets.size());
-        for (int i = 0; i < targets.size(); i++) {
-            ReactionTargetVO target = targets.get(i);
             if (target == null) {
                 continue;
             }
-            String raw = values != null && i < values.size() ? values.get(i) : null;
-            Long count = parseLong(raw);
-            result.put(target.hashTag(), count == null || count < 0 ? 0L : count);
+            result.put(target.hashTag(), getCountFromRedis(target));
         }
         return result;
     }
 
     @Override
     public long getCountFromRedis(ReactionTargetVO target) {
-        if (target == null) {
-            return 0L;
-        }
-        return redisCountOnly(target);
+        return supportsLikeFact(target) ? countBitmapFacts(target) : 0L;
     }
 
     @Override
     public boolean getState(Long userId, ReactionTargetVO target) {
-        if (userId == null || target == null || userId < 0) {
+        if (!supportsLikeFact(target) || userId == null || userId < 0) {
             return false;
         }
-        long shard = userId / BIT_SHARD_SIZE;
-        long offset = userId % BIT_SHARD_SIZE;
-        Boolean bit = stringRedisTemplate.opsForValue().getBit(bmKey(target, shard), offset);
-        return Boolean.TRUE.equals(bit);
+        return Boolean.TRUE.equals(stringRedisTemplate.opsForValue().getBit(bitmapKey(target, userId), offset(userId)));
     }
 
     @Override
-    public boolean bitmapShardExists(Long userId, ReactionTargetVO target) {
-        if (userId == null || target == null || userId < 0) {
+    public boolean applyRecoveryEvent(Long userId, ReactionTargetVO target, int desiredState) {
+        if (!supportsLikeFact(target) || userId == null || userId < 0 || (desiredState != 0 && desiredState != 1)) {
             return false;
         }
-        long shard = userId / BIT_SHARD_SIZE;
-        Boolean exists = stringRedisTemplate.hasKey(bmKey(target, shard));
-        return Boolean.TRUE.equals(exists);
-    }
-
-    @Override
-    public void setState(Long userId, ReactionTargetVO target, boolean state) {
-        if (userId == null || target == null || userId < 0) {
-            return;
-        }
-        long shard = userId / BIT_SHARD_SIZE;
-        long offset = userId % BIT_SHARD_SIZE;
-        stringRedisTemplate.opsForValue().setBit(bmKey(target, shard), offset, state);
-    }
-
-    @Override
-    public void setCount(ReactionTargetVO target, long count) {
-        if (target == null) {
-            return;
-        }
-        long safe = Math.max(0L, count);
-        stringRedisTemplate.opsForValue().set(cntKey(target), String.valueOf(safe));
-        countCache.invalidate(hotkeyKey(target));
-    }
-
-    @Override
-    public boolean applyRecoveryEvent(Long userId,
-                                      ReactionTargetVO target,
-                                      int desiredState) {
-        if (userId == null || target == null || userId < 0) {
-            return false;
-        }
-
-        long shard = userId / BIT_SHARD_SIZE;
-        long offset = userId % BIT_SHARD_SIZE;
-        List<String> keys = List.of(
-                bmKey(target, shard),
-                cntKey(target)
-        );
-        List<String> argv = List.of(
-                String.valueOf(desiredState),
-                String.valueOf(offset)
-        );
-
-        List<?> res = stringRedisTemplate.execute(APPLY_RECOVERY_SCRIPT, keys, argv.toArray());
-        long currentCount = listLong(res, 0, -1L);
-        if (currentCount < 0) {
-            return false;
-        }
+        stringRedisTemplate.opsForValue().setBit(bitmapKey(target, userId), offset(userId), desiredState == 1);
         countCache.invalidate(hotkeyKey(target));
         return true;
     }
@@ -230,27 +143,60 @@ public class ReactionCachePort implements IReactionCachePort {
 
     @Override
     public long getWindowMs(ReactionTargetVO target, long defaultMs) {
-        if (target == null) {
-            return defaultMs;
+        return defaultMs;
+    }
+
+    private boolean supportsLikeFact(ReactionTargetVO target) {
+        return target != null
+                && target.getTargetId() != null
+                && target.getReactionType() == ReactionTypeEnumVO.LIKE
+                && (target.getTargetType() == ReactionTargetTypeEnumVO.POST
+                || target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT);
+    }
+
+    private String bitmapKey(ReactionTargetVO target, Long userId) {
+        long shard = userId == null ? 0L : userId / BIT_SHARD_SIZE;
+        return CountRedisKeys.likeBitmapShard(target.getTargetType(), target.getTargetId(), shard);
+    }
+
+    private long offset(Long userId) {
+        return userId % BIT_SHARD_SIZE;
+    }
+
+    private long countBitmapFacts(ReactionTargetVO target) {
+        ObjectCounterTarget counterTarget = ObjectCounterTarget.builder()
+                .targetType(target.getTargetType())
+                .targetId(target.getTargetId())
+                .counterType(ObjectCounterType.LIKE)
+                .build();
+        String pattern = CountRedisKeys.likeBitmapShardPattern(counterTarget);
+        if (pattern == null) {
+            return 0L;
         }
-        String raw = stringRedisTemplate.opsForValue().get(windowMsKey(target));
-        Long ms = parseLong(raw);
-        if (ms == null) {
-            return defaultMs;
+        Set<String> shardKeys = stringRedisTemplate.keys(pattern);
+        if (shardKeys == null || shardKeys.isEmpty()) {
+            return 0L;
         }
-        return clamp(ms, WINDOW_MS_MIN, WINDOW_MS_MAX);
+        long total = 0L;
+        for (String shardKey : shardKeys) {
+            if (shardKey == null || shardKey.isBlank()) {
+                continue;
+            }
+            Long shardCount = stringRedisTemplate.execute((RedisCallback<Long>) connection -> bitCount(connection, shardKey));
+            total += shardCount == null ? 0L : Math.max(0L, shardCount);
+        }
+        return Math.max(0L, total);
     }
 
-    private String bmKey(ReactionTargetVO target, long shard) {
-        return KEY_BM_PREFIX + target.hashTag() + ":" + shard;
-    }
-
-    private String cntKey(ReactionTargetVO target) {
-        return KEY_CNT_PREFIX + target.hashTag();
-    }
-
-    private String windowMsKey(ReactionTargetVO target) {
-        return KEY_WINDOW_MS_PREFIX + target.hashTag();
+    private Long bitCount(RedisConnection connection, String shardKey) {
+        if (connection == null || shardKey == null || shardKey.isBlank()) {
+            return 0L;
+        }
+        byte[] key = stringRedisTemplate.getStringSerializer().serialize(shardKey);
+        if (key == null) {
+            return 0L;
+        }
+        return connection.stringCommands().bitCount(key);
     }
 
     private String recoveryCheckpointKey(String targetType, String reactionType) {
@@ -258,21 +204,7 @@ public class ReactionCachePort implements IReactionCachePort {
     }
 
     private String hotkeyKey(ReactionTargetVO target) {
-        return HOTKEY_PREFIX + target.hashTag();
-    }
-
-    private long redisCountOnly(ReactionTargetVO target) {
-        String raw = stringRedisTemplate.opsForValue().get(cntKey(target));
-        Long v = parseLong(raw);
-        return v == null || v < 0 ? 0L : v;
-    }
-
-    private String targetTypeCode(ReactionTargetVO target) {
-        return target == null || target.getTargetType() == null ? "" : target.getTargetType().getCode();
-    }
-
-    private String reactionTypeCode(ReactionTargetVO target) {
-        return target == null || target.getReactionType() == null ? "" : target.getReactionType().getCode();
+        return HOTKEY_PREFIX + (target == null ? "" : target.hashTag());
     }
 
     private boolean isHotKeySafe(String hotkey) {
@@ -284,110 +216,14 @@ public class ReactionCachePort implements IReactionCachePort {
         }
     }
 
-    private Long parseLong(Object v) {
-        if (v == null) {
+    private Long parseLong(Object raw) {
+        if (raw == null) {
             return null;
         }
         try {
-            return Long.parseLong(String.valueOf(v).trim());
+            return Long.parseLong(String.valueOf(raw).trim());
         } catch (Exception e) {
             return null;
         }
     }
-
-    private long listLong(List<?> list, int idx, long defaultVal) {
-        if (list == null || idx < 0 || idx >= list.size()) {
-            return defaultVal;
-        }
-        Long v = parseLong(list.get(idx));
-        return v == null ? defaultVal : v;
-    }
-
-    private long clamp(long v, long min, long max) {
-        if (v < min) {
-            return min;
-        }
-        if (v > max) {
-            return max;
-        }
-        return v;
-    }
-
-    private static <T> DefaultRedisScript<T> script(String text, Class<T> resultType) {
-        DefaultRedisScript<T> script = new DefaultRedisScript<>();
-        script.setResultType(resultType);
-        script.setScriptText(text);
-        return script;
-    }
-
-    private static final String LUA_APPLY_ATOMIC = ""
-            + "local bmKey = KEYS[1]\n"
-            + "local cntKey = KEYS[2]\n"
-            + "\n"
-            + "local desiredState = ARGV[1]\n"
-            + "local offset = tonumber(ARGV[2])\n"
-            + "\n"
-            + "local delta = 0\n"
-            + "local current = redis.call('GET', cntKey)\n"
-            + "if (not current) then\n"
-            + "  redis.call('SET', cntKey, '0')\n"
-            + "end\n"
-            + "\n"
-            + "if desiredState == '1' then\n"
-            + "  local old = redis.call('SETBIT', bmKey, offset, 1)\n"
-            + "  if old == 0 then\n"
-            + "    redis.call('INCR', cntKey)\n"
-            + "    delta = 1\n"
-            + "  end\n"
-            + "else\n"
-            + "  local old = redis.call('SETBIT', bmKey, offset, 0)\n"
-            + "  if old == 1 then\n"
-            + "    redis.call('DECR', cntKey)\n"
-            + "    delta = -1\n"
-            + "  end\n"
-            + "end\n"
-            + "\n"
-            + "local updated = tonumber(redis.call('GET', cntKey) or '0')\n"
-            + "if updated < 0 then\n"
-            + "  updated = 0\n"
-            + "  redis.call('SET', cntKey, '0')\n"
-            + "end\n"
-            + "\n"
-            + "return {updated, delta}\n";
-
-    private static final DefaultRedisScript<List> APPLY_ATOMIC_SCRIPT = script(LUA_APPLY_ATOMIC, List.class);
-
-    private static final String LUA_APPLY_RECOVERY = ""
-            + "local bmKey = KEYS[1]\n"
-            + "local cntKey = KEYS[2]\n"
-            + "\n"
-            + "local desiredState = ARGV[1]\n"
-            + "local offset = tonumber(ARGV[2])\n"
-            + "\n"
-            + "local current = redis.call('GET', cntKey)\n"
-            + "if (not current) then\n"
-            + "  redis.call('SET', cntKey, '0')\n"
-            + "end\n"
-            + "\n"
-            + "if desiredState == '1' then\n"
-            + "  local old = redis.call('SETBIT', bmKey, offset, 1)\n"
-            + "  if old == 0 then\n"
-            + "    redis.call('INCR', cntKey)\n"
-            + "  end\n"
-            + "else\n"
-            + "  local old = redis.call('SETBIT', bmKey, offset, 0)\n"
-            + "  if old == 1 then\n"
-            + "    redis.call('DECR', cntKey)\n"
-            + "  end\n"
-            + "end\n"
-            + "\n"
-            + "local updated = tonumber(redis.call('GET', cntKey) or '0')\n"
-            + "if updated < 0 then\n"
-            + "  updated = 0\n"
-            + "  redis.call('SET', cntKey, '0')\n"
-            + "end\n"
-            + "\n"
-            + "return {updated}\n";
-
-    private static final DefaultRedisScript<List> APPLY_RECOVERY_SCRIPT = script(LUA_APPLY_RECOVERY, List.class);
 }

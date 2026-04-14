@@ -3,6 +3,7 @@ package cn.nexus.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
 import cn.nexus.infrastructure.dao.social.ICommentDao;
 import cn.nexus.infrastructure.dao.social.po.CommentPO;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
@@ -49,6 +50,7 @@ class CommentInteractionConsumerRealIntegrationTest extends RealMiddlewareIntegr
             assertThat(root.getLikeCount()).isEqualTo(3L);
             assertThat(root.getReplyCount()).isEqualTo(0L);
             assertThat(commentHotRankRepository.topIds(postId, 10)).containsExactly(rootCommentId);
+            assertThat(readCommentSnapshot(rootCommentId)).containsExactly(3L, 0L);
         });
     }
 
@@ -83,7 +85,22 @@ class CommentInteractionConsumerRealIntegrationTest extends RealMiddlewareIntegr
             assertThat(root.getReplyCount()).isEqualTo(2L);
             assertThat(root.getLikeCount()).isEqualTo(0L);
             assertThat(commentHotRankRepository.topIds(postId, 10)).containsExactly(rootCommentId);
+            assertThat(readCommentSnapshot(rootCommentId)).containsExactly(0L, 2L);
+            assertThat(readReplyAggregationDelta(rootCommentId)).isEqualTo(2L);
         });
+    }
+
+    private long[] readCommentSnapshot(long rootCommentId) {
+        String raw = stringRedisTemplate.opsForValue().get("count:comment:{" + rootCommentId + "}");
+        return CountRedisCodec.decodeSlots(CountRedisCodec.fromRedisValue(raw), 2);
+    }
+
+    private long readReplyAggregationDelta(long rootCommentId) {
+        Object raw = stringRedisTemplate.opsForHash().get("count:agg:{comment}:reply", String.valueOf(rootCommentId));
+        if (raw == null) {
+            return 0L;
+        }
+        return Long.parseLong(String.valueOf(raw));
     }
 
     private void insertRootComment(long postId, long rootCommentId) {

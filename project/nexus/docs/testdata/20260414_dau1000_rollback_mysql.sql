@@ -1,0 +1,22 @@
+-- dau1000 rollback batch: frontend_dau1000_20260414_v1
+-- target db: nexus_social
+
+SET NAMES utf8mb4;
+USE `nexus_social`;
+
+START TRANSACTION;
+
+DELETE FROM `interaction_notification` WHERE `notification_id` BETWEEN 985100001 AND 985118000;
+DELETE FROM `interaction_comment_pin` WHERE `post_id` BETWEEN 981100001 AND 981104200;
+DELETE FROM `interaction_comment` WHERE `comment_id` BETWEEN 982100001 AND 982116800;
+DELETE FROM `content_post_type` WHERE `post_id` BETWEEN 981100001 AND 981104200;
+DELETE FROM `content_post` WHERE `post_id` BETWEEN 981100001 AND 981104200;
+DELETE FROM `user_follower` WHERE `id` BETWEEN 949100001 AND 949130000;
+DELETE FROM `user_relation` WHERE `id` BETWEEN 948100001 AND 948130000;
+DELETE FROM `auth_user_role` WHERE `id` BETWEEN 938200001 AND 938203000;
+DELETE FROM `auth_account` WHERE `account_id` BETWEEN 938100001 AND 938103000;
+DELETE FROM `user_privacy_setting` WHERE `user_id` BETWEEN 980100001 AND 980103000;
+DELETE FROM `user_status` WHERE `user_id` BETWEEN 980100001 AND 980103000;
+DELETE FROM `user_base` WHERE `user_id` BETWEEN 980100001 AND 980103000;
+
+COMMIT;

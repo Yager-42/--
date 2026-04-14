@@ -15,6 +15,7 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisSchema;
+import cn.nexus.infrastructure.adapter.id.LeafSnowflakeIdGenerator;
 import cn.nexus.infrastructure.adapter.social.repository.CommentHotRankRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedGlobalLatestRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedOutboxRepository;
@@ -77,6 +78,9 @@ public abstract class RealBusinessIntegrationTestSupport {
 
     @Autowired
     protected ISocialIdPort socialIdPort;
+
+    @Autowired
+    protected LeafSnowflakeIdGenerator leafSnowflakeIdGenerator;
 
     @Autowired
     protected IUserBaseDao userBaseDao;

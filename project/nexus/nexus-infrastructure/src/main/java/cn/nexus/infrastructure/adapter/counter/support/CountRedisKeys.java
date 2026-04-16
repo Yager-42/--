@@ -56,6 +56,13 @@ public final class CountRedisKeys {
         return "count:fact:" + lower(target.getTargetType()) + "_like:{" + target.getTargetId() + "}:*";
     }
 
+    public static String likeFactCount(ReactionTargetTypeEnumVO targetType, Long targetId) {
+        if (targetType == null || targetId == null) {
+            return null;
+        }
+        return "count:factcnt:" + lower(targetType) + "_like:{" + targetId + "}";
+    }
+
     public static String objectRebuildLock(ObjectCounterTarget target) {
         if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
             return null;

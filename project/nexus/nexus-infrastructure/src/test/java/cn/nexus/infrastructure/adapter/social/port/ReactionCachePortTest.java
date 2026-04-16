@@ -3,11 +3,10 @@ package cn.nexus.infrastructure.adapter.social.port;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -18,52 +17,44 @@ import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.infrastructure.config.HotKeyStoreBridge;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
-import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 class ReactionCachePortTest {
 
     @Test
-    void batchGetCount_shouldReturnBitmapCountsFromCountRedisFacts() {
+    void batchGetCount_shouldPreferDirectFactCountKeys() {
         StringRedisTemplate stringRedisTemplate = Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
-        when(stringRedisTemplate.keys("count:fact:post_like:{1}:*"))
-                .thenReturn(Set.of("count:fact:post_like:{1}:0"));
-        when(stringRedisTemplate.keys("count:fact:post_like:{2}:*"))
-                .thenReturn(Set.of("count:fact:post_like:{2}:0", "count:fact:post_like:{2}:1"));
-        when(stringRedisTemplate.keys("count:fact:post_like:{3}:*"))
-                .thenReturn(Set.of());
-        when(stringRedisTemplate.execute(any(RedisCallback.class)))
-                .thenReturn(5L)
-                .thenReturn(2L)
-                .thenReturn(3L);
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
 
         ReactionCachePort port = new ReactionCachePort(stringRedisTemplate, hotKeyStoreBridge);
         ReactionTargetVO first = target(1L);
         ReactionTargetVO second = target(2L);
-        ReactionTargetVO third = target(3L);
 
-        Map<String, Long> result = port.batchGetCount(List.of(first, second, third));
+        when(valueOperations.multiGet(List.of(
+                "count:factcnt:post_like:{1}",
+                "count:factcnt:post_like:{2}")))
+                .thenReturn(List.of("5", "9"));
+
+        Map<String, Long> result = port.batchGetCount(List.of(first, second));
 
         assertEquals(5L, result.get(first.hashTag()));
-        assertEquals(5L, result.get(second.hashTag()));
-        assertEquals(0L, result.get(third.hashTag()));
+        assertEquals(9L, result.get(second.hashTag()));
     }
 
     @Test
-    void getCountFromRedis_shouldCountBitmapFactsAcrossShards() {
+    void getCountFromRedis_shouldReadFactCountKeyDirectly() {
         StringRedisTemplate stringRedisTemplate = Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
-        when(stringRedisTemplate.keys("count:fact:post_like:{9}:*"))
-                .thenReturn(Set.of("count:fact:post_like:{9}:0", "count:fact:post_like:{9}:1"));
-        when(stringRedisTemplate.execute(any(RedisCallback.class)))
-                .thenReturn(4L)
-                .thenReturn(6L);
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("count:factcnt:post_like:{9}")).thenReturn("10");
 
         ReactionCachePort port = new ReactionCachePort(stringRedisTemplate, hotKeyStoreBridge);
 
@@ -71,16 +62,14 @@ class ReactionCachePortTest {
     }
 
     @Test
-    void applyAtomic_shouldUseCountRedisFactKeysAndReturnApplyResult() {
+    void applyAtomic_shouldUseScriptAndReturnApplyResult() {
         StringRedisTemplate stringRedisTemplate = Mockito.mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.setBit("count:fact:post_like:{101}:0", 7L, true)).thenReturn(Boolean.FALSE);
-        when(stringRedisTemplate.keys("count:fact:post_like:{101}:*"))
-                .thenReturn(Set.of("count:fact:post_like:{101}:0"));
-        when(stringRedisTemplate.execute(any(RedisCallback.class))).thenReturn(1L);
+        when(stringRedisTemplate.execute(any(), any(List.class), any(), any()))
+                .thenReturn(List.of(1L, 1L));
 
         ReactionCachePort port = new ReactionCachePort(stringRedisTemplate, hotKeyStoreBridge);
         ReactionTargetVO target = target(101L);
@@ -91,7 +80,6 @@ class ReactionCachePortTest {
         assertEquals(1L, result.getCurrentCount());
         assertEquals(1, result.getDelta());
         assertFalse(result.isFirstPending());
-        verify(valueOperations).setBit("count:fact:post_like:{101}:0", 7L, true);
     }
 
     @Test
@@ -101,10 +89,8 @@ class ReactionCachePortTest {
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.setBit("count:fact:post_like:{202}:0", 7L, true)).thenReturn(Boolean.TRUE);
-        when(stringRedisTemplate.keys("count:fact:post_like:{202}:*"))
-                .thenReturn(Set.of("count:fact:post_like:{202}:0"));
-        when(stringRedisTemplate.execute(any(RedisCallback.class))).thenReturn(4L);
+        when(stringRedisTemplate.execute(any(), any(List.class), any(), any()))
+                .thenReturn(List.of(4L, 0L));
 
         ReactionCachePort port = new ReactionCachePort(stringRedisTemplate, hotKeyStoreBridge);
 
@@ -113,7 +99,6 @@ class ReactionCachePortTest {
         assertNotNull(result);
         assertEquals(4L, result.getCurrentCount());
         assertEquals(0, result.getDelta());
-        verify(valueOperations).setBit("count:fact:post_like:{202}:0", 7L, true);
     }
 
     @Test
@@ -123,10 +108,8 @@ class ReactionCachePortTest {
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.setBit("count:fact:post_like:{222}:0", 7L, true)).thenReturn(Boolean.TRUE);
-        when(stringRedisTemplate.keys("count:fact:post_like:{222}:*"))
-                .thenReturn(Set.of("count:fact:post_like:{222}:0"));
-        when(stringRedisTemplate.execute(any(RedisCallback.class))).thenReturn(1L);
+        when(stringRedisTemplate.execute(any(), any(List.class), any(), any()))
+                .thenReturn(List.of(1L, 0L));
 
         ReactionCachePort port = new ReactionCachePort(stringRedisTemplate, hotKeyStoreBridge);
 
@@ -135,7 +118,6 @@ class ReactionCachePortTest {
         assertNotNull(result);
         assertEquals(1L, result.getCurrentCount());
         assertEquals(0, result.getDelta());
-        verify(valueOperations).setBit("count:fact:post_like:{222}:0", 7L, true);
     }
 
     @Test
@@ -145,8 +127,8 @@ class ReactionCachePortTest {
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.getBit("count:fact:post_like:{303}:0", 9L)).thenReturn(Boolean.FALSE);
-        when(valueOperations.setBit("count:fact:post_like:{303}:0", 9L, true)).thenReturn(Boolean.FALSE);
+        when(stringRedisTemplate.execute(any(), any(List.class), any(), any()))
+                .thenReturn(List.of(1L, 1L));
 
         ReactionCachePort port = new ReactionCachePort(stringRedisTemplate, hotKeyStoreBridge);
         ReactionTargetVO target = target(303L);
@@ -154,7 +136,7 @@ class ReactionCachePortTest {
         boolean applied = port.applyRecoveryEvent(9L, target, 1);
 
         assertTrue(applied);
-        verify(valueOperations).setBit("count:fact:post_like:{303}:0", 9L, true);
+        verify(stringRedisTemplate, times(1)).execute(any(), eq(List.of("count:fact:post_like:{303}:0", "count:factcnt:post_like:{303}")), eq("9"), eq("1"));
     }
 
     @Test

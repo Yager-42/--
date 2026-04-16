@@ -96,16 +96,13 @@
     </select>
 
     <select id="pageActiveBySource" resultMap="RelationMap">
-        SELECT id, source_id, target_id, relation_type, status, group_id, create_time
-        FROM user_relation
+        SELECT id, source_id, target_id, relation_type, status, create_time
+        FROM user_relation FORCE INDEX (idx_source_type_status_time_target)
         WHERE source_id = #{sourceId}
           AND relation_type = #{relationType}
           AND status = #{status}
           <if test="cursorTime != null">
-              AND (
-                  create_time &lt; #{cursorTime}
-                  OR (create_time = #{cursorTime} AND target_id &lt; #{cursorTargetId})
-              )
+              AND (create_time, target_id) &lt; (#{cursorTime}, #{cursorTargetId})
           </if>
         ORDER BY create_time DESC, target_id DESC
         LIMIT #{limit}
@@ -117,16 +114,13 @@
         否则这里只能视为功能正确、但未满足性能上线前提。
     -->
     <select id="pageActiveByTarget" resultMap="RelationMap">
-        SELECT id, source_id, target_id, relation_type, status, group_id, create_time
-        FROM user_relation
+        SELECT id, source_id, target_id, relation_type, status, create_time
+        FROM user_relation FORCE INDEX (idx_target_type_status_time_source)
         WHERE target_id = #{targetId}
           AND relation_type = #{relationType}
           AND status = #{status}
           <if test="cursorTime != null">
-              AND (
-                  create_time &lt; #{cursorTime}
-                  OR (create_time = #{cursorTime} AND source_id &lt; #{cursorSourceId})
-              )
+              AND (create_time, source_id) &lt; (#{cursorTime}, #{cursorSourceId})
           </if>
         ORDER BY create_time DESC, source_id DESC
         LIMIT #{limit}

@@ -15,7 +15,6 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.data.redis.core.HashOperations;
@@ -96,11 +95,8 @@ class ObjectCounterPortTest {
                 .thenReturn(Boolean.TRUE);
         when(valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{POST:42:like}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
-        when(redisTemplate.keys("count:fact:post_like:{42}:*"))
-                .thenReturn(Set.of("count:fact:post_like:{42}:0", "count:fact:post_like:{42}:1"));
         when(redisTemplate.execute(any(RedisCallback.class)))
-                .thenReturn(5L)
-                .thenReturn(2L);
+                .thenReturn(7L);
 
         ObjectCounterPort port = new ObjectCounterPort(redisTemplate);
 
@@ -133,7 +129,7 @@ class ObjectCounterPortTest {
         long count = port.getCount(target(ReactionTargetTypeEnumVO.COMMENT, 77L, ObjectCounterType.LIKE));
 
         assertEquals(0L, count);
-        verify(redisTemplate, never()).keys("count:fact:comment_like:{77}:*");
+        verify(redisTemplate, never()).execute(any(RedisCallback.class));
         verify(hashOperations, never()).delete(any(), any());
         verify(valueOperations, never()).set(eq("count:comment:{77}"), any());
         verify(redisTemplate, never()).delete("count:rebuild-lock:object:{COMMENT:77:like}");

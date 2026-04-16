@@ -11,10 +11,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -223,30 +223,29 @@ public class ObjectCounterPort implements IObjectCounterPort {
         if (pattern == null) {
             return 0L;
         }
-        Set<String> shardKeys = redisTemplate.keys(pattern);
-        if (shardKeys == null || shardKeys.isEmpty()) {
-            return 0L;
-        }
-        long total = 0L;
-        for (String shardKey : shardKeys) {
-            if (shardKey == null || shardKey.isBlank()) {
-                continue;
+        Long total = redisTemplate.execute((RedisCallback<Long>) connection -> {
+            if (connection == null) {
+                return 0L;
             }
-            Long shardCount = redisTemplate.execute((RedisCallback<Long>) connection -> bitCount(connection, shardKey));
-            total += shardCount == null ? 0L : Math.max(0L, shardCount);
-        }
-        return Math.max(0L, total);
-    }
-
-    private Long bitCount(RedisConnection connection, String shardKey) {
-        if (connection == null || shardKey == null || shardKey.isBlank()) {
-            return 0L;
-        }
-        byte[] key = redisTemplate.getStringSerializer().serialize(shardKey);
-        if (key == null) {
-            return 0L;
-        }
-        return connection.stringCommands().bitCount(key);
+            long sum = 0L;
+            ScanOptions options = ScanOptions.scanOptions().match(pattern).count(256).build();
+            try (Cursor<byte[]> cursor = connection.scan(options)) {
+                while (cursor.hasNext()) {
+                    byte[] shardKey = cursor.next();
+                    if (shardKey == null || shardKey.length == 0) {
+                        continue;
+                    }
+                    Long shardCount = connection.stringCommands().bitCount(shardKey);
+                    if (shardCount != null && shardCount > 0) {
+                        sum += shardCount;
+                    }
+                }
+            } catch (Exception e) {
+                throw new IllegalStateException("scan bitmap like shards failed, pattern=" + pattern, e);
+            }
+            return Math.max(0L, sum);
+        });
+        return total == null ? 0L : Math.max(0L, total);
     }
 
     private void clearAggregationOverlap(ObjectCounterTarget target) {

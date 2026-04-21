@@ -24,7 +24,6 @@ import cn.nexus.infrastructure.adapter.social.repository.RelationRepository;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.infrastructure.dao.auth.IAuthAccountDao;
 import cn.nexus.infrastructure.dao.auth.IAuthRoleDao;
-import cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao;
 import cn.nexus.infrastructure.dao.auth.IAuthUserRoleDao;
 import cn.nexus.infrastructure.dao.auth.po.AuthRolePO;
 import cn.nexus.infrastructure.dao.auth.po.AuthUserRolePO;
@@ -96,9 +95,6 @@ public abstract class RealBusinessIntegrationTestSupport {
 
     @Autowired
     protected IAuthAccountDao authAccountDao;
-
-    @Autowired
-    protected IAuthSmsCodeDao authSmsCodeDao;
 
     @Autowired
     protected IAuthRoleDao authRoleDao;
@@ -348,15 +344,8 @@ public abstract class RealBusinessIntegrationTestSupport {
     }
 
     protected void clearAuthThrottleKeys(String phone) {
-        deleteRedisKey("auth:sms:send:phone:" + phone + ":1m");
-        deleteRedisKey("auth:sms:send:phone:" + phone + ":1h");
-        deleteRedisKey("auth:sms:send:phone:" + phone + ":1d");
-        deleteRedisKey("auth:sms:send:ip:127.0.0.1:1m");
-        deleteRedisKey("auth:sms:send:ip:127.0.0.1:1d");
         deleteRedisKey("auth:login:fail:password:" + phone);
         deleteRedisKey("auth:login:lock:password:" + phone);
-        deleteRedisKey("auth:login:fail:sms:" + phone);
-        deleteRedisKey("auth:login:lock:sms:" + phone);
     }
 
     protected void grantRole(long userId, String roleCode) {

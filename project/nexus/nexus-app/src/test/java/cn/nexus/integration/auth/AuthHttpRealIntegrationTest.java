@@ -8,9 +8,22 @@ import cn.nexus.infrastructure.dao.user.po.UserStatusPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AuthHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
+
+    @Test
+    void removedSmsEndpoints_shouldReturn404() throws Exception {
+        assertPostNotFound("/api/v1/auth/sms/send", Map.of(
+                "phone", uniquePhone(),
+                "bizType", "REGISTER"
+        ), null);
+        assertPostNotFound("/api/v1/auth/login/sms", Map.of(
+                "phone", uniquePhone(),
+                "smsCode", "123456"
+        ), null);
+    }
 
     @Test
     void registerPasswordLoginAndMe_shouldPersistAccountAndReturnCurrentUser() throws Exception {

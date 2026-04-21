@@ -3,16 +3,13 @@ package cn.nexus.domain.auth.service;
 import cn.nexus.domain.auth.adapter.port.IAuthAdminBootstrapPort;
 import cn.nexus.domain.auth.adapter.port.IAuthThrottlePort;
 import cn.nexus.domain.auth.adapter.port.IPasswordHasher;
-import cn.nexus.domain.auth.adapter.port.ISmsSenderPort;
 import cn.nexus.domain.auth.adapter.repository.IAuthAccountRepository;
 import cn.nexus.domain.auth.adapter.repository.IAuthRoleRepository;
-import cn.nexus.domain.auth.adapter.repository.IAuthSmsCodeRepository;
 import cn.nexus.domain.auth.adapter.repository.IAuthUserBaseRepository;
 import cn.nexus.domain.auth.model.entity.AuthAccountEntity;
 import cn.nexus.domain.auth.model.valobj.AuthAdminVO;
 import cn.nexus.domain.auth.model.valobj.AuthLoginResultVO;
 import cn.nexus.domain.auth.model.valobj.AuthMeVO;
-import cn.nexus.domain.auth.model.valobj.AuthSmsBizTypeVO;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.user.adapter.repository.IUserStatusRepository;
 import cn.nexus.types.enums.ResponseCode;
@@ -36,70 +33,32 @@ public class AuthService {
     public static final String STATUS_ACTIVE = "ACTIVE";
     public static final String STATUS_DEACTIVATED = "DEACTIVATED";
     private static final String LOGIN_TYPE_PASSWORD = "password";
-    private static final String LOGIN_TYPE_SMS = "sms";
     private static final String ROLE_USER = "USER";
     private static final String ROLE_ADMIN = "ADMIN";
-    private static final String SMS_SEND_STATUS_SENT = "SENT";
-    private static final long SMS_EXPIRE_MS = 5 * 60 * 1000L;
 
     private final IAuthAccountRepository authAccountRepository;
     private final IAuthRoleRepository authRoleRepository;
-    private final IAuthSmsCodeRepository authSmsCodeRepository;
     private final IAuthUserBaseRepository authUserBaseRepository;
     private final IAuthAdminBootstrapPort authAdminBootstrapPort;
     private final IPasswordHasher passwordHasher;
-    private final ISmsSenderPort smsSenderPort;
     private final IAuthThrottlePort authThrottlePort;
     private final IUserStatusRepository userStatusRepository;
     private final ISocialIdPort socialIdPort;
 
     /**
-     * 发送短信验证码。
-     *
-     * @param phone 手机号
-     * @param bizType 业务类型
-     * @param ip 请求 IP
-     */
-    public void sendSms(String phone, AuthSmsBizTypeVO bizType, String ip) {
-        String normalizedPhone = requireText(phone, "phone 不能为空");
-        String normalizedIp = requireText(ip, "ip 不能为空");
-        if (bizType == null) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "bizType 不能为空");
-        }
-
-        authThrottlePort.checkSmsSendLimit(normalizedPhone, normalizedIp);
-
-        String code = generateSmsCode();
-        String codeHash = safeHash(code);
-        Long expireAt = now() + SMS_EXPIRE_MS;
-        boolean sent = smsSenderPort.send(normalizedPhone, code, bizType);
-        if (!sent) {
-            authSmsCodeRepository.saveFailedAttempt(normalizedPhone, bizType, codeHash, expireAt, normalizedIp);
-            throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo());
-        }
-
-        authSmsCodeRepository.invalidateLatest(normalizedPhone, bizType);
-        authSmsCodeRepository.saveLatest(normalizedPhone, bizType, codeHash, expireAt, normalizedIp, SMS_SEND_STATUS_SENT);
-        authThrottlePort.onSmsSend(normalizedPhone, normalizedIp);
-    }
-
-    /**
      * 手机号注册。
      *
      * @param phone 手机号
-     * @param smsCode 验证码
      * @param password 密码
      * @param nickname 昵称
      * @param avatarUrl 头像
      * @return 用户 ID
      */
     @Transactional(rollbackFor = Exception.class)
-    public Long register(String phone, String smsCode, String password, String nickname, String avatarUrl) {
+    public Long register(String phone, String password, String nickname, String avatarUrl) {
         String normalizedPhone = requireText(phone, "phone 不能为空");
-        String normalizedSmsCode = requireText(smsCode, "smsCode 不能为空");
         String normalizedPassword = requireText(password, "password 不能为空");
 
-        authSmsCodeRepository.requireLatestValid(normalizedPhone, AuthSmsBizTypeVO.REGISTER, normalizedSmsCode);
         if (authAccountRepository.existsByPhone(normalizedPhone)) {
             throw new AppException(ResponseCode.CONFLICT.getCode(), ResponseCode.CONFLICT.getInfo());
         }
@@ -118,7 +77,6 @@ public class AuthService {
         authRoleRepository.assignRole(userId, ROLE_USER);
         grantBootstrapAdminIfNeeded(normalizedPhone, userId);
         userStatusRepository.upsertStatus(userId, STATUS_ACTIVE, null);
-        authSmsCodeRepository.markUsed(normalizedPhone, AuthSmsBizTypeVO.REGISTER, normalizedSmsCode);
         return userId;
     }
 
@@ -147,38 +105,6 @@ public class AuthService {
         }
 
         authThrottlePort.onLoginSuccess(LOGIN_TYPE_PASSWORD, normalizedPhone);
-        grantBootstrapAdminIfNeeded(account.getPhone(), account.getUserId());
-        authAccountRepository.touchLastLogin(account.getUserId(), now());
-        return AuthLoginResultVO.builder()
-                .userId(account.getUserId())
-                .phone(account.getPhone())
-                .build();
-    }
-
-    /**
-     * 验证码登录。
-     *
-     * @param phone 手机号
-     * @param smsCode 验证码
-     * @return 登录结果
-     */
-    public AuthLoginResultVO smsLogin(String phone, String smsCode) {
-        String normalizedPhone = requireText(phone, "phone 不能为空");
-        String normalizedSmsCode = requireText(smsCode, "smsCode 不能为空");
-
-        authThrottlePort.checkLoginLock(LOGIN_TYPE_SMS, normalizedPhone);
-        AuthAccountEntity account;
-        try {
-            account = requireAccountByPhone(normalizedPhone);
-            authSmsCodeRepository.requireLatestValid(normalizedPhone, AuthSmsBizTypeVO.LOGIN, normalizedSmsCode);
-            ensureUserActive(account.getUserId());
-        } catch (AppException e) {
-            authThrottlePort.onLoginFailure(LOGIN_TYPE_SMS, normalizedPhone);
-            throw e;
-        }
-
-        authSmsCodeRepository.markUsed(normalizedPhone, AuthSmsBizTypeVO.LOGIN, normalizedSmsCode);
-        authThrottlePort.onLoginSuccess(LOGIN_TYPE_SMS, normalizedPhone);
         grantBootstrapAdminIfNeeded(account.getPhone(), account.getUserId());
         authAccountRepository.touchLastLogin(account.getUserId(), now());
         return AuthLoginResultVO.builder()
@@ -371,10 +297,5 @@ public class AuthService {
     private Long now() {
         Long now = socialIdPort.now();
         return now != null ? now : System.currentTimeMillis();
-    }
-
-    private String generateSmsCode() {
-        // 当前服务还没有独立的验证码生成端口，先把生成逻辑集中在这里，后续替换时只改一处。
-        return "123456";
     }
 }

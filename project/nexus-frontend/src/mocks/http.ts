@@ -1064,10 +1064,6 @@ const handlePost = (path: string, body: Record<string, unknown>) => {
     })
   }
 
-  if (path === '/auth/sms/send') {
-    return createResponse({ expireSeconds: 300 })
-  }
-
   if (path === '/auth/register') {
     const userId = String(users.size + 1)
     const phone = toString(body.phone, `1390000000${userId}`)

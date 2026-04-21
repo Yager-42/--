@@ -38,9 +38,7 @@
 - 重要提醒：需要登录的接口，后端会从 token 里解析 `userId`。即使你在参数里看到 `userId/visitorId/targetId` 这类字段，多数情况下后端也会忽略它们（以 token 为准）。但如果某个接口把它做成 **必填 Query 参数**，你仍然要按要求传（通常传当前登录用户的 id）。
 - 白名单（无需 token）：
   - `/api/v1/auth/login/password`
-  - `/api/v1/auth/login/sms`
   - `/api/v1/auth/register`
-  - `/api/v1/auth/sms/send`
   - `/api/v1/health`
   - `/api/v1/health/**`
 
@@ -95,9 +93,8 @@ export async function uploadFile(file: File): Promise<string> {
 ### 0.4 常见页面怎么串接口（不迷路）
 
 - 登录/注册
-  - 发短信：`POST /api/v1/auth/sms/send`
   - 注册：`POST /api/v1/auth/register`
-  - 登录：`POST /api/v1/auth/login/password` 或 `POST /api/v1/auth/login/sms`
+  - 登录：`POST /api/v1/auth/login/password`
   - 拿当前登录信息：`GET /api/v1/auth/me`
 - 首页/关注流
   - 拉时间线：`GET /api/v1/feed/timeline`
@@ -140,12 +137,10 @@ export async function uploadFile(file: File): Promise<string> {
 | `POST` | `/api/v1/auth/admin/revoke` | 是 | `ADMIN` | `AuthController#revokeAdmin` | `AuthGrantAdminRequestDTO` | `` |
 | `GET` | `/api/v1/auth/admins` | 是 | `ADMIN` | `AuthController#listAdmins` | `` | `AuthAdminListResponseDTO` |
 | `POST` | `/api/v1/auth/login/password` | 否 | `` | `AuthController#passwordLogin` | `AuthPasswordLoginRequestDTO` | `AuthTokenResponseDTO` |
-| `POST` | `/api/v1/auth/login/sms` | 否 | `` | `AuthController#smsLogin` | `AuthSmsLoginRequestDTO` | `AuthTokenResponseDTO` |
 | `POST` | `/api/v1/auth/logout` | 是 | `` | `AuthController#logout` | `` | `` |
 | `GET` | `/api/v1/auth/me` | 是 | `` | `AuthController#me` | `` | `AuthMeResponseDTO` |
 | `POST` | `/api/v1/auth/password/change` | 是 | `` | `AuthController#changePassword` | `AuthChangePasswordRequestDTO` | `` |
 | `POST` | `/api/v1/auth/register` | 否 | `` | `AuthController#register` | `AuthRegisterRequestDTO` | `AuthRegisterResponseDTO` |
-| `POST` | `/api/v1/auth/sms/send` | 否 | `` | `AuthController#sendSms` | `AuthSmsSendRequestDTO` | `AuthSmsSendResponseDTO` |
 | `GET` | `/api/v1/comment/hot` | 是 | `` | `CommentController#hot` | `` | `CommentHotResponseDTO` |
 | `GET` | `/api/v1/comment/list` | 是 | `` | `CommentController#list` | `` | `CommentListResponseDTO` |
 | `GET` | `/api/v1/comment/reply/list` | 是 | `` | `CommentController#replyList` | `` | `CommentReplyListResponseDTO` |
@@ -957,21 +952,6 @@ export async function uploadFile(file: File): Promise<string> {
     - `token`: `String`
 - 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/auth/AuthController.java`
 
-#### `POST /api/v1/auth/login/sms`
-
-- 鉴权：匿名可调用
-- 请求体（JSON）：
-  - 类型：`AuthSmsLoginRequestDTO`
-  - `phone`: `String`
-  - `smsCode`: `String`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `userId`: `Long`
-    - `tokenName`: `String`
-    - `tokenPrefix`: `String`
-    - `token`: `String`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/auth/AuthController.java`
-
 #### `POST /api/v1/auth/logout`
 
 - 鉴权：需要登录
@@ -1008,25 +988,12 @@ export async function uploadFile(file: File): Promise<string> {
 - 请求体（JSON）：
   - 类型：`AuthRegisterRequestDTO`
   - `phone`: `String`
-  - `smsCode`: `String`
   - `password`: `String`
   - `nickname`: `String`
   - `avatarUrl`: `String`
 - 响应：统一 `Response` 壳，成功 `code=0000`
   - `data` 字段：
     - `userId`: `Long`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/auth/AuthController.java`
-
-#### `POST /api/v1/auth/sms/send`
-
-- 鉴权：匿名可调用
-- 请求体（JSON）：
-  - 类型：`AuthSmsSendRequestDTO`
-  - `phone`: `String`
-  - `bizType`: `String`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `expireSeconds`: `Integer`
 - 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/auth/AuthController.java`
 
 ### 评论 Comment
@@ -1424,9 +1391,6 @@ export async function uploadFile(file: File): Promise<string> {
 - `AuthPasswordLoginRequestDTO`
 - `AuthRegisterRequestDTO`
 - `AuthRegisterResponseDTO`
-- `AuthSmsLoginRequestDTO`
-- `AuthSmsSendRequestDTO`
-- `AuthSmsSendResponseDTO`
 - `AuthTokenResponseDTO`
 - `BlockRequestDTO`
 - `BlockResponseDTO`
@@ -1634,7 +1598,6 @@ export async function uploadFile(file: File): Promise<string> {
 - 来源：`nexus-api/src/main/java/cn/nexus/api/auth/dto/AuthRegisterRequestDTO.java`
 - 字段：
   - `phone`: `String`
-  - `smsCode`: `String`
   - `password`: `String`
   - `nickname`: `String`
   - `avatarUrl`: `String`
@@ -1643,7 +1606,6 @@ export async function uploadFile(file: File): Promise<string> {
 ```json
 {
   "phone": "string",
-  "smsCode": "string",
   "password": "string",
   "nickname": "string",
   "avatarUrl": "string"
@@ -1660,49 +1622,6 @@ export async function uploadFile(file: File): Promise<string> {
 ```json
 {
   "userId": 0
-}
-```
-
-### `AuthSmsLoginRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/auth/dto/AuthSmsLoginRequestDTO.java`
-- 字段：
-  - `phone`: `String`
-  - `smsCode`: `String`
-
-示例 JSON：
-```json
-{
-  "phone": "string",
-  "smsCode": "string"
-}
-```
-
-### `AuthSmsSendRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/auth/dto/AuthSmsSendRequestDTO.java`
-- 字段：
-  - `phone`: `String`
-  - `bizType`: `String`
-
-示例 JSON：
-```json
-{
-  "phone": "string",
-  "bizType": "string"
-}
-```
-
-### `AuthSmsSendResponseDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/auth/dto/AuthSmsSendResponseDTO.java`
-- 字段：
-  - `expireSeconds`: `Integer`
-
-示例 JSON：
-```json
-{
-  "expireSeconds": 0
 }
 ```
 

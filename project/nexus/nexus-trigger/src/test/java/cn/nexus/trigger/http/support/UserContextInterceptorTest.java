@@ -13,8 +13,14 @@ import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.web.method.HandlerMethod;
 
 class UserContextInterceptorTest {
+
+    static class TestHandlerTarget {
+        public void handle() {
+        }
+    }
 
     @AfterEach
     void tearDown() {
@@ -41,11 +47,12 @@ class UserContextInterceptorTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("userId", "33");
         MockHttpServletResponse response = new MockHttpServletResponse();
+        HandlerMethod handlerMethod = new HandlerMethod(new TestHandlerTarget(), TestHandlerTarget.class.getMethod("handle"));
 
         try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
             stpUtil.when(StpUtil::getLoginIdAsLong).thenReturn(22L);
 
-            boolean allowed = interceptor.preHandle(request, response, new Object());
+            boolean allowed = interceptor.preHandle(request, response, handlerMethod);
 
             assertTrue(allowed);
             assertEquals(22L, UserContext.requireUserId());
@@ -58,11 +65,12 @@ class UserContextInterceptorTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("userId", "44");
         MockHttpServletResponse response = new MockHttpServletResponse();
+        HandlerMethod handlerMethod = new HandlerMethod(new TestHandlerTarget(), TestHandlerTarget.class.getMethod("handle"));
 
         try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
             stpUtil.when(StpUtil::getLoginIdAsLong).thenThrow(new RuntimeException("no login"));
 
-            boolean allowed = interceptor.preHandle(request, response, new Object());
+            boolean allowed = interceptor.preHandle(request, response, handlerMethod);
 
             assertFalse(allowed);
             assertTrue(response.getContentAsString().contains("\"code\":\"0002\""));
@@ -76,11 +84,12 @@ class UserContextInterceptorTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-User-Id", "55");
         MockHttpServletResponse response = new MockHttpServletResponse();
+        HandlerMethod handlerMethod = new HandlerMethod(new TestHandlerTarget(), TestHandlerTarget.class.getMethod("handle"));
 
         try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
             stpUtil.when(StpUtil::getLoginIdAsLong).thenThrow(new RuntimeException("no login"));
 
-            boolean allowed = interceptor.preHandle(request, response, new Object());
+            boolean allowed = interceptor.preHandle(request, response, handlerMethod);
 
             assertFalse(allowed);
             assertTrue(response.getContentAsString().contains("\"code\":\"0002\""));
@@ -93,16 +102,29 @@ class UserContextInterceptorTest {
         UserContextInterceptor interceptor = new UserContextInterceptor(new ObjectMapper());
         MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
+        HandlerMethod handlerMethod = new HandlerMethod(new TestHandlerTarget(), TestHandlerTarget.class.getMethod("handle"));
 
         try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
             stpUtil.when(StpUtil::getLoginIdAsLong).thenThrow(new RuntimeException("no login"));
 
-            boolean allowed = interceptor.preHandle(request, response, new Object());
+            boolean allowed = interceptor.preHandle(request, response, handlerMethod);
 
             assertFalse(allowed);
             assertTrue(response.getContentAsString().contains("\"code\":\"0002\""));
             assertNull(UserContext.getUserId());
         }
+    }
+
+    @Test
+    void preHandle_shouldIgnoreNonHandlerMethod() throws Exception {
+        UserContextInterceptor interceptor = new UserContextInterceptor(new ObjectMapper());
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        boolean allowed = interceptor.preHandle(request, response, new Object());
+
+        assertTrue(allowed);
+        assertNull(UserContext.getUserId());
     }
 
     @Test

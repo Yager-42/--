@@ -1,50 +1,25 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { registerAccount, sendSmsCode } from '@/api/auth'
+import { registerAccount } from '@/api/auth'
 import PrototypeAuthShell from '@/components/prototype/PrototypeAuthShell.vue'
 import FormMessage from '@/components/system/FormMessage.vue'
 
 const router = useRouter()
 
 const phone = ref('')
-const smsCode = ref('')
 const password = ref('')
 const nickname = ref('')
 const countryCode = ref('+86')
 const agreed = ref(true)
 const showPassword = ref(false)
 const loading = ref(false)
-const sendingCode = ref(false)
 const error = ref('')
 const success = ref('')
 
-const handleSendCode = async () => {
-  if (!phone.value.trim()) {
-    error.value = '请先输入手机号'
-    return
-  }
-
-  sendingCode.value = true
-  error.value = ''
-  success.value = ''
-
-  try {
-    await sendSmsCode({
-      phone: phone.value.trim(),
-      bizType: 'REGISTER'
-    })
-    success.value = '验证码已发送，请注意查收。'
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '验证码发送失败'
-  } finally {
-    sendingCode.value = false
-  }
-}
-
 const handleRegister = async () => {
-  if (!nickname.value.trim() || !phone.value.trim() || !smsCode.value.trim() || !password.value.trim()) {
-    error.value = '请完整填写昵称、手机号、验证码和密码'
+  if (!nickname.value.trim() || !phone.value.trim() || !password.value.trim()) {
+    error.value = '请完整填写昵称、手机号和密码'
     return
   }
 
@@ -60,7 +35,6 @@ const handleRegister = async () => {
   try {
     await registerAccount({
       phone: phone.value.trim(),
-      smsCode: smsCode.value.trim(),
       password: password.value,
       nickname: nickname.value.trim(),
       avatarUrl: ''
@@ -153,27 +127,6 @@ const handleRegister = async () => {
                   placeholder="请输入手机号"
                   class="flex-1 rounded-full border border-prototype-line bg-prototype-bg px-5 py-4 text-prototype-ink outline-none transition placeholder:text-prototype-muted/70 focus:border-prototype-ink"
                 >
-              </div>
-            </div>
-
-            <div class="space-y-2">
-              <label class="block text-xs font-semibold uppercase tracking-[0.18em] text-prototype-muted" for="code">Verification Code</label>
-              <div class="relative">
-                <input
-                  id="code"
-                  v-model="smsCode"
-                  type="text"
-                  placeholder="输入 6 位验证码"
-                  class="w-full rounded-full border border-prototype-line bg-prototype-bg px-5 py-4 pr-36 text-prototype-ink outline-none transition placeholder:text-prototype-muted/70 focus:border-prototype-ink"
-                >
-                <button
-                  type="button"
-                  class="absolute bottom-2 right-2 top-2 rounded-full border border-prototype-line px-4 text-sm font-semibold text-prototype-ink transition hover:border-prototype-ink disabled:cursor-not-allowed disabled:opacity-60"
-                  :disabled="sendingCode"
-                  @click="handleSendCode"
-                >
-                  {{ sendingCode ? '发送中' : '发送验证码' }}
-                </button>
               </div>
             </div>
 

@@ -19,15 +19,11 @@ import cn.nexus.api.auth.dto.AuthPasswordLoginRequestDTO;
 import cn.nexus.api.auth.dto.AuthRefreshRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterResponseDTO;
-import cn.nexus.api.auth.dto.AuthSmsLoginRequestDTO;
-import cn.nexus.api.auth.dto.AuthSmsSendRequestDTO;
-import cn.nexus.api.auth.dto.AuthSmsSendResponseDTO;
 import cn.nexus.api.auth.dto.AuthTokenResponseDTO;
 import cn.nexus.api.response.Response;
 import cn.nexus.domain.auth.model.valobj.AuthAdminVO;
 import cn.nexus.domain.auth.model.valobj.AuthLoginResultVO;
 import cn.nexus.domain.auth.model.valobj.AuthMeVO;
-import cn.nexus.domain.auth.model.valobj.AuthSmsBizTypeVO;
 import cn.nexus.domain.auth.service.AuthService;
 import cn.nexus.trigger.http.support.UserContext;
 import cn.nexus.types.enums.ResponseCode;
@@ -47,30 +43,13 @@ class AuthControllerTest {
     }
 
     @Test
-    void sendSms_shouldDelegateAndReturnExpireSeconds() {
-        AuthService authService = Mockito.mock(AuthService.class);
-        AuthController controller = new AuthController(authService);
-
-        Response<AuthSmsSendResponseDTO> response = controller.sendSms(AuthSmsSendRequestDTO.builder()
-                .phone("13800138000")
-                .bizType("REGISTER")
-                .build());
-
-        assertEquals(ResponseCode.SUCCESS.getCode(), response.getCode());
-        assertNotNull(response.getData());
-        assertEquals(300, response.getData().getExpireSeconds());
-        verify(authService).sendSms(Mockito.eq("13800138000"), Mockito.eq(AuthSmsBizTypeVO.REGISTER), Mockito.anyString());
-    }
-
-    @Test
     void register_shouldReturnUserId() {
         AuthService authService = Mockito.mock(AuthService.class);
         AuthController controller = new AuthController(authService);
-        when(authService.register("13800138000", "123456", "pwd", "neo", "avatar")).thenReturn(1001L);
+        when(authService.register("13800138000", "pwd", "neo", "avatar")).thenReturn(1001L);
 
         Response<AuthRegisterResponseDTO> response = controller.register(AuthRegisterRequestDTO.builder()
                 .phone("13800138000")
-                .smsCode("123456")
                 .password("pwd")
                 .nickname("neo")
                 .avatarUrl("avatar")
@@ -106,33 +85,6 @@ class AuthControllerTest {
             assertEquals("Bearer", response.getData().getTokenPrefix());
             assertEquals("token-88", response.getData().getToken());
             stpUtil.verify(() -> StpUtil.login(88L));
-        }
-    }
-
-    @Test
-    void smsLogin_shouldLoginAndReturnToken() {
-        AuthService authService = Mockito.mock(AuthService.class);
-        AuthController controller = new AuthController(authService);
-        when(authService.smsLogin("13800138001", "888888")).thenReturn(AuthLoginResultVO.builder()
-                .userId(89L)
-                .phone("13800138001")
-                .build());
-
-        try (MockedStatic<StpUtil> stpUtil = Mockito.mockStatic(StpUtil.class)) {
-            SaSession issuedRefreshSession = Mockito.mock(SaSession.class);
-            stpUtil.when(StpUtil::getTokenValue).thenReturn("token-89");
-            stpUtil.when(() -> StpUtil.getTokenSessionByToken(Mockito.startsWith("rt_"))).thenReturn(issuedRefreshSession);
-
-            Response<AuthTokenResponseDTO> response = controller.smsLogin(AuthSmsLoginRequestDTO.builder()
-                    .phone("13800138001")
-                    .smsCode("888888")
-                    .build());
-
-            assertEquals(ResponseCode.SUCCESS.getCode(), response.getCode());
-            assertEquals(89L, response.getData().getUserId());
-            assertEquals("token-89", response.getData().getToken());
-            assertNotNull(response.getData().getRefreshToken());
-            stpUtil.verify(() -> StpUtil.login(89L));
         }
     }
 

@@ -23,11 +23,4 @@ public interface IInteractionApi {
 
     Response<OperationResultDTO> readAllNotifications();
 
-    Response<TipResponseDTO> tip(TipRequestDTO requestDTO);
-
-    Response<PollCreateResponseDTO> createPoll(PollCreateRequestDTO requestDTO);
-
-    Response<PollVoteResponseDTO> vote(PollVoteRequestDTO requestDTO);
-
-    Response<WalletBalanceResponseDTO> balance(WalletBalanceRequestDTO requestDTO);
 }

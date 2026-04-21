@@ -20,7 +20,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -359,64 +358,6 @@ public class InteractionService implements IInteractionService {
         requireNonNull(userId, "userId");
         interactionNotificationRepository.markReadAll(userId);
         return ok(userId, "READ_ALL", "已全部已读");
-    }
-
-    /**
-     * 模拟打赏。
-     *
-     * @param toUserId 收款人 ID，类型：{@link Long}
-     * @param amount 金额，类型：{@link BigDecimal}
-     * @param currency 币种，类型：{@link String}
-     * @param postId 关联帖子 ID，类型：{@link Long}
-     * @return 打赏结果，类型：{@link TipResultVO}
-     */
-    @Override
-    public TipResultVO tip(Long toUserId, BigDecimal amount, String currency, Long postId) {
-        return TipResultVO.builder()
-                .txId("tx-" + socialIdPort.nextId())
-                .effectUrl("https://effect/mock")
-                .build();
-    }
-
-    /**
-     * 创建投票。
-     *
-     * @param question 问题文本，类型：{@link String}
-     * @param options 选项列表，类型：{@link List}&lt;{@link String}&gt;
-     * @param allowMulti 是否允许多选，类型：{@link Boolean}
-     * @param expireSeconds 过期秒数，类型：{@link Integer}
-     * @return 投票创建结果，类型：{@link PollCreateResultVO}
-     */
-    @Override
-    public PollCreateResultVO createPoll(String question, List<String> options, Boolean allowMulti, Integer expireSeconds) {
-        return PollCreateResultVO.builder().pollId(socialIdPort.nextId()).build();
-    }
-
-    /**
-     * 提交投票。
-     *
-     * @param pollId 投票 ID，类型：{@link Long}
-     * @param optionIds 选项 ID 列表，类型：{@link List}&lt;{@link Long}&gt;
-     * @return 投票结果，类型：{@link PollVoteResultVO}
-     */
-    @Override
-    public PollVoteResultVO vote(Long pollId, List<Long> optionIds) {
-        return PollVoteResultVO.builder().updatedStats("VOTED").build();
-    }
-
-    /**
-     * 查询钱包余额。
-     *
-     * @param currencyType 币种，类型：{@link String}
-     * @return 钱包余额结果，类型：{@link WalletBalanceVO}
-     */
-    @Override
-    public WalletBalanceVO balance(String currencyType) {
-        return WalletBalanceVO.builder()
-                .currencyType(currencyType)
-                .amount("100.00")
-                .frozenAmount("0.00")
-                .build();
     }
 
     private ReactionTargetVO parseTarget(Long targetId, String targetType, String type) {

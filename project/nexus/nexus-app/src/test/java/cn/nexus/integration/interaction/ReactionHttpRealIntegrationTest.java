@@ -246,17 +246,15 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     }
 
     @Test
-    void placeholderWalletAndPollApis_shouldRunThrough() throws Exception {
+    void placeholderWalletAndPollApis_shouldBeRemoved() throws Exception {
         TestSession user = registerAndLoginSession("placeholder-user");
         TestSession receiver = registerAndLoginSession("placeholder-receiver");
 
-        JsonNode tip = assertSuccess(postJson("/api/v1/wallet/tip", JsonNodeFactory.instance.objectNode()
+        assertPostNotFound("/api/v1/wallet/tip", JsonNodeFactory.instance.objectNode()
                 .put("toUserId", receiver.userId())
                 .put("amount", "8.88")
                 .put("currency", "CNY")
-                .put("postId", uniqueId()), user.token()));
-        assertThat(tip.path("txId").asText()).isNotBlank();
-        assertThat(tip.path("effectUrl").asText()).isNotBlank();
+                .put("postId", uniqueId()), user.token());
 
         JsonNodeFactory factory = JsonNodeFactory.instance;
         com.fasterxml.jackson.databind.node.ObjectNode pollReq = factory.objectNode();
@@ -265,20 +263,15 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         pollReq.put("expireSeconds", 3600);
         pollReq.putArray("options").add("喜欢").add("非常喜欢");
 
-        JsonNode createdPoll = assertSuccess(postJson("/api/v1/interaction/poll/create", pollReq, user.token()));
-        long pollId = createdPoll.path("pollId").asLong();
-        assertThat(pollId).isPositive();
+        assertPostNotFound("/api/v1/interaction/poll/create", pollReq, user.token());
 
         com.fasterxml.jackson.databind.node.ObjectNode voteReq = factory.objectNode();
-        voteReq.put("pollId", pollId);
+        voteReq.put("pollId", uniqueId());
         voteReq.putArray("optionIds").add(1L);
 
-        JsonNode voted = assertSuccess(postJson("/api/v1/interaction/poll/vote", voteReq, user.token()));
-        assertThat(voted.path("updatedStats").asText()).isEqualTo("VOTED");
+        assertPostNotFound("/api/v1/interaction/poll/vote", voteReq, user.token());
 
-        JsonNode balance = assertSuccess(getJson("/api/v1/wallet/balance?currencyType=CNY", user.token()));
-        assertThat(balance.path("currencyType").asText()).isEqualTo("CNY");
-        assertThat(balance.path("amount").asText()).isNotBlank();
+        assertGetNotFound("/api/v1/wallet/balance?currencyType=CNY", user.token());
     }
 
     @Test

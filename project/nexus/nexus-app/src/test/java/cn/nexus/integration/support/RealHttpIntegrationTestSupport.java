@@ -69,6 +69,10 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
         return sendWithBody("POST", path, body, token);
     }
 
+    protected void assertPostNotFound(String path, Object body, String token) throws Exception {
+        assertStatusWithBody("POST", path, body, token, 404);
+    }
+
     protected JsonNode putJson(String path, Object body, String token) throws Exception {
         return sendWithBody("PUT", path, body, token);
     }
@@ -86,6 +90,16 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
         withToken(builder, token);
         String json = body == null ? "" : objectMapper.writeValueAsString(body);
         return send(builder.method("DELETE", HttpRequest.BodyPublishers.ofString(json)).build());
+    }
+
+    protected void assertGetNotFound(String path, String token) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl(path)))
+                .timeout(Duration.ofSeconds(10))
+                .GET()
+                .header("Accept", "application/json");
+        withToken(builder, token);
+        assertStatus(builder.build(), 404);
     }
 
     protected JsonNode assertSuccess(JsonNode response) {
@@ -240,6 +254,24 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
         withToken(builder, token);
         String json = body == null ? "{}" : objectMapper.writeValueAsString(body);
         return send(builder.method(method, HttpRequest.BodyPublishers.ofString(json)).build());
+    }
+
+    private void assertStatusWithBody(String method, String path, Object body, String token, int expectedStatus) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl(path)))
+                .timeout(Duration.ofSeconds(10))
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json");
+        withToken(builder, token);
+        String json = body == null ? "{}" : objectMapper.writeValueAsString(body);
+        assertStatus(builder.method(method, HttpRequest.BodyPublishers.ofString(json)).build(), expectedStatus);
+    }
+
+    private void assertStatus(HttpRequest request, int expectedStatus) throws Exception {
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode())
+                .as("http status=%s, body=%s", response.statusCode(), response.body())
+                .isEqualTo(expectedStatus);
     }
 
     private void withToken(HttpRequest.Builder builder, String token) {

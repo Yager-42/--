@@ -223,66 +223,6 @@ public class InteractionController implements IInteractionApi {
         }
     }
 
-    /**
-     * 执行打赏占位逻辑。
-     *
-     * @param requestDTO 请求参数。类型：{@link TipRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @PostMapping("/wallet/tip")
-    @Override
-    public Response<TipResponseDTO> tip(@RequestBody TipRequestDTO requestDTO) {
-        TipResultVO vo = interactionService.tip(requestDTO.getToUserId(), requestDTO.getAmount(), requestDTO.getCurrency(), requestDTO.getPostId());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                TipResponseDTO.builder().txId(vo.getTxId()).effectUrl(vo.getEffectUrl()).build());
-    }
-
-    /**
-     * 创建投票占位逻辑。
-     *
-     * @param requestDTO 请求参数。类型：{@link PollCreateRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @PostMapping("/interaction/poll/create")
-    @Override
-    public Response<PollCreateResponseDTO> createPoll(@RequestBody PollCreateRequestDTO requestDTO) {
-        PollCreateResultVO vo = interactionService.createPoll(requestDTO.getQuestion(), requestDTO.getOptions(), requestDTO.getAllowMulti(), requestDTO.getExpireSeconds());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                PollCreateResponseDTO.builder().pollId(vo.getPollId()).build());
-    }
-
-    /**
-     * 执行投票占位逻辑。
-     *
-     * @param requestDTO 请求参数。类型：{@link PollVoteRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @PostMapping("/interaction/poll/vote")
-    @Override
-    public Response<PollVoteResponseDTO> vote(@RequestBody PollVoteRequestDTO requestDTO) {
-        PollVoteResultVO vo = interactionService.vote(requestDTO.getPollId(), requestDTO.getOptionIds());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                PollVoteResponseDTO.builder().updatedStats(vo.getUpdatedStats()).build());
-    }
-
-    /**
-     * 查询钱包余额占位结果。
-     *
-     * @param requestDTO 请求参数。类型：{@link WalletBalanceRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @GetMapping("/wallet/balance")
-    @Override
-    public Response<WalletBalanceResponseDTO> balance(WalletBalanceRequestDTO requestDTO) {
-        WalletBalanceVO vo = interactionService.balance(requestDTO.getCurrencyType());
-        WalletBalanceResponseDTO dto = WalletBalanceResponseDTO.builder()
-                .currencyType(vo.getCurrencyType())
-                .amount(vo.getAmount())
-                .frozenAmount(vo.getFrozenAmount())
-                .build();
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
-    }
-
     private NotificationDTO toNotification(NotificationVO vo) {
         return NotificationDTO.builder()
                 .title(vo.getTitle())

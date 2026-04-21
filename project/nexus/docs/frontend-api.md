@@ -164,17 +164,11 @@ export async function uploadFile(file: File): Promise<string> {
 | `POST` | `/api/v1/content/{postId}/rollback` | 是 | `` | `ContentController#rollback` | `ContentRollbackRequestDTO` | `OperationResultDTO` |
 | `GET` | `/api/v1/feed/profile/{targetId}` | 是 | `` | `FeedController#profile` | `` | `FeedTimelineResponseDTO` |
 | `GET` | `/api/v1/feed/timeline` | 是 | `` | `FeedController#timeline` | `` | `FeedTimelineResponseDTO` |
-| `POST` | `/api/v1/group/channel/config` | 是 | `` | `CommunityController#channelConfig` | `ChannelConfigRequestDTO` | `OperationResultDTO` |
-| `POST` | `/api/v1/group/join` | 是 | `` | `CommunityController#join` | `GroupJoinRequestDTO` | `GroupJoinResponseDTO` |
-| `POST` | `/api/v1/group/member/kick` | 是 | `` | `CommunityController#kick` | `GroupKickRequestDTO` | `OperationResultDTO` |
-| `POST` | `/api/v1/group/member/role` | 是 | `` | `CommunityController#changeRole` | `GroupRoleRequestDTO` | `OperationResultDTO` |
 | `GET` | `/api/v1/health` | 否 | `` | `SystemHealthController#health` | `` | `SystemHealthResponseDTO` |
 | `POST` | `/api/v1/interact/comment` | 是 | `` | `InteractionController#comment` | `CommentRequestDTO` | `CommentResponseDTO` |
 | `POST` | `/api/v1/interact/comment/pin` | 是 | `` | `InteractionController#pinComment` | `PinCommentRequestDTO` | `OperationResultDTO` |
 | `POST` | `/api/v1/interact/reaction` | 是 | `` | `InteractionController#react` | `ReactionRequestDTO` | `ReactionResponseDTO` |
 | `GET` | `/api/v1/interact/reaction/state` | 是 | `` | `InteractionController#reactionState` | `` | `ReactionStateResponseDTO` |
-| `POST` | `/api/v1/interaction/poll/create` | 是 | `` | `InteractionController#createPoll` | `PollCreateRequestDTO` | `PollCreateResponseDTO` |
-| `POST` | `/api/v1/interaction/poll/vote` | 是 | `` | `InteractionController#vote` | `PollVoteRequestDTO` | `PollVoteResponseDTO` |
 | `POST` | `/api/v1/internal/user/upsert` | 是 | `` | `InternalUserController#upsert` | `UserInternalUpsertRequestDTO` | `OperationResultDTO` |
 | `POST` | `/api/v1/media/upload/session` | 是 | `` | `ContentController#createUploadSession` | `UploadSessionRequestDTO` | `UploadSessionResponseDTO` |
 | `GET` | `/api/v1/notification/list` | 是 | `` | `InteractionController#notifications` | `` | `NotificationListResponseDTO` |
@@ -215,8 +209,6 @@ export async function uploadFile(file: File): Promise<string> {
 | `POST` | `/api/v1/user/me/profile` | 是 | `` | `UserProfileController#updateMyProfile` | `UserProfileUpdateRequestDTO` | `OperationResultDTO` |
 | `GET` | `/api/v1/user/profile` | 是 | `` | `UserProfileController#profile` | `` | `UserProfileResponseDTO` |
 | `GET` | `/api/v1/user/profile/page` | 是 | `` | `UserProfilePageController#profilePage` | `` | `UserProfilePageResponseDTO` |
-| `GET` | `/api/v1/wallet/balance` | 是 | `` | `InteractionController#balance` | `` | `WalletBalanceResponseDTO` |
-| `POST` | `/api/v1/wallet/tip` | 是 | `` | `InteractionController#tip` | `TipRequestDTO` | `TipResponseDTO` |
 | `POST` | `/file/upload` | 否 | `` | `FileController#upload` | `` | `FileUploadResponseDTO` |
 | `GET` | `/id/segment/get/{key}` | 否 | `` | `IdController#segment` | `` | `String` |
 | `GET` | `/id/snowflake/get/{key}` | 否 | `` | `IdController#snowflake` | `` | `String` |
@@ -413,32 +405,6 @@ export async function uploadFile(file: File): Promise<string> {
     - `currentCount`: `Long`
 - 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
 
-#### `POST /api/v1/interaction/poll/create`
-
-- 鉴权：需要登录
-- 请求体（JSON）：
-  - 类型：`PollCreateRequestDTO`
-  - `question`: `String`
-  - `options`: `List<String>`
-  - `allowMulti`: `Boolean`
-  - `expireSeconds`: `Integer`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `pollId`: `Long`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
-
-#### `POST /api/v1/interaction/poll/vote`
-
-- 鉴权：需要登录
-- 请求体（JSON）：
-  - 类型：`PollVoteRequestDTO`
-  - `pollId`: `Long`
-  - `optionIds`: `List<Long>`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `updatedStats`: `String`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
-
 #### `GET /api/v1/notification/list`
 
 - 鉴权：需要登录
@@ -474,33 +440,6 @@ export async function uploadFile(file: File): Promise<string> {
     - `id`: `Long`
     - `status`: `String`
     - `message`: `String`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
-
-#### `GET /api/v1/wallet/balance`
-
-- 鉴权：需要登录
-- Query 参数（来自 DTO 字段）：
-  - `currencyType`: `String`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `currencyType`: `String`
-    - `amount`: `String`
-    - `frozenAmount`: `String`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
-
-#### `POST /api/v1/wallet/tip`
-
-- 鉴权：需要登录
-- 请求体（JSON）：
-  - 类型：`TipRequestDTO`
-  - `toUserId`: `Long`
-  - `amount`: `BigDecimal`
-  - `currency`: `String`
-  - `postId`: `Long`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `txId`: `String`
-    - `effectUrl`: `String`
 - 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
 
 ### 健康 Health
@@ -971,69 +910,6 @@ export async function uploadFile(file: File): Promise<string> {
 - 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/user/UserProfilePageController.java`
 
 ### 社群 Group
-
-#### `POST /api/v1/group/channel/config`
-
-- 鉴权：需要登录
-- 请求体（JSON）：
-  - 类型：`ChannelConfigRequestDTO`
-  - `channelId`: `Long`
-  - `slowModeInterval`: `Integer`
-  - `locked`: `Boolean`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `success`: `boolean`
-    - `id`: `Long`
-    - `status`: `String`
-    - `message`: `String`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/CommunityController.java`
-
-#### `POST /api/v1/group/join`
-
-- 鉴权：需要登录
-- 请求体（JSON）：
-  - 类型：`GroupJoinRequestDTO`
-  - `groupId`: `Long`
-  - `userId`: `Long`
-  - `answers`: `String`
-  - `inviteToken`: `String`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `status`: `String`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/CommunityController.java`
-
-#### `POST /api/v1/group/member/kick`
-
-- 鉴权：需要登录
-- 请求体（JSON）：
-  - 类型：`GroupKickRequestDTO`
-  - `groupId`: `Long`
-  - `targetId`: `Long`
-  - `reason`: `String`
-  - `ban`: `Boolean`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `success`: `boolean`
-    - `id`: `Long`
-    - `status`: `String`
-    - `message`: `String`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/CommunityController.java`
-
-#### `POST /api/v1/group/member/role`
-
-- 鉴权：需要登录
-- 请求体（JSON）：
-  - 类型：`GroupRoleRequestDTO`
-  - `groupId`: `Long`
-  - `targetId`: `Long`
-  - `roleId`: `Long`
-- 响应：统一 `Response` 壳，成功 `code=0000`
-  - `data` 字段：
-    - `success`: `boolean`
-    - `id`: `Long`
-    - `status`: `String`
-    - `message`: `String`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/CommunityController.java`
 
 ### 认证 Auth
 
@@ -1554,7 +1430,6 @@ export async function uploadFile(file: File): Promise<string> {
 - `AuthTokenResponseDTO`
 - `BlockRequestDTO`
 - `BlockResponseDTO`
-- `ChannelConfigRequestDTO`
 - `CommentHotResponseDTO`
 - `CommentListResponseDTO`
 - `CommentReplyListResponseDTO`
@@ -1569,10 +1444,6 @@ export async function uploadFile(file: File): Promise<string> {
 - `FileUploadResponseDTO`
 - `FollowRequestDTO`
 - `FollowResponseDTO`
-- `GroupJoinRequestDTO`
-- `GroupJoinResponseDTO`
-- `GroupKickRequestDTO`
-- `GroupRoleRequestDTO`
 - `ImageScanRequestDTO`
 - `ImageScanResponseDTO`
 - `KvCommentContentBatchAddRequestDTO`
@@ -1589,10 +1460,6 @@ export async function uploadFile(file: File): Promise<string> {
 - `NotificationReadRequestDTO`
 - `OperationResultDTO`
 - `PinCommentRequestDTO`
-- `PollCreateRequestDTO`
-- `PollCreateResponseDTO`
-- `PollVoteRequestDTO`
-- `PollVoteResponseDTO`
 - `PublishAttemptResponseDTO`
 - `PublishContentRequestDTO`
 - `PublishContentResponseDTO`
@@ -1641,8 +1508,6 @@ export async function uploadFile(file: File): Promise<string> {
 - `SystemHealthResponseDTO`
 - `TextScanRequestDTO`
 - `TextScanResponseDTO`
-- `TipRequestDTO`
-- `TipResponseDTO`
 - `UploadSessionRequestDTO`
 - `UploadSessionResponseDTO`
 - `UserInternalUpsertRequestDTO`
@@ -1653,7 +1518,6 @@ export async function uploadFile(file: File): Promise<string> {
 - `UserProfileUpdateRequestDTO`
 - `UserRelationStatsDTO`
 - `UserRiskStatusResponseDTO`
-- `WalletBalanceResponseDTO`
 
 ### `AuthAdminDTO`
 
@@ -1886,23 +1750,6 @@ export async function uploadFile(file: File): Promise<string> {
 ```json
 {
   "success": false
-}
-```
-
-### `ChannelConfigRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/community/dto/ChannelConfigRequestDTO.java`
-- 字段：
-  - `channelId`: `Long`
-  - `slowModeInterval`: `Integer`
-  - `locked`: `Boolean`
-
-示例 JSON：
-```json
-{
-  "channelId": 0,
-  "slowModeInterval": 0,
-  "locked": false
 }
 ```
 
@@ -2291,74 +2138,6 @@ export async function uploadFile(file: File): Promise<string> {
 }
 ```
 
-### `GroupJoinRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/community/dto/GroupJoinRequestDTO.java`
-- 字段：
-  - `groupId`: `Long`
-  - `userId`: `Long`
-  - `answers`: `String`
-  - `inviteToken`: `String`
-
-示例 JSON：
-```json
-{
-  "groupId": 0,
-  "userId": 0,
-  "answers": "string",
-  "inviteToken": "string"
-}
-```
-
-### `GroupJoinResponseDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/community/dto/GroupJoinResponseDTO.java`
-- 字段：
-  - `status`: `String`
-
-示例 JSON：
-```json
-{
-  "status": "string"
-}
-```
-
-### `GroupKickRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/community/dto/GroupKickRequestDTO.java`
-- 字段：
-  - `groupId`: `Long`
-  - `targetId`: `Long`
-  - `reason`: `String`
-  - `ban`: `Boolean`
-
-示例 JSON：
-```json
-{
-  "groupId": 0,
-  "targetId": 0,
-  "reason": "string",
-  "ban": false
-}
-```
-
-### `GroupRoleRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/community/dto/GroupRoleRequestDTO.java`
-- 字段：
-  - `groupId`: `Long`
-  - `targetId`: `Long`
-  - `roleId`: `Long`
-
-示例 JSON：
-```json
-{
-  "groupId": 0,
-  "targetId": 0,
-  "roleId": 0
-}
-```
-
 ### `ImageScanRequestDTO`
 
 - 来源：`nexus-api/src/main/java/cn/nexus/api/social/risk/dto/ImageScanRequestDTO.java`
@@ -2643,70 +2422,6 @@ export async function uploadFile(file: File): Promise<string> {
 {
   "commentId": 0,
   "postId": 0
-}
-```
-
-### `PollCreateRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/PollCreateRequestDTO.java`
-- 字段：
-  - `question`: `String`
-  - `options`: `List<String>`
-  - `allowMulti`: `Boolean`
-  - `expireSeconds`: `Integer`
-
-示例 JSON：
-```json
-{
-  "question": "string",
-  "options": [
-    "string"
-  ],
-  "allowMulti": false,
-  "expireSeconds": 0
-}
-```
-
-### `PollCreateResponseDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/PollCreateResponseDTO.java`
-- 字段：
-  - `pollId`: `Long`
-
-示例 JSON：
-```json
-{
-  "pollId": 0
-}
-```
-
-### `PollVoteRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/PollVoteRequestDTO.java`
-- 字段：
-  - `pollId`: `Long`
-  - `optionIds`: `List<Long>`
-
-示例 JSON：
-```json
-{
-  "pollId": 0,
-  "optionIds": [
-    0
-  ]
-}
-```
-
-### `PollVoteResponseDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/PollVoteResponseDTO.java`
-- 字段：
-  - `updatedStats`: `String`
-
-示例 JSON：
-```json
-{
-  "updatedStats": "string"
 }
 ```
 
@@ -3793,40 +3508,6 @@ export async function uploadFile(file: File): Promise<string> {
 }
 ```
 
-### `TipRequestDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/TipRequestDTO.java`
-- 字段：
-  - `toUserId`: `Long`
-  - `amount`: `BigDecimal`
-  - `currency`: `String`
-  - `postId`: `Long`
-
-示例 JSON：
-```json
-{
-  "toUserId": 0,
-  "amount": null,
-  "currency": "string",
-  "postId": 0
-}
-```
-
-### `TipResponseDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/TipResponseDTO.java`
-- 字段：
-  - `txId`: `String`
-  - `effectUrl`: `String`
-
-示例 JSON：
-```json
-{
-  "txId": "string",
-  "effectUrl": "string"
-}
-```
-
 ### `UploadSessionRequestDTO`
 
 - 来源：`nexus-api/src/main/java/cn/nexus/api/social/content/dto/UploadSessionRequestDTO.java`
@@ -4012,20 +3693,4 @@ export async function uploadFile(file: File): Promise<string> {
 }
 ```
 
-### `WalletBalanceResponseDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/WalletBalanceResponseDTO.java`
-- 字段：
-  - `currencyType`: `String`
-  - `amount`: `String`
-  - `frozenAmount`: `String`
-
-示例 JSON：
-```json
-{
-  "currencyType": "string",
-  "amount": "string",
-  "frozenAmount": "string"
-}
-```
 <!-- DTO-DICT:END -->

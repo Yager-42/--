@@ -25,11 +25,4 @@ public interface IInteractionService {
 
     OperationResultVO readAllNotifications(Long userId);
 
-    TipResultVO tip(Long toUserId, java.math.BigDecimal amount, String currency, Long postId);
-
-    PollCreateResultVO createPoll(String question, java.util.List<String> options, Boolean allowMulti, Integer expireSeconds);
-
-    PollVoteResultVO vote(Long pollId, java.util.List<Long> optionIds);
-
-    WalletBalanceVO balance(String currencyType);
 }

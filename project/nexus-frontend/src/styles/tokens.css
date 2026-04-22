@@ -1,0 +1,15 @@
+:root {
+  --nx-bg: #f6f7f8;
+  --nx-surface: #ffffff;
+  --nx-surface-muted: #eef2f6;
+  --nx-text: #17202a;
+  --nx-text-muted: #5b6673;
+  --nx-primary: #2563eb;
+  --nx-accent: #f26f63;
+  --nx-border: #dbe2ea;
+  --nx-danger: #dc2626;
+  --nx-success: #16a34a;
+  --nx-radius-card: 18px;
+  --nx-radius-pill: 999px;
+  --nx-shadow-card: 0 24px 48px -32px rgba(23, 32, 42, 0.18);
+}

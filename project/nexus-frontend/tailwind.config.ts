@@ -5,6 +5,16 @@ export default {
   theme: {
     extend: {
       colors: {
+        'nx-bg': '#f6f7f8',
+        'nx-surface': '#ffffff',
+        'nx-surface-muted': '#eef2f6',
+        'nx-text': '#17202a',
+        'nx-text-muted': '#5b6673',
+        'nx-primary': '#2563eb',
+        'nx-accent': '#f26f63',
+        'nx-border': '#dbe2ea',
+        'nx-danger': '#dc2626',
+        'nx-success': '#16a34a',
         background: '#faf9f4',
         surface: '#faf9f4',
         'prototype-bg': '#f8f6f1',

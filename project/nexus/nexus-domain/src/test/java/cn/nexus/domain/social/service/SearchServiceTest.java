@@ -49,6 +49,7 @@ class SearchServiceTest {
     void search_shouldNormalizeQueryAndLikedState() {
         SearchDocumentVO doc = SearchDocumentVO.builder()
                 .contentId(101L)
+                .authorId(77L)
                 .title("title")
                 .description("desc")
                 .imgUrls(List.of("cover"))
@@ -74,6 +75,7 @@ class SearchServiceTest {
         assertEquals("hello world", queryCaptor.getValue().getKeyword());
         assertEquals(List.of("a", "b"), queryCaptor.getValue().getTags());
         assertEquals(1, result.getItems().size());
+        assertEquals("77", result.getItems().get(0).getAuthorId());
         assertEquals(8L, result.getItems().get(0).getLikeCount());
         assertEquals(true, result.getItems().get(0).getLiked());
         assertEquals("after-1", result.getNextAfter());

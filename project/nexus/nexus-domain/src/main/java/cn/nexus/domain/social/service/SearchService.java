@@ -92,6 +92,7 @@ public class SearchService implements ISearchService {
             Long likeCount = stat == null ? safeLong(doc.getLikeCount()) : safeLong(stat.getLikeCount());
             items.add(SearchResultVO.SearchItemVO.builder()
                     .id(String.valueOf(doc.getContentId()))
+                    .authorId(doc.getAuthorId() == null ? null : String.valueOf(doc.getAuthorId()))
                     .title(doc.getTitle())
                     .description(resolveDescription(hit, doc))
                     .coverImage(firstImage(doc.getImgUrls()))

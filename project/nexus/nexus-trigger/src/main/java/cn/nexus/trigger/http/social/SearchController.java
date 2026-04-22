@@ -58,6 +58,7 @@ public class SearchController implements ISearchApi {
             List<SearchItemDTO> items = vo.getItems() == null ? List.of() : vo.getItems().stream()
                     .map(item -> SearchItemDTO.builder()
                             .id(item.getId())
+                            .authorId(item.getAuthorId())
                             .title(item.getTitle())
                             .description(item.getDescription())
                             .coverImage(item.getCoverImage())

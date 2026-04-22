@@ -12,6 +12,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class SearchItemDTO {
     private String id;
+    private String authorId;
     private String title;
     private String description;
     private String coverImage;

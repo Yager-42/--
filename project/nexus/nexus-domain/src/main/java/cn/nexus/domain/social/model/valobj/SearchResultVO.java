@@ -21,6 +21,7 @@ public class SearchResultVO {
     @AllArgsConstructor
     public static class SearchItemVO {
         private String id;
+        private String authorId;
         private String title;
         private String description;
         private String coverImage;

@@ -80,6 +80,32 @@ class AuthHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     }
 
     @Test
+    void refresh_shouldIssueNewTokensWithoutAccessToken() throws Exception {
+        String phone = uniquePhone();
+        String password = "Pwd@" + uniqueUuid().substring(0, 8);
+        String nickname = "refresh-" + uniqueUuid().substring(0, 6);
+
+        registerUser(phone, password, nickname);
+
+        JsonNode login = postJson("/api/v1/auth/login/password", JsonNodeFactory.instance.objectNode()
+                .put("phone", phone)
+                .put("password", password), null);
+        JsonNode loginData = assertSuccess(login);
+        String refreshToken = loginData.path("refreshToken").asText();
+
+        JsonNode refresh = postJson("/api/v1/auth/refresh", JsonNodeFactory.instance.objectNode()
+                .put("refreshToken", refreshToken), null);
+        JsonNode refreshData = assertSuccess(refresh);
+
+        assertThat(refreshData.path("token").asText()).isNotBlank();
+        assertThat(refreshData.path("refreshToken").asText()).isNotBlank();
+        assertThat(refreshData.path("refreshToken").asText()).isNotEqualTo(refreshToken);
+
+        JsonNode meData = assertSuccess(getJson("/api/v1/auth/me", refreshData.path("token").asText()));
+        assertThat(meData.path("phone").asText()).isEqualTo(phone);
+    }
+
+    @Test
     void adminEndpoints_shouldGrantListAndRevokeRoles() throws Exception {
         String adminPhone = uniquePhone();
         String adminPassword = "Adm@" + uniqueUuid().substring(0, 8);

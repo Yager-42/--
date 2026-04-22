@@ -209,6 +209,21 @@ Required semantics:
 The mirror exists for count and state repair first.
 It does not require v1 query traffic to switch from MySQL relation pagination to Redis pagination immediately.
 
+Important boundary rule:
+
+- do not overload the current `IRelationAdjacencyCachePort` with count-recovery mirror semantics in v1
+
+Reason:
+
+- that port is already consumed by `RelationQueryService`, `FeedService`, and `FeedInboxRebuildService`
+- its current method set implies user-facing pagination and adjacency query semantics, not just count repair semantics
+
+Recommended direction:
+
+- keep `IRelationAdjacencyCachePort` DB-backed or query-facing in v1
+- introduce a dedicated count-side follow mirror port, for example `IFollowCountStatePort`
+- only that dedicated port should own mirrored Redis memberships used by count replay and bounded repair
+
 ### Compressed counter truth
 
 Compressed counter objects remain the online truth for current counts.
@@ -793,6 +808,7 @@ Port ownership recommendation:
 
 - `ReactionCachePort` should become the reaction transition boundary, not the reaction checkpoint boundary
 - relation should gain an equivalent dedicated transition boundary instead of composing Redis count writes ad hoc in `RelationService`
+- follow count mirror should use a dedicated Redis state port instead of reusing the query-facing adjacency port
 - checkpoint read/write should move into a separate persistence control port used by checkpoint, recovery, and purge workers
 
 ### Replay-backed family repair semantics
@@ -1151,10 +1167,16 @@ unless there is a strong operational reason to keep MQ in the durability path.
 The design only requires Redis follow mirrors for count truth and repair.
 It does not require relation list APIs to use Redis in v1.
 
-Need confirmation whether v1 should:
+Recommended direction:
 
-- keep user-facing relation pagination on MySQL only
-- or opportunistically expose Redis mirror reads for selected hot paths
+- keep user-facing relation pagination on MySQL in v1
+- do not couple the count-side follow mirror rollout to query/read-path cutover
+
+Reason:
+
+- current `IRelationAdjacencyCachePort` already fronts user-facing query use cases
+- forcing Redis mirror to satisfy query pagination now would expand scope and entangle recovery work with feed/query semantics
+- the count architecture only needs bounded repair and replay correctness in this phase
 
 ### 4. compressed mutation vehicle
 
@@ -1165,7 +1187,16 @@ The remaining implementation choice is whether the final atomic mutation is done
 - Lua / function-based raw key mutation
 - or an intermediate hybrid during migration
 
-This choice changes implementation shape, not truth boundaries.
+Recommended direction:
+
+- v1 planning should assume Lua / function-based raw key mutation for the transition unit
+- Redis module commands remain a later optimization or migration target, not a prerequisite for the recovery architecture
+
+Reason:
+
+- current online chain already uses Redis-side scripting patterns
+- the repo's `count-redis-module` exists, but the Java mainline has not fully converged on it
+- tying the recovery architecture to Redis module cutover would unnecessarily couple two large migrations
 
 ## Explicit Rejections
 
@@ -1454,7 +1485,7 @@ Exit criteria:
 
 ### Stage 3: introduce mirrored Redis follow-state truth
 
-- make `IRelationAdjacencyCachePort` actually maintain count-side follow mirrors in Redis
+- add a dedicated count-side follow mirror port and maintain mirrored Redis memberships there
 - change `UserCounterPort` rebuild for `FOLLOWING` and `FOLLOWER` to read Redis mirror state
 - keep MySQL relation pagination unchanged for v1 user-facing query APIs
 - stop using `UserCounterRepairJob` as a MySQL-count rehydration mechanism for normal count recovery

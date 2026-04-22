@@ -651,6 +651,56 @@ This allows:
 - stable pagination under overlap windows
 - future partitioning by event-time without changing replay semantics
 
+### Target port and value-object contracts
+
+The final design should stop letting recovery shape leak through legacy reaction-only APIs.
+
+Recommended reaction-side apply contracts:
+
+- `ReactionApplyCommand`
+  - `actor_user_id`
+  - `target_type`
+  - `target_id`
+  - `desired_state`
+  - `target_owner_user_id`
+  - `request_id`
+  - `mode` where `mode in {ONLINE, REPLAY}`
+- `ReactionApplyResult`
+  - `effective`
+  - `desired_state`
+  - `delta`
+  - `current_target_like_count`
+  - `current_owner_like_received_count`
+  - `event_time`
+
+Recommended relation-side apply contracts:
+
+- `RelationApplyCommand`
+  - `source_user_id`
+  - `target_user_id`
+  - `op` where `op in {FOLLOW, UNFOLLOW}`
+  - `request_id`
+  - `mode` where `mode in {ONLINE, REPLAY}`
+- `RelationApplyResult`
+  - `effective`
+  - `op`
+  - `delta_following`
+  - `delta_follower`
+  - `current_source_following_count`
+  - `current_target_follower_count`
+  - `event_time`
+
+Mode semantics:
+
+- `ONLINE` allows downstream best-effort side effects after a successful effective transition
+- `REPLAY` suppresses gap-log append and unrelated MQ side effects
+
+Port ownership recommendation:
+
+- `ReactionCachePort` should become the reaction transition boundary, not the reaction checkpoint boundary
+- relation should gain an equivalent dedicated transition boundary instead of composing Redis count writes ad hoc in `RelationService`
+- checkpoint read/write should move into a separate persistence control port used by checkpoint, recovery, and purge workers
+
 ### Replay-backed family repair semantics
 
 Replay-backed families do not all repair the same way.
@@ -860,6 +910,81 @@ Responsible for:
 - computing the safe deletion boundary from Redis checkpoint metadata
 - deleting only records behind the fixed safety window
 
+## Worker Topology And Ordering
+
+The final v1 runtime should separate three control-plane jobs instead of letting one recovery runner own all concerns.
+
+### 1. Checkpoint worker
+
+Responsibilities:
+
+- advance `checkpoint:aof_durable_time` when precise AOF durability confirmation is available
+- advance `checkpoint:rdb_candidate_time`
+- promote `checkpoint:rdb_durable_time` after successful `BGSAVE`
+- expose the current effective durable boundary for operators
+
+Cadence recommendation:
+
+- shorter than purge cadence
+- long enough to avoid pathological `BGSAVE` churn
+- fixed cadence, not request-driven
+
+Failure handling:
+
+- checkpoint worker failure must not block online writes
+- it only widens replay window and delays purge
+
+### 2. Recovery worker
+
+Responsibilities:
+
+- run at process boot after Redis restore or on explicit operator request
+- read restored checkpoint keys
+- derive replay start boundary from capability mode plus overlap window
+- stream reaction and relation gap logs in ascending `(event_time, seq)`
+- call replay apply entrypoints until caught up
+
+Start-order rule:
+
+1. Redis baseline restore finishes
+2. application starts count transition ports
+3. recovery worker completes replay catch-up
+4. then checkpoint and purge workers may resume normal cadence
+
+Reason:
+
+- purge must not race ahead of the first recovery pass
+- replay should run against a stable restored baseline
+
+### 3. Purge worker
+
+Responsibilities:
+
+- compute safe deletion boundary from restored durable checkpoint plus safety window
+- delete only old reaction and relation gap log records
+- expose backlog and deleted-row metrics
+
+Safety rule:
+
+- purge must not start until at least one successful recovery pass has completed after boot
+- purge must use the trusted durable boundary for the active capability mode
+
+### Optional 4. Operational repair worker
+
+Current Nexus already has `UserCounterRepairJob`, but it still rebuilds follow counters from MySQL.
+
+In the target design, an operational repair worker may remain for bounded repair scenarios:
+
+- malformed user compressed object
+- malformed object compressed counter
+- partial Redis-side corruption outside full disaster recovery
+
+But it should evolve toward:
+
+- Redis mirror state based repair for `FOLLOWING` and `FOLLOWER`
+- Redis state plus ownership metadata based reconciliation for `LIKE_RECEIVED`
+- no MySQL current-truth dependency for replay-backed families
+
 ## Validation Requirements
 
 The implementation plan derived from this design must include verification for:
@@ -952,6 +1077,27 @@ This design explicitly rejects:
 
 This design intentionally maps onto existing Nexus boundaries instead of inventing a new service layer first.
 
+### Current write-path asymmetry
+
+Current Nexus does not have one uniform count write chain yet.
+
+Reaction today:
+
+- `ReactionLikeService` calls `ReactionCachePort.applyAtomic(...)`
+- successful effective transitions then publish a reaction event-log MQ message
+- a separate consumer appends that message into `interaction_reaction_event_log`
+- `LIKE_RECEIVED` is still incremented in Java best-effort after the reaction apply result
+
+Relation today:
+
+- `RelationService` still treats MySQL relation writes plus `relation_event_outbox` as the primary business transaction
+- Redis follow-adjacency cache port is effectively a no-op
+- user follow counters are incremented or repaired in after-commit callbacks
+- `user_counter_repair_outbox` still rebuilds follow counts from MySQL counts
+
+This means the migration cannot be one giant shared refactor.
+Reaction and relation need different transition stages before they converge on the same Redis-truth recovery model.
+
 ### `ReactionCachePort`
 
 `ReactionCachePort` remains the online state-transition boundary for reaction-like writes.
@@ -977,6 +1123,14 @@ toward:
 
 The current legacy checkpoint methods are reaction-specific and seq-specific.
 They should not remain the long-term control surface once time-based durable checkpoints become global recovery metadata.
+
+For migration ordering, reaction should first converge on:
+
+- effective transition result as the only source for whether a gap log should be appended
+- owner context attached before append
+- replay ordered by `(event_time, seq)` instead of legacy `seq` checkpoint only
+
+Only after that should reaction move its full compressed-counter mutation into the final Redis-side unit.
 
 ### `ObjectCounterPort`
 
@@ -1013,6 +1167,14 @@ which still injects `IRelationRepository` and rebuilds `FOLLOWING` and `FOLLOWER
 
 That MySQL rebuild path should become transition-only fallback and then be removed from the count truth model.
 
+Current `LIKE_RECEIVED` writes also remain Java-side best-effort increments after reaction apply.
+
+In the final design, `LIKE_RECEIVED` should move into the same reaction transition unit that determines effective like-state change,
+so that:
+
+- online current truth stays inside one Redis mutation boundary
+- replay does not have to re-derive user-counter deltas outside the apply result
+
 ### `interaction_reaction_event_log`
 
 The current reaction event-log table is the closest existing asset to the final reaction gap log.
@@ -1038,6 +1200,35 @@ This lets the current table support both:
 - compatibility with existing code during migration
 - final replay contract based on state transition, owner context, and event-time
 
+Recommended target SQL shape:
+
+```sql
+CREATE TABLE interaction_reaction_event_log (
+  seq BIGINT NOT NULL AUTO_INCREMENT,
+  event_id VARCHAR(128) NOT NULL,
+  actor_user_id BIGINT NOT NULL,
+  target_type VARCHAR(32) NOT NULL,
+  target_id BIGINT NOT NULL,
+  reaction_type VARCHAR(16) NOT NULL,
+  desired_state TINYINT NOT NULL,
+  target_owner_user_id BIGINT NOT NULL,
+  event_time BIGINT NOT NULL,
+  create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  delta TINYINT NULL,
+  PRIMARY KEY (seq),
+  UNIQUE KEY uk_event_id (event_id),
+  KEY idx_replay_time_seq (event_time, seq),
+  KEY idx_target_time_seq (target_type, target_id, reaction_type, event_time, seq),
+  KEY idx_owner_time_seq (target_owner_user_id, event_time, seq)
+);
+```
+
+Notes:
+
+- `actor_user_id` is the semantic replacement for the current `user_id` naming
+- `delta` may remain nullable during migration for diagnostics and temporary compatibility
+- replay query path should converge on `ORDER BY event_time ASC, seq ASC`
+
 ### `relation_event_outbox`
 
 The current relation outbox is not the final replay gap log.
@@ -1056,6 +1247,50 @@ The recommended concrete path is:
 
 This keeps count recovery and MQ delivery independently operable.
 
+Recommended target SQL shape:
+
+```sql
+CREATE TABLE relation_gap_log (
+  seq BIGINT NOT NULL AUTO_INCREMENT,
+  event_id VARCHAR(128) NOT NULL,
+  source_user_id BIGINT NOT NULL,
+  target_user_id BIGINT NOT NULL,
+  op VARCHAR(16) NOT NULL,
+  event_time BIGINT NOT NULL,
+  create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (seq),
+  UNIQUE KEY uk_event_id (event_id),
+  KEY idx_replay_time_seq (event_time, seq),
+  KEY idx_source_time_seq (source_user_id, event_time, seq),
+  KEY idx_target_time_seq (target_user_id, event_time, seq)
+);
+```
+
+Notes:
+
+- v1 only needs `FOLLOW` and `UNFOLLOW`
+- block/unblock side effects that remove follow edges should either:
+  - append equivalent effective unfollow replay records
+  - or route through the same relation transition unit so replay semantics stay uniform
+- relation MQ delivery stays in `relation_event_outbox` and does not reuse this table
+
+### `user_counter_repair_outbox`
+
+`user_counter_repair_outbox` is a transition-era compensating asset, not part of the target replay baseline.
+
+Current behavior:
+
+- it captures failures when relation after-commit user counter writes do not succeed
+- `UserCounterRepairJob` then repairs follow counts from MySQL relation counts
+
+Target direction:
+
+- keep it only as bounded operational compensation during migration
+- stop using it as the normal recovery mechanism for `FOLLOWING` and `FOLLOWER`
+- once Redis follow mirrors and relation replay are in place, limit it to exceptional repair workflows only
+
+This table should not expand into a second long-lived source of count truth.
+
 ## Migration Stages
 
 This design is not a flag-day rewrite.
@@ -1068,6 +1303,7 @@ Nexus needs an ordered migration so that recovery semantics improve before physi
 - add owner context to reaction replay records
 - introduce `relation_gap_log`
 - stop treating `delta` as the source of truth for replay decisions
+- keep existing MQ/outbox responsibilities unchanged
 
 Exit criteria:
 
@@ -1080,6 +1316,7 @@ Exit criteria:
 - store checkpoint keys in Redis
 - switch recovery jobs from seq cursor to time-based overlap replay
 - keep seq only as a page tie-breaker, not as durable checkpoint truth
+- gate purge behind successful recovery completion after boot
 
 Exit criteria:
 
@@ -1091,6 +1328,7 @@ Exit criteria:
 - make `IRelationAdjacencyCachePort` actually maintain count-side follow mirrors in Redis
 - change `UserCounterPort` rebuild for `FOLLOWING` and `FOLLOWER` to read Redis mirror state
 - keep MySQL relation pagination unchanged for v1 user-facing query APIs
+- stop using `UserCounterRepairJob` as a MySQL-count rehydration mechanism for normal count recovery
 
 Exit criteria:
 
@@ -1102,6 +1340,7 @@ Exit criteria:
 - move reaction and relation effective state mutation plus compressed counter mutation into one Redis-side unit per family
 - make online apply result return `effective`, `delta`, and `event_time`
 - keep asynchronous log append as a separate best-effort step after the Redis transition succeeds
+- move side-effect publication to consume apply result instead of independently re-deriving transition outcome
 
 Exit criteria:
 
@@ -1113,6 +1352,7 @@ Exit criteria:
 - remove reaction-specific seq checkpoint APIs
 - downgrade bitmap scan rebuild to operational tool only
 - remove MySQL follow-count rebuild from `UserCounterPort`
+- remove replay-time dependence on content/comment owner lookup when reaction gap log already carries owner context
 
 Exit criteria:
 

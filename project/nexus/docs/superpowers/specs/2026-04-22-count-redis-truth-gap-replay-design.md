@@ -165,9 +165,19 @@ Representative key families:
 
 - `state:post_like:{postId}`
 - `state:comment_like:{commentId}`
-- `state:user_follow:{userId}` or the equivalent follow-state family used by the final implementation
+- `state:user_following:{sourceUserId}`
+- `state:user_follower:{targetUserId}`
 
 The exact internal encoding may vary by family, but these keys are the current online truth for state.
+
+For follow state, v1 should keep mirrored Redis state families instead of one vague logical key.
+
+That mirror is recommended because it gives bounded operational repair for:
+
+- `USER.following`
+- `USER.follower`
+
+without reintroducing MySQL relation counts as the counter repair truth.
 
 ### Compressed counter truth
 
@@ -193,19 +203,74 @@ The design change is to stop using exported compressed snapshots as the recovery
 
 Recovery control metadata stays in Redis, not in a separate MySQL checkpoint table.
 
-V1 minimum control key:
+V1 control keys:
 
-- `checkpoint:durable_time`
+- `checkpoint:aof_durable_time`
+- `checkpoint:rdb_candidate_time`
+- `checkpoint:rdb_durable_time`
 
 Optional observability keys:
 
 - `checkpoint:last_checkpoint_time`
 - `checkpoint:mode`
 
-`checkpoint:durable_time` represents the maximum durable event-time point
-that is guaranteed to be included in the recovered Redis persistence baseline.
+`checkpoint:aof_durable_time` represents the maximum event-time point
+confirmed durable in AOF.
+
+`checkpoint:rdb_candidate_time` is the candidate event-time written immediately before
+a checkpoint-triggered `BGSAVE`.
+
+`checkpoint:rdb_durable_time` is the last candidate that was confirmed by a successful `BGSAVE`.
+
+For v1 planning, the conservative durable replay boundary is:
+
+- `checkpoint:durable_time = min(checkpoint:aof_durable_time, checkpoint:rdb_durable_time)`
+
+If one side is missing, recovery falls back to the other persisted value plus the fixed replay overlap window.
 
 If a newer in-memory value was not persisted before failure, it is intentionally not treated as recoverable.
+
+### Checkpoint advancement algorithm
+
+The control keys above are not arbitrary timestamps.
+They are advanced by explicit persistence-aware workers.
+
+#### AOF checkpoint worker
+
+The AOF worker runs periodically and:
+
+1. asks Redis for server time
+2. writes that value into `checkpoint:aof_durable_time`
+3. waits for local AOF durability confirmation before treating it as usable for purge
+
+The important property is:
+
+- the timestamp must come from Redis server time, not from application-node wall clock
+- the worker must only treat a value as durable after Redis persistence confirms it
+
+#### RDB checkpoint worker
+
+The RDB worker runs periodically and:
+
+1. asks Redis for server time
+2. writes that value into `checkpoint:rdb_candidate_time`
+3. triggers or coordinates a `BGSAVE`
+4. after successful save, copies the candidate value into `checkpoint:rdb_durable_time`
+
+If Redis later restores from an older RDB image, `checkpoint:rdb_durable_time` may conservatively lag
+the exact newest snapshot coverage.
+That is acceptable because it only causes extra replay, not missed replay.
+
+### Why Redis-only checkpoint metadata is acceptable
+
+The design does not need a MySQL checkpoint table because checkpoint metadata is not business truth.
+
+The persisted Redis dataset itself is the recovery baseline.
+If a checkpoint key survives restore, that key survived as part of the same persistence image
+used to restore state and counters.
+
+The checkpoint keys therefore act as persisted recovery watermarks attached to the same recovery asset,
+not as a second source of business truth.
 
 ## Write Path
 
@@ -326,6 +391,25 @@ For relation replay logs:
 - `event_time`
 - `create_time`
 
+### Event-time source
+
+`event_time` used for replay, overlap, and purge must come from Redis-side server time.
+
+It must not come from:
+
+- application node wall clocks
+- client request timestamps
+- MySQL insertion time
+
+The Redis-side transition logic should produce the effective event-time once,
+then the asynchronous gap-log append path should persist that exact value.
+
+This avoids skew between:
+
+- checkpoint watermarks
+- replay log filtering
+- multi-node application clocks
+
 ### Table shape
 
 Use typed gap log tables by domain instead of one generic payload table.
@@ -346,6 +430,25 @@ as long as the final semantics match this design:
 - short-window retention
 - replay-oriented indexing
 
+For relation replay, the current `relation_event_outbox` should not be reused as the final gap-log table.
+
+It has delivery/outbox semantics:
+
+- status
+- retry scheduling
+- consumer delivery workflow
+
+The gap replay log needs different semantics:
+
+- effective transitions only
+- overlap replay filtering by event-time or sequence
+- short-window retention based on Redis checkpoint progress
+
+V1 planning should therefore treat relation replay as requiring either:
+
+- a new typed `relation_gap_log`
+- or a schema evolution of the current relation event storage into that role
+
 ## Recovery Model
 
 ### Restore baseline
@@ -353,11 +456,47 @@ as long as the final semantics match this design:
 On Redis disaster recovery:
 
 1. restore Redis from available `RDB + AOF`
-2. read `checkpoint:durable_time` from restored Redis
+2. compute the conservative replay checkpoint from restored Redis control keys
 3. load gap log records at or after the replay overlap boundary
 4. replay those records through the same Redis transition semantics used online
 
 This replay flow applies to replay-backed toggle families only.
+
+### Replay-backed family repair semantics
+
+Replay-backed families do not all repair the same way.
+
+#### `POST.like` and `COMMENT.like`
+
+If the compressed counter object is missing or malformed while Redis like-state truth still exists,
+the count may be recomputed from Redis state truth for that single target.
+
+This is an in-Redis repair path, not a MySQL rebuild path.
+
+#### `USER.following` and `USER.follower`
+
+If mirrored Redis follow-state truth exists as designed in v1,
+these counters may be recomputed from Redis follow-state truth for the affected user.
+
+This is why mirrored follow-state families are part of the recommended Redis state model.
+
+#### `USER.like_received`
+
+`USER.like_received` is replay-backed for disaster recovery,
+but it does not have to support cheap automatic read-path recomputation in v1.
+
+Its normal recovery path is:
+
+- Redis `RDB + AOF`
+- plus overlap replay from the reaction gap log
+
+If an isolated `USER.like_received` counter object is malformed outside disaster recovery,
+the allowed v1 repair path is operational rather than hot-path automatic:
+
+- recompute from Redis object-counter truth and durable ownership metadata
+- or perform a bounded offline reconciliation job
+
+V1 planning must not assume request-time automatic rebuild for `USER.like_received`.
 
 ### Rebuild-backed additive families
 
@@ -385,7 +524,7 @@ Replay must not start from the exact checkpoint boundary.
 
 Instead, replay starts from:
 
-- `event_time >= checkpoint:durable_time - replay_overlap_window`
+- `event_time >= effective_durable_time - replay_overlap_window`
 
 This overlap window is intentionally fixed and conservative.
 
@@ -405,6 +544,18 @@ The chosen design intentionally keeps recovery control simple:
 Recovered Redis persistence already tells the system what checkpoint metadata survived.
 Anything later than that point is not guaranteed durable and must be treated as replay territory.
 
+For planning purposes, the recovery worker should derive:
+
+- `effective_durable_time = min(restored_aof_durable_time, restored_rdb_durable_time)` when both exist
+- otherwise use whichever restored durable key exists
+
+The replay overlap window must be large enough to cover:
+
+- asynchronous gap-log append delay
+- checkpoint worker cadence
+- Redis persistence cadence
+- replay query batching jitter
+
 ## Purge Model
 
 Gap logs are short-window recovery assets, not permanent history.
@@ -413,9 +564,18 @@ They may be purged once they are safely behind the durable Redis checkpoint plus
 
 Recommended logical purge boundary:
 
-- delete only records older than `checkpoint:durable_time - purge_safety_window`
+- delete only records older than `effective_durable_time - purge_safety_window`
 
 `purge_safety_window` should be a fixed configured time window.
+
+`purge_safety_window` must be strictly larger than `replay_overlap_window`.
+
+In planning terms:
+
+- `replay_overlap_window` protects replay correctness
+- `purge_safety_window` protects operational mistakes and persistence jitter
+
+V1 should size both as fixed windows, not dynamic windows.
 
 Physical deletion may still use time-based table partitioning for operational efficiency,
 but correctness is defined by the logical checkpoint boundary above.
@@ -445,6 +605,7 @@ Responsible for:
 - deciding whether a transition is effective
 - mutating state truth
 - mutating compressed counter truth
+- producing Redis-side effective event-time for the gap log
 
 This unit owns online correctness.
 
@@ -457,11 +618,32 @@ Responsible for:
 
 This unit owns only short-window replay assets.
 
+### Replay apply entrypoint
+
+Replay must call the same Redis transition semantics used online,
+but through a replay-specific entrypoint that does not append a new gap log record again.
+
+That replay entrypoint:
+
+- preserves no-op behavior
+- preserves the same state/count mutation rules
+- suppresses recursive replay-log append
+- suppresses unrelated downstream side effects
+
+### Checkpoint worker
+
+Responsible for:
+
+- advancing AOF and RDB durable checkpoint keys
+- using Redis-side persistence-aware confirmation rules
+- exposing an effective durable replay boundary to purge and recovery workers
+
 ### Recovery worker
 
 Responsible for:
 
-- reading `checkpoint:durable_time`
+- reading Redis checkpoint keys
+- deriving `effective_durable_time`
 - loading gap logs from the overlap boundary
 - replaying through the same Redis transition semantics
 
@@ -484,6 +666,8 @@ The implementation plan derived from this design must include verification for:
 - AOF unavailable but RDB restore plus overlap replay still converging correctly
 - purge deleting only logs older than the safe boundary
 - `COMMENT.reply` rebuild recomputing the same Redis value from durable comment truth after repair
+- Redis-side event-time generation staying monotonic enough for overlap replay within one Redis deployment
+- AOF checkpoint advancement and RDB checkpoint advancement producing conservative durable boundaries
 
 Replay validation must call the same Redis transition semantics used by the online write path.
 
@@ -491,7 +675,8 @@ Replay validation must call the same Redis transition semantics used by the onli
 
 Operators need visibility into:
 
-- whether `checkpoint:durable_time` is advancing
+- whether `checkpoint:aof_durable_time` is advancing
+- whether `checkpoint:rdb_durable_time` is advancing
 - whether gap log backlog is growing abnormally
 - whether purge is stalled
 - whether replay runs are succeeding
@@ -509,6 +694,62 @@ This design explicitly rejects:
 - using the gap replay log as full audit history
 - recording derived counter deltas in the replay log
 
+## Current Nexus Integration Impact
+
+This design intentionally maps onto existing Nexus boundaries instead of inventing a new service layer first.
+
+### `ReactionCachePort`
+
+`ReactionCachePort` remains the online state-transition boundary for reaction-like writes.
+
+Target changes:
+
+- evolve its Redis-side apply logic from bitmap-string count mutation toward final compressed-counter mutation semantics
+- generate or surface Redis-side effective event-time for successful transitions
+- keep a replay-specific apply entrypoint, similar in spirit to the current `applyRecoveryEvent`, but aligned with the final time-checkpoint design
+- stop treating replay checkpoints as simple legacy sequence cursors only
+
+### `ObjectCounterPort`
+
+`ObjectCounterPort` remains the read/write adapter for object compressed counters.
+
+Target changes:
+
+- keep compressed-object reads
+- keep target-level in-Redis repair for replay-backed object like counters
+- keep operational repair for `COMMENT.reply`
+- retire legacy assumptions that object-counter repair should come from MySQL for replay-backed toggle families
+
+### `UserCounterPort`
+
+`UserCounterPort` remains the read/write adapter for user compressed counters.
+
+Target changes:
+
+- keep compressed-user-counter reads and writes
+- for `USER.following` and `USER.follower`, repair from mirrored Redis follow-state truth rather than MySQL relation counts
+- for `USER.like_received`, support baseline-plus-replay recovery and optional operational reconciliation, not mandatory request-time automatic rebuild
+
+### `interaction_reaction_event_log`
+
+The current reaction event-log table is the closest existing asset to the final reaction gap log.
+
+Target changes:
+
+- persist only effective transitions
+- stop depending on derived `delta` as the primary replay contract
+- add missing replay context such as owner user id if needed by replay-backed user counters
+- shift retention from long-lived history assumptions to short-window replay retention
+
+### `relation_event_outbox`
+
+The current relation outbox is not the final replay gap log.
+
+Target changes:
+
+- keep outbox responsibilities separate from replay-gap responsibilities
+- plan either a new relation gap log table or a clear schema evolution path into one replay-specific table
+
 ## Summary
 
 The chosen design is:
@@ -516,9 +757,11 @@ The chosen design is:
 - Redis current truth
 - compressed counters retained
 - Redis `RDB + AOF` as the recovery baseline
-- Redis-stored durable checkpoint metadata
+- Redis-stored durable checkpoint metadata advanced by persistence-aware workers
 - MySQL short-window gap replay log
 - overlap replay through the same Redis transition semantics
+- mirrored Redis follow-state truth for bounded follow-counter repair
+- no mandatory request-time rebuild guarantee for `USER.like_received`
 
 This keeps the core promise intact:
 

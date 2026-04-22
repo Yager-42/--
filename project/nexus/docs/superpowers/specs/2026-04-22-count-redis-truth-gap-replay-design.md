@@ -372,6 +372,39 @@ All toggle-like counter writes use a Redis-first flow:
 4. if transition is effective, asynchronously append one replay gap log record
 5. return success
 
+### Reaction write sequence
+
+Recommended final sequence for reaction families:
+
+1. `ReactionLikeService` builds `ReactionApplyCommand`
+2. reaction transition port executes one Redis-side effective state transition
+3. Redis returns `ReactionApplyResult`
+4. if `effective = false`, service returns current state/count immediately
+5. if `effective = true`, gap-log append path persists one reaction replay record
+6. unrelated MQ side effects consume the already-computed apply result instead of recomputing transition outcome
+7. service returns success
+
+Key rule:
+
+- `LIKE_RECEIVED` must be inside step 2, not a Java-side best-effort follow-up write
+
+### Relation write sequence
+
+Recommended final sequence for relation families:
+
+1. `RelationService` completes the MySQL business transaction for relation truth and delivery outbox as it does today
+2. after commit, service builds `RelationApplyCommand`
+3. relation transition port executes one Redis-side follow-state mirror plus counter transition
+4. if `effective = true`, append one `relation_gap_log` record
+5. MQ delivery remains owned by `relation_event_outbox`
+
+This is intentionally not identical to reaction:
+
+- reaction already starts from Redis truth
+- relation still starts from MySQL business-edge truth in the current Nexus domain model
+
+The convergence target is count recovery consistency, not forcing relation business storage to migrate into Redis.
+
 ### Redis atomic mutation
 
 For a `post like add`, the Redis-side atomic unit updates:
@@ -507,6 +540,67 @@ This asymmetry is intentional:
 
 - reaction already has a close-enough log asset and recovery runner
 - relation currently only has delivery-oriented outbox state, not replay-oriented gap-log state
+
+### Reaction gap-log transport choice
+
+Nexus currently uses:
+
+- Redis transition success
+- then RabbitMQ handoff
+- then `ReactionEventLogConsumer`
+- then MySQL append into `interaction_reaction_event_log`
+
+There are only two coherent target choices:
+
+#### Choice A: keep MQ handoff
+
+Sequence:
+
+- online service publishes a reaction gap-log message
+- consumer appends into MySQL gap log
+
+Advantages:
+
+- reuse of existing queue, DLQ, and consumer-record machinery
+- natural buffering when MySQL append path is temporarily slow
+
+Costs:
+
+- one more moving part in the recovery asset path
+- recovery gap now depends on Redis durability plus MQ durability plus consumer drain
+- replay asset visibility is delayed by queue lag
+
+#### Choice B: direct best-effort append
+
+Sequence:
+
+- online service or dedicated append port writes directly into MySQL after the effective Redis transition
+
+Advantages:
+
+- gap-log semantics become simpler
+- fewer components between Redis transition and durable replay asset
+- easier checkpoint, backlog, and replay reasoning
+
+Costs:
+
+- online path now touches MySQL directly for every effective reaction transition
+- no MQ buffering layer
+
+Recommended direction for this design:
+
+- reaction gap log should converge to direct best-effort append
+
+Reason:
+
+- the gap log is a recovery control-plane asset, not a fanout event stream
+- direct append makes the accepted failure model much easier to reason about
+- MQ is still appropriate for unrelated downstream business side effects, but is not ideal as the long-term durability bridge for the replay asset itself
+
+Migration note:
+
+- MQ handoff may remain in Stage 1 for compatibility
+- but the target design should not treat it as the final architecture
 
 ### Event-time source
 
@@ -1042,6 +1136,16 @@ Fallback direction:
 
 - keep replay-time owner lookup during migration
 
+### 2a. reaction gap-log transport
+
+The design recommendation is now explicit:
+
+- migration stage may temporarily keep MQ handoff
+- target state should converge to direct best-effort MySQL append after effective Redis transition
+
+This should be treated as a design choice already recommended, not an open-ended undecided placeholder,
+unless there is a strong operational reason to keep MQ in the durability path.
+
 ### 3. relation query traffic cutover
 
 The design only requires Redis follow mirrors for count truth and repair.
@@ -1274,6 +1378,29 @@ Notes:
   - or route through the same relation transition unit so replay semantics stay uniform
 - relation MQ delivery stays in `relation_event_outbox` and does not reuse this table
 
+### Block and unblock replay semantics
+
+`BLOCK` is not a first-class count replay operation in this design.
+
+Reason:
+
+- count recovery only cares about the existence or absence of follow edges and the derived counters
+- replaying `BLOCK` directly would force the count replay layer to understand more business meaning than it needs
+
+Recommended rule:
+
+- if a block operation removes one or two active follow edges, the relation transition layer must emit equivalent effective unfollow replay records for the removed edges
+- if a block operation removes no active follow edge, it emits no relation gap-log record
+- unblock emits no relation gap-log record by itself because it does not restore follow edges
+
+This keeps the relation replay contract minimal:
+
+- replay only understands `FOLLOW` and `UNFOLLOW`
+- block remains a business-domain operation handled by MySQL business truth and downstream delivery logic
+
+For current Nexus alignment, this means `RelationService.block(...)` should not write a raw `BLOCK` count replay record.
+It should detect removed active follow edges and translate them into zero, one, or two effective unfollow replay transitions.
+
 ### `user_counter_repair_outbox`
 
 `user_counter_repair_outbox` is a transition-era compensating asset, not part of the target replay baseline.
@@ -1304,6 +1431,7 @@ Nexus needs an ordered migration so that recovery semantics improve before physi
 - introduce `relation_gap_log`
 - stop treating `delta` as the source of truth for replay decisions
 - keep existing MQ/outbox responsibilities unchanged
+- translate `BLOCK` follow-edge removals into equivalent `UNFOLLOW` replay records instead of introducing `BLOCK` replay semantics
 
 Exit criteria:
 
@@ -1317,6 +1445,7 @@ Exit criteria:
 - switch recovery jobs from seq cursor to time-based overlap replay
 - keep seq only as a page tie-breaker, not as durable checkpoint truth
 - gate purge behind successful recovery completion after boot
+- for reaction, begin removing MQ from the long-term replay-asset durability path
 
 Exit criteria:
 
@@ -1341,6 +1470,7 @@ Exit criteria:
 - make online apply result return `effective`, `delta`, and `event_time`
 - keep asynchronous log append as a separate best-effort step after the Redis transition succeeds
 - move side-effect publication to consume apply result instead of independently re-deriving transition outcome
+- make reaction gap-log append direct best-effort append if Stage 2 still used MQ compatibility
 
 Exit criteria:
 

@@ -1,0 +1,467 @@
+# Nexus Replace Count System With Zhiguang Design
+
+## Status
+
+Draft under review.
+
+## Context
+
+Nexus currently carries multiple incompatible counter contracts:
+
+- Redis-truth reaction state with MySQL event-log replay
+- Count Redis compressed snapshots and gap-log recovery control
+- RabbitMQ-driven comment like and reply-count derived updates
+- MySQL-truth repair for follow and follower counters
+
+That is not the same system as `zhiguang_be`.
+It mixes several generations of counter design inside one codebase.
+
+The confirmed direction from brainstorming is destructive replacement:
+
+- copy the real `zhiguang_be` counting implementation shape rather than refining the current Nexus design
+- allow breaking changes
+- allow introducing Kafka
+- do not preserve current count replay, checkpoint, or gap-log semantics
+- do not preserve `COMMENT.reply` as a persisted counter capability
+- keep comment business itself, but remove reply-count persistence from the counter system
+
+The source implementation being copied is the real code under:
+
+- `C:/Users/Administrator/Desktop/ÎÄµµ/zhiguang_be/src/main/java/com/tongji/counter`
+- `C:/Users/Administrator/Desktop/ÎÄµµ/zhiguang_be/src/main/java/com/tongji/relation`
+- `C:/Users/Administrator/Desktop/ÎÄµµ/zhiguang_be/src/main/java/com/tongji/knowpost/listener/FeedCacheInvalidationListener.java`
+
+## Goals
+
+- replace the current Nexus counting system with a behaviorally equivalent `zhiguang_be` counting architecture
+- introduce Redis bitmap fact state plus SDS snapshots for content object counters
+- introduce Kafka `counter-events` aggregation for content counter snapshots
+- introduce `ucnt:{userId}` fixed-slot user counters
+- make follow and follower counters follow the real zhiguang relation-outbox and processor model
+- keep read-time rebuild and sampled user-counter verification behavior aligned with zhiguang
+- delete reply-count persistence from the counting system
+
+## Non-Goals
+
+- preserving the current Nexus count replay or gap-log recovery model
+- preserving the current RabbitMQ-based counter aggregation chain as the primary path
+- keeping `COMMENT.reply` as a persisted counter family
+- migrating legacy counter values
+- dual-writing old and new counter structures
+- preserving current count interfaces when their semantics conflict with the zhiguang model
+- enabling favorite business write flows in v1 if no real Nexus business path exists yet
+
+## Final Scope
+
+The replacement covers these persisted counter families.
+
+### Object counter families
+
+- `POST.like`
+- `COMMENT.like`
+- reserved slot for `fav` in object snapshot schema, but not required to be wired into a live Nexus business write path in v1
+
+### User counter families
+
+- `USER.following`
+- `USER.follower`
+- `USER.post`
+- `USER.like_received`
+- reserved slot `USER.favorite_received`, but not required to be wired into a live Nexus business write path in v1
+
+### Explicitly removed from the counter system
+
+- `COMMENT.reply`
+
+`COMMENT.reply` no longer belongs to the persisted counting subsystem.
+Comment business stays, but reply count is not maintained as Redis counter truth, Kafka aggregation output, repair target, or rebuild target.
+
+## Chosen Architecture
+
+The final system copies two real zhiguang chains rather than forcing Nexus into one abstracted contract.
+
+### Chain A: content object counter chain
+
+This chain is used for content object likes and optional future favorite support.
+
+Flow:
+
+1. synchronous Redis bitmap truth toggle via Lua
+2. emit Kafka `counter-events` only when state actually changes
+3. aggregate deltas into Redis `agg:*`
+4. flush aggregated deltas every second into SDS snapshot `cnt:*`
+5. on malformed or missing snapshot, rebuild from Redis bitmap truth
+
+This chain is the Nexus equivalent of:
+
+- `CounterServiceImpl`
+- `CounterEventProducer`
+- `CounterAggregationConsumer`
+- bitmap rebuild inside `CounterServiceImpl`
+
+### Chain B: user counter chain
+
+This chain follows the real zhiguang mixed-source design.
+It is not a pure Redis-truth system.
+
+Sub-paths:
+
+- `following` and `follower`
+  - business truth in MySQL relation tables
+  - transaction writes relation outbox
+  - async bridge delivers relation event
+  - processor updates follower table, Redis ZSet cache, and `ucnt`
+- `post`
+  - incremented when content publish succeeds
+- `like_received`
+  - updated by local Spring event listener reacting to content counter changes
+- `favorite_received`
+  - reserved in schema, but may remain unwired until a real Nexus favorite business path exists
+
+This chain is the Nexus equivalent of:
+
+- `UserCounterServiceImpl`
+- `RelationServiceImpl` outbox behavior
+- `CanalKafkaBridge`
+- `CanalOutboxConsumer`
+- `RelationEventProcessor`
+- `FeedCacheInvalidationListener`
+
+## Redis Contract
+
+### Content object bitmap fact keys
+
+Format:
+
+- `bm:{metric}:{etype}:{eid}:{chunk}`
+
+Examples:
+
+- `bm:like:post:123:0`
+- `bm:like:comment:456:12`
+
+Rules:
+
+- chunking follows the zhiguang bitmap shard rule
+- the bitmap layer is the truth for like-state membership
+- snapshot corruption never promotes MySQL to object-like truth
+
+### Content object aggregation keys
+
+Format:
+
+- `agg:{schema}:{etype}:{eid}`
+
+Example:
+
+- `agg:v1:post:123`
+
+Rules:
+
+- Hash field is the schema slot index
+- Hash value is accumulated delta
+- flush consumes and reduces these deltas into SDS snapshots
+
+### Content object snapshot keys
+
+Format:
+
+- `cnt:{schema}:{etype}:{eid}`
+
+Example:
+
+- `cnt:v1:post:123`
+
+Rules:
+
+- binary SDS payload
+- fixed-length schema-controlled slot layout
+- normal reads use snapshot only
+
+### User counter snapshot keys
+
+Format:
+
+- `ucnt:{userId}`
+
+Example:
+
+- `ucnt:10001`
+
+Rules:
+
+- binary SDS payload
+- fixed 5-slot layout
+- malformed or missing payload triggers `rebuildAllCounters(userId)`
+
+### Relation cache keys copied from zhiguang
+
+Format:
+
+- `uf:flws:{userId}`
+- `uf:fans:{userId}`
+
+Rules:
+
+- Redis ZSet
+- query/cache helper, not the authoritative source for follow truth
+- maintained by relation event processor
+- short TTL behavior may remain aligned with zhiguang
+
+## Schema Contract
+
+### Object snapshot schema
+
+The object snapshot schema follows the zhiguang fixed-slot SDS pattern.
+
+- schema id: `v1`
+- field size: `4 bytes`
+- schema length: `5`
+
+V1 active slot expectations in Nexus:
+
+- slot `1` -> `like`
+- slot `2` -> reserved `fav`
+- remaining slots reserved
+
+`COMMENT.reply` is removed and does not occupy an active persisted object-counter slot in the new Nexus counting contract.
+
+### User snapshot schema
+
+`ucnt:{userId}` keeps the zhiguang 5-slot layout.
+
+1. `following`
+2. `follower`
+3. `post`
+4. `like_received`
+5. `favorite_received`
+
+Even when some families are not wired in v1, the payload still materializes the full schema.
+
+## Kafka Contract
+
+### Counter events topic
+
+Topic:
+
+- `counter-events`
+
+Purpose:
+
+- carry object counter delta events for content object metrics
+
+Required event shape:
+
+- `entityType`
+- `entityId`
+- `metric`
+- `idx`
+- `userId`
+- `delta`
+
+The event represents an effective state change delta, not a final count.
+
+### Relation event chain
+
+The relation path follows zhiguang's outbox-plus-bridge model rather than the current Nexus direct counter write model.
+
+Required parts:
+
+- relation outbox row in the business transaction
+- async bridge to Kafka
+- relation outbox consumer
+- relation event processor
+
+The final implementation may rename concrete topics or classes to fit Nexus packaging, but the semantic chain must match zhiguang's real implementation.
+
+## Write Contract
+
+### Content like writes
+
+For `POST.like` and `COMMENT.like`:
+
+1. compute bitmap shard key and bit offset from `userId`
+2. execute Lua toggle against Redis bitmap fact truth
+3. if state did not change, return `changed=false` and emit nothing
+4. if state changed, return success and emit:
+   - Kafka `counter-events` delta for object count aggregation
+   - local Spring event for cache invalidation and author user-counter side effects
+
+The synchronous success point is the Redis bitmap state transition, matching zhiguang.
+
+### Author like-received writes
+
+When a local counter event listener observes an effective content like delta:
+
+1. resolve the content owner
+2. call `UserCounterService.incrementLikesReceived(ownerId, delta)`
+
+This is not routed through Kafka in zhiguang and must remain a local event side path in the copied design.
+
+### Follow and unfollow writes
+
+The follow path must not be redesigned into Redis-first count truth.
+It must copy the real zhiguang relation flow:
+
+1. business transaction writes relation truth in MySQL
+2. same transaction writes relation outbox
+3. async bridge delivers relation event
+4. relation event processor updates:
+   - follower table maintenance
+   - Redis `uf:flws:*` and `uf:fans:*`
+   - `ucnt.following` and `ucnt.follower`
+
+### Post-count writes
+
+When content publish succeeds, increment `ucnt.post` directly through the user counter service, matching zhiguang's user-counter write style.
+
+### Favorite support
+
+If Nexus later introduces a real favorite business write flow, it should follow the same zhiguang split:
+
+- object favorite state through the content object counter chain
+- owner `favorite_received` through the local event listener side path
+
+V1 does not require enabling favorite writes if the business path does not already exist.
+
+## Read Contract
+
+### Object count reads
+
+Normal reads:
+
+- read `cnt:{schema}:{etype}:{eid}`
+- decode fixed slots
+
+Malformed or missing snapshot:
+
+- acquire rebuild protections
+- rebuild count from bitmap truth using shard `BITCOUNT`
+- write rebuilt SDS snapshot
+- clear overlapping `agg` fields for rebuilt slots
+
+### Object state reads
+
+User-specific state reads such as "liked or not" read bitmap truth directly.
+They do not read SDS snapshots.
+
+### User count reads
+
+Normal reads:
+
+- read `ucnt:{userId}`
+- decode all 5 slots
+
+Malformed or missing snapshot:
+
+- call `rebuildAllCounters(userId)`
+- read `ucnt:{userId}` again
+
+### User count rebuild sources
+
+`rebuildAllCounters(userId)` follows zhiguang's real mixed-source behavior:
+
+- `following` from relation truth tables
+- `follower` from relation truth tables
+- `post` from published content rows
+- `like_received` by listing owned content and summing object counter snapshots
+- `favorite_received` by listing owned content and summing favorite snapshots when that family is active
+
+### Sample verification
+
+The design keeps zhiguang-style sampled verification for `following` and `follower`:
+
+- per user throttled sample window, approximately zhiguang's 300-second behavior
+- compare `ucnt` values against relation table counts
+- mismatch triggers `rebuildAllCounters(userId)`
+
+## Failure Handling
+
+### Object counter failures
+
+- bitmap toggle is the synchronous truth point
+- Kafka aggregation lag only delays snapshot visibility
+- malformed snapshots self-heal from bitmap truth
+
+### User counter failures
+
+- relation async lag delays `ucnt.following` and `ucnt.follower`
+- local event listener failure can delay `like_received`
+- malformed or missing `ucnt` self-heals through `rebuildAllCounters`
+- sampled verification repairs silent drift for relation-derived user slots
+
+### No reply-count repair
+
+Because `COMMENT.reply` is removed from the persisted counting subsystem, there is no reply-count rebuild, replay, repair, or checkpoint requirement.
+
+## Delete And Replace Plan
+
+The following current Nexus count semantics must be removed rather than adapted.
+
+### Remove current replay and checkpoint recovery semantics
+
+Remove the current design role of:
+
+- `CountGapReplayRecoveryRunner`
+- `ReactionRedisRecoveryRunner`
+- `CountAofCheckpointJob`
+- `CountRdbCheckpointJob`
+- `CountRecoveryControlPort`
+- `CountGapLogPurgeJob`
+- `RelationGapLogRepository`
+- reaction-event-log-driven replay as the primary count recovery contract
+
+### Remove reply-count persistence semantics
+
+Remove the current design role of:
+
+- `RootReplyCountChangedConsumer`
+- persisted `COMMENT.reply` counter contracts
+- reply rebuild and reply repair jobs or logic
+- any count-module schema slots dedicated to persisted reply count
+
+### Remove current MySQL-truth follow counter repair semantics
+
+Remove the current design role of:
+
+- `FollowCountStatePort`
+- `UserCounterRepairJob`
+- any path whose purpose is to restore Redis follow counters from current Nexus count-repair semantics
+
+### Replace current RabbitMQ count aggregation semantics
+
+RabbitMQ-derived counter aggregation paths must not remain the primary persisted object-count path after cutover.
+The copied zhiguang object-count chain is Kafka-based.
+
+### Rewrite old counter adapters
+
+The public adapter names may be kept only if their implementations are fully replaced.
+No old fallback, checkpoint, or gap-log semantics may survive behind the same interfaces.
+
+## Operational Notes
+
+- Kafka becomes a required dependency for the new persisted object-count chain
+- the relation processor path also requires the zhiguang-style relation bridge semantics
+- Redis becomes the bitmap truth and snapshot store for content object counters
+- user counters keep zhiguang's mixed rebuild semantics rather than a pure Redis-truth rebuild model
+- `COMMENT.reply` disappears from the persisted count contract and from all associated operational runbooks
+
+## Risks
+
+- this is a destructive replacement and intentionally drops the current Nexus recovery model
+- strict zhiguang copying preserves mixed-source user counter rebuild semantics, which are less uniform than a purely redesigned counter system
+- favorite slots remain reserved even if Nexus does not enable favorite writes in v1
+- introducing Kafka and the relation bridge increases infrastructure requirements
+- sampled user-counter verification must be carried over correctly or silent drift detection will regress
+
+## Success Criteria
+
+The design is considered correctly implemented only when all of the following are true:
+
+- object likes use bitmap truth, Kafka aggregation, `agg:*`, and `cnt:*`
+- `ucnt:{userId}` is the only persisted user counter snapshot object
+- follow and follower counters are maintained through the zhiguang-style relation outbox and processor flow
+- author `like_received` updates happen through the local event-listener side path rather than the old Nexus reaction replay chain
+- no persisted `COMMENT.reply` counter capability remains in the counting subsystem
+- no gap-log, checkpoint, or RabbitMQ-based counter replay semantics remain as the primary counting contract
+

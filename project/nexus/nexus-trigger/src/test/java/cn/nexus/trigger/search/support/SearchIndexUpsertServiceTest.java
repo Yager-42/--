@@ -7,8 +7,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
@@ -20,6 +19,7 @@ import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -30,10 +30,10 @@ class SearchIndexUpsertServiceTest {
         ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         SearchDocumentAssembler assembler = Mockito.mock(SearchDocumentAssembler.class);
         SearchIndexUpsertService service = new SearchIndexUpsertService(
-                searchEnginePort, contentRepository, userBaseRepository, objectCounterPort, assembler);
+                searchEnginePort, contentRepository, userBaseRepository, objectCounterService, assembler);
 
         ContentPostEntity post = post(9L, 7L);
         when(contentRepository.findPostBypassCache(9L)).thenReturn(post);
@@ -47,7 +47,7 @@ class SearchIndexUpsertServiceTest {
         SearchIndexUpsertService.SearchIndexAction action = service.upsertPost(9L, 11L);
 
         assertThat(action.upserted()).isTrue();
-        verify(objectCounterPort, never()).getCount(any(ObjectCounterTarget.class));
+        verify(objectCounterService, never()).getCounts(any(), any(), any());
         verify(searchEnginePort).upsert(doc);
     }
 
@@ -59,7 +59,7 @@ class SearchIndexUpsertServiceTest {
                 searchEnginePort,
                 contentRepository,
                 Mockito.mock(IUserBaseRepository.class),
-                Mockito.mock(IObjectCounterPort.class),
+                Mockito.mock(IObjectCounterService.class),
                 Mockito.mock(SearchDocumentAssembler.class));
         when(contentRepository.findPostBypassCache(15L)).thenReturn(ContentPostEntity.builder()
                 .postId(15L)
@@ -85,7 +85,7 @@ class SearchIndexUpsertServiceTest {
                 searchEnginePort,
                 Mockito.mock(IContentRepository.class),
                 userBaseRepository,
-                Mockito.mock(IObjectCounterPort.class),
+                Mockito.mock(IObjectCounterService.class),
                 Mockito.mock(SearchDocumentAssembler.class));
         when(userBaseRepository.listByUserIds(List.of(8L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(8L).nickname("  newer  ").build()));
@@ -102,16 +102,17 @@ class SearchIndexUpsertServiceTest {
         ISearchEnginePort searchEnginePort = Mockito.mock(ISearchEnginePort.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         SearchDocumentAssembler assembler = Mockito.mock(SearchDocumentAssembler.class);
         SearchIndexUpsertService service = new SearchIndexUpsertService(
-                searchEnginePort, contentRepository, userBaseRepository, objectCounterPort, assembler);
+                searchEnginePort, contentRepository, userBaseRepository, objectCounterService, assembler);
 
         ContentPostEntity post = post(19L, 7L);
         when(contentRepository.findPostBypassCache(19L)).thenReturn(post);
         when(userBaseRepository.listByUserIds(List.of(7L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(7L).nickname("author").avatarUrl("avatar").build()));
-        when(objectCounterPort.getCount(target(19L))).thenReturn(13L);
+        when(objectCounterService.getCounts(ReactionTargetTypeEnumVO.POST, 19L, List.of(ObjectCounterType.LIKE)))
+                .thenReturn(Map.of("like", 13L));
         SearchDocumentVO doc = SearchDocumentVO.builder().contentId(19L).likeCount(13L).build();
         when(assembler.assemble(eq(19L), eq(7L), eq("title"), eq("summary"), eq("body"),
                 eq(List.of("tag")), eq("avatar"), eq("author"), eq(123L), eq(13L), eq("m1")))
@@ -120,7 +121,7 @@ class SearchIndexUpsertServiceTest {
         SearchIndexUpsertService.SearchIndexAction action = service.upsertPost(19L);
 
         assertThat(action.upserted()).isTrue();
-        verify(objectCounterPort).getCount(target(19L));
+        verify(objectCounterService).getCounts(ReactionTargetTypeEnumVO.POST, 19L, List.of(ObjectCounterType.LIKE));
         verify(searchEnginePort).upsert(doc);
     }
 
@@ -136,14 +137,6 @@ class SearchIndexUpsertServiceTest {
                 .status(ContentPostStatusEnumVO.PUBLISHED.getCode())
                 .visibility(ContentPostVisibilityEnumVO.PUBLIC.getCode())
                 .publishTime(123L)
-                .build();
-    }
-
-    private ObjectCounterTarget target(Long postId) {
-        return ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(postId)
-                .counterType(ObjectCounterType.LIKE)
                 .build();
     }
 }

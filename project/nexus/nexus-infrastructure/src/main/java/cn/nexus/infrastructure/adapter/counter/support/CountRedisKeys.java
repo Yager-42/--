@@ -95,6 +95,14 @@ public final class CountRedisKeys {
                 + ":" + target.getCounterType().getCode() + "}";
     }
 
+    public static String objectRebuildBackoff(ObjectCounterTarget target) {
+        if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
+            return null;
+        }
+        return "count:rebuild-backoff:object:{" + target.getTargetType().getCode() + ":" + target.getTargetId()
+                + ":" + target.getCounterType().getCode() + "}";
+    }
+
     public static String userRebuildLock(Long userId) {
         if (userId == null) {
             return null;

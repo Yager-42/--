@@ -1,16 +1,22 @@
 package cn.nexus.infrastructure.adapter.counter.service;
 
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisSchema;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -20,6 +26,10 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class ObjectCounterService implements IObjectCounterService {
+
+    private static final long REBUILD_LOCK_SECONDS = 15L;
+    private static final long REBUILD_RATE_LIMIT_SECONDS = 30L;
+    private static final long REBUILD_BACKOFF_SECONDS = 120L;
 
     private final StringRedisTemplate redisTemplate;
 
@@ -51,7 +61,13 @@ public class ObjectCounterService implements IObjectCounterService {
             return values;
         }
         byte[] raw = safeDecode(redisTemplate.opsForValue().get(CountRedisKeys.objectSnapshot(targetType, targetId)));
-        boolean malformed = raw.length != CountRedisSchema.forObject(targetType).totalPayloadBytes();
+        CountRedisSchema schema = CountRedisSchema.forObject(targetType);
+        boolean malformed = schema == null || raw.length != schema.totalPayloadBytes();
+        if (malformed && supportsBitmapRebuild(targetType)) {
+            raw = rebuildSnapshotIfPossible(targetType, targetId);
+            malformed = schema == null || raw.length != schema.totalPayloadBytes();
+        }
+        long[] decoded = malformed ? new long[0] : CountRedisCodec.decodeSlots(raw, schema.slotCount());
         for (ObjectCounterType metric : metrics) {
             if (metric == null || metric != ObjectCounterType.LIKE) {
                 continue;
@@ -60,8 +76,7 @@ public class ObjectCounterService implements IObjectCounterService {
                 values.put(metric.getCode(), 0L);
                 continue;
             }
-            int slot = CountRedisSchema.forObject(targetType).slotOf(metric);
-            long[] decoded = CountRedisCodec.decodeSlots(raw, CountRedisSchema.forObject(targetType).slotCount());
+            int slot = schema.slotOf(metric);
             values.put(metric.getCode(), slot < 0 || slot >= decoded.length ? 0L : decoded[slot]);
         }
         return values;
@@ -86,7 +101,9 @@ public class ObjectCounterService implements IObjectCounterService {
             Long targetId = targetIds.get(i);
             byte[] raw = safeDecode(raws == null || i >= raws.size() ? null : raws.get(i));
             Map<String, Long> values = new LinkedHashMap<>();
-            boolean malformed = raw.length != CountRedisSchema.forObject(targetType).totalPayloadBytes();
+            CountRedisSchema schema = CountRedisSchema.forObject(targetType);
+            boolean malformed = schema == null || raw.length != schema.totalPayloadBytes();
+            long[] decoded = malformed ? new long[0] : CountRedisCodec.decodeSlots(raw, schema.slotCount());
             for (ObjectCounterType metric : metrics) {
                 if (metric == null || metric != ObjectCounterType.LIKE) {
                     continue;
@@ -95,8 +112,7 @@ public class ObjectCounterService implements IObjectCounterService {
                     values.put(metric.getCode(), 0L);
                     continue;
                 }
-                int slot = CountRedisSchema.forObject(targetType).slotOf(metric);
-                long[] decoded = CountRedisCodec.decodeSlots(raw, CountRedisSchema.forObject(targetType).slotCount());
+                int slot = schema.slotOf(metric);
                 values.put(metric.getCode(), slot < 0 || slot >= decoded.length ? 0L : decoded[slot]);
             }
             out.put(targetId, values);
@@ -127,6 +143,147 @@ public class ObjectCounterService implements IObjectCounterService {
                 && targetId != null
                 && userId != null
                 && (targetType == ReactionTargetTypeEnumVO.POST || targetType == ReactionTargetTypeEnumVO.COMMENT);
+    }
+
+    private boolean supportsBitmapRebuild(ReactionTargetTypeEnumVO targetType) {
+        return targetType == ReactionTargetTypeEnumVO.POST || targetType == ReactionTargetTypeEnumVO.COMMENT;
+    }
+
+    private byte[] rebuildSnapshotIfPossible(ReactionTargetTypeEnumVO targetType, Long targetId) {
+        ObjectCounterTarget target = ObjectCounterTarget.builder()
+                .targetType(targetType)
+                .targetId(targetId)
+                .counterType(ObjectCounterType.LIKE)
+                .build();
+        if (!canAttemptRebuild(target)) {
+            return new byte[0];
+        }
+        String lockKey = CountRedisKeys.objectRebuildLock(target);
+        if (lockKey == null || !Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(
+                lockKey, "1", REBUILD_LOCK_SECONDS, TimeUnit.SECONDS))) {
+            escalateRebuildBackoff(target);
+            return new byte[0];
+        }
+        try {
+            long rebuiltLike = rebuildBitmapLikeCount(target);
+            CountRedisSchema schema = CountRedisSchema.forObject(targetType);
+            if (schema == null) {
+                escalateRebuildBackoff(target);
+                return new byte[0];
+            }
+            Map<String, Long> snapshot = new HashMap<>();
+            for (String field : schema.orderedFieldNames()) {
+                snapshot.put(field, 0L);
+            }
+            snapshot.put(ObjectCounterType.LIKE.getCode(), Math.max(0L, rebuiltLike));
+            byte[] payload = CountRedisCodec.encodeSlots(toSlots(snapshot, schema), schema.slotCount());
+            redisTemplate.opsForValue().set(CountRedisKeys.objectSnapshot(targetType, targetId), CountRedisCodec.toRedisValue(payload));
+            clearAggregationOverlap(target);
+            resetRebuildBackoff(target);
+            return payload;
+        } catch (Exception e) {
+            escalateRebuildBackoff(target);
+            return new byte[0];
+        } finally {
+            redisTemplate.delete(lockKey);
+        }
+    }
+
+    private boolean canAttemptRebuild(ObjectCounterTarget target) {
+        String backoffKey = CountRedisKeys.objectRebuildBackoff(target);
+        if (backoffKey != null) {
+            String backoffRaw = redisTemplate.opsForValue().get(backoffKey);
+            long backoffUntil = parseLong(backoffRaw);
+            if (backoffUntil > System.currentTimeMillis()) {
+                return false;
+            }
+        }
+        String rateLimitKey = CountRedisKeys.objectRebuildRateLimit(target);
+        boolean allowed = rateLimitKey != null && Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(
+                rateLimitKey, "1", REBUILD_RATE_LIMIT_SECONDS, TimeUnit.SECONDS));
+        if (!allowed) {
+            escalateRebuildBackoff(target);
+        }
+        return allowed;
+    }
+
+    private long rebuildBitmapLikeCount(ObjectCounterTarget target) {
+        String pattern = CountRedisKeys.likeBitmapShardPattern(target);
+        if (pattern == null) {
+            return 0L;
+        }
+        Long total = redisTemplate.execute((RedisCallback<Long>) connection -> {
+            if (connection == null) {
+                return 0L;
+            }
+            long sum = 0L;
+            ScanOptions options = ScanOptions.scanOptions().match(pattern).count(256).build();
+            try (Cursor<byte[]> cursor = connection.scan(options)) {
+                while (cursor.hasNext()) {
+                    byte[] shardKey = cursor.next();
+                    if (shardKey == null || shardKey.length == 0) {
+                        continue;
+                    }
+                    Long shardCount = connection.stringCommands().bitCount(shardKey);
+                    if (shardCount != null && shardCount > 0) {
+                        sum += shardCount;
+                    }
+                }
+            }
+            return Math.max(0L, sum);
+        });
+        return total == null ? 0L : Math.max(0L, total);
+    }
+
+    private void clearAggregationOverlap(ObjectCounterTarget target) {
+        if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
+            return;
+        }
+        String aggregationKey = CountRedisKeys.objectAggregationBucket(target.getTargetType(), target.getTargetId());
+        CountRedisSchema schema = CountRedisSchema.forObject(target.getTargetType());
+        int slot = schema == null ? -1 : schema.slotOf(target.getCounterType());
+        if (aggregationKey == null || slot < 0) {
+            return;
+        }
+        redisTemplate.opsForHash().delete(aggregationKey, String.valueOf(slot));
+    }
+
+    private void escalateRebuildBackoff(ObjectCounterTarget target) {
+        String backoffKey = CountRedisKeys.objectRebuildBackoff(target);
+        if (backoffKey == null) {
+            return;
+        }
+        long until = System.currentTimeMillis() + REBUILD_BACKOFF_SECONDS * 1000L;
+        redisTemplate.opsForValue().set(backoffKey, String.valueOf(until), REBUILD_BACKOFF_SECONDS, TimeUnit.SECONDS);
+    }
+
+    private void resetRebuildBackoff(ObjectCounterTarget target) {
+        String backoffKey = CountRedisKeys.objectRebuildBackoff(target);
+        if (backoffKey == null) {
+            return;
+        }
+        redisTemplate.delete(backoffKey);
+    }
+
+    private long[] toSlots(Map<String, Long> values, CountRedisSchema schema) {
+        long[] slots = new long[schema.slotCount()];
+        String[] fieldNames = schema.orderedFieldNames();
+        for (int i = 0; i < fieldNames.length; i++) {
+            Long raw = values == null ? null : values.get(fieldNames[i]);
+            slots[i] = raw == null ? 0L : Math.max(0L, raw);
+        }
+        return slots;
+    }
+
+    private long parseLong(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(raw);
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
     }
 
     private byte[] safeDecode(String raw) {

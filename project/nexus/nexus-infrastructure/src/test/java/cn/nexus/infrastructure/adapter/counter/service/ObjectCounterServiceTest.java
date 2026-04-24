@@ -3,6 +3,9 @@ package cn.nexus.infrastructure.adapter.counter.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -14,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -96,5 +100,108 @@ class ObjectCounterServiceTest {
         assertEquals(6L, values.get(11L).get("like"));
         assertEquals(0L, values.get(12L).get("like"));
         verify(redisTemplate, never()).execute(Mockito.any(org.springframework.data.redis.core.RedisCallback.class));
+    }
+
+    @Test
+    void getCountsShouldRebuildFromBitmapWhenSnapshotMissingAndGuardsAllow() {
+        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOperations = Mockito.mock(HashOperations.class);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(valueOperations.get("cnt:v1:post:42")).thenReturn(null);
+        when(valueOperations.get("count:rebuild-backoff:object:{POST:42:like}")).thenReturn(null);
+        when(valueOperations.setIfAbsent(eq("count:rate-limit:object:{POST:42:like}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        when(valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{POST:42:like}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        when(redisTemplate.execute(any(RedisCallback.class))).thenReturn(7L);
+
+        ObjectCounterService service = new ObjectCounterService(redisTemplate);
+
+        Map<String, Long> values = service.getCounts(
+                ReactionTargetTypeEnumVO.POST,
+                42L,
+                List.of(ObjectCounterType.LIKE));
+
+        assertEquals(7L, values.get("like"));
+        verify(hashOperations).delete("agg:v1:post:42", "1");
+        verify(valueOperations).set(
+                eq("cnt:v1:post:42"),
+                eq(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{0L, 7L, 0L, 0L, 0L}, 5))));
+        verify(redisTemplate).delete("count:rebuild-lock:object:{POST:42:like}");
+        verify(redisTemplate).delete("count:rebuild-backoff:object:{POST:42:like}");
+    }
+
+    @Test
+    void getCountsShouldReturnZeroWhenBackoffBlocksRebuild() {
+        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("cnt:v1:post:42")).thenReturn(null);
+        when(valueOperations.get("count:rebuild-backoff:object:{POST:42:like}"))
+                .thenReturn(String.valueOf(System.currentTimeMillis() + 30_000L));
+
+        ObjectCounterService service = new ObjectCounterService(redisTemplate);
+
+        Map<String, Long> values = service.getCounts(
+                ReactionTargetTypeEnumVO.POST,
+                42L,
+                List.of(ObjectCounterType.LIKE));
+
+        assertEquals(0L, values.get("like"));
+        verify(valueOperations, never()).setIfAbsent(eq("count:rate-limit:object:{POST:42:like}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS));
+        verify(redisTemplate, never()).execute(any(RedisCallback.class));
+    }
+
+    @Test
+    void getCountsShouldEscalateBackoffWhenRateLimitRejectsRebuild() {
+        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("cnt:v1:post:42")).thenReturn(null);
+        when(valueOperations.get("count:rebuild-backoff:object:{POST:42:like}")).thenReturn(null);
+        when(valueOperations.setIfAbsent(eq("count:rate-limit:object:{POST:42:like}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.FALSE);
+
+        ObjectCounterService service = new ObjectCounterService(redisTemplate);
+
+        Map<String, Long> values = service.getCounts(
+                ReactionTargetTypeEnumVO.POST,
+                42L,
+                List.of(ObjectCounterType.LIKE));
+
+        assertEquals(0L, values.get("like"));
+        verify(valueOperations, never()).setIfAbsent(eq("count:rebuild-lock:object:{POST:42:like}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS));
+        verify(valueOperations).set(eq("count:rebuild-backoff:object:{POST:42:like}"), any(), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    @Test
+    void getCountsShouldEscalateBackoffWhenLockMisses() {
+        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get("cnt:v1:post:42")).thenReturn(null);
+        when(valueOperations.get("count:rebuild-backoff:object:{POST:42:like}")).thenReturn(null);
+        when(valueOperations.setIfAbsent(eq("count:rate-limit:object:{POST:42:like}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        when(valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{POST:42:like}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.FALSE);
+
+        ObjectCounterService service = new ObjectCounterService(redisTemplate);
+
+        Map<String, Long> values = service.getCounts(
+                ReactionTargetTypeEnumVO.POST,
+                42L,
+                List.of(ObjectCounterType.LIKE));
+
+        assertEquals(0L, values.get("like"));
+        verify(valueOperations).set(eq("count:rebuild-backoff:object:{POST:42:like}"), any(), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS));
+        verify(redisTemplate, never()).execute(any(RedisCallback.class));
     }
 }

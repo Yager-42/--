@@ -1,7 +1,6 @@
 package cn.nexus.config;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
@@ -71,7 +70,7 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
     private final IContentPostTypeDao contentPostTypeDao;
     private final IUserBaseDao userBaseDao;
     private final IPostContentKvPort postContentKvPort;
-    private final IObjectCounterPort objectCounterPort;
+    private final IObjectCounterService objectCounterService;
     private final ISearchEnginePort searchEnginePort;
     private final SearchDocumentAssembler searchDocumentAssembler;
     private final RestClient searchRestClient;
@@ -200,11 +199,11 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
         if (uuid != null && !uuid.isBlank()) {
             contentText = contentByUuid.getOrDefault(uuid.trim(), "");
         }
-        long likeCount = objectCounterPort.getCount(ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(po.getPostId())
-                .counterType(ObjectCounterType.LIKE)
-                .build());
+        Map<String, Long> counts = objectCounterService.getCounts(
+                ReactionTargetTypeEnumVO.POST,
+                po.getPostId(),
+                List.of(ObjectCounterType.LIKE));
+        long likeCount = counts == null ? 0L : Math.max(0L, counts.getOrDefault("like", 0L));
         return searchDocumentAssembler.assemble(
                 po.getPostId(),
                 po.getUserId(),

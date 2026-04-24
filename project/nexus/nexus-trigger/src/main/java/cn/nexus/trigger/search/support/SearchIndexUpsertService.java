@@ -1,7 +1,6 @@
 package cn.nexus.trigger.search.support;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
@@ -13,6 +12,7 @@ import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
 import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -23,7 +23,7 @@ public class SearchIndexUpsertService {
     private final ISearchEnginePort searchEnginePort;
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
-    private final IObjectCounterPort objectCounterPort;
+    private final IObjectCounterService objectCounterService;
     private final SearchDocumentAssembler searchDocumentAssembler;
 
     public SearchIndexAction upsertPost(Long postId) {
@@ -82,11 +82,7 @@ public class SearchIndexUpsertService {
             return null;
         }
         UserBriefVO author = resolveAuthor(post.getUserId());
-        long likeCount = likeCountOverride == null ? objectCounterPort.getCount(ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(post.getPostId())
-                .counterType(ObjectCounterType.LIKE)
-                .build()) : likeCountOverride;
+        long likeCount = likeCountOverride == null ? loadLikeCount(post.getPostId()) : likeCountOverride;
         return searchDocumentAssembler.assemble(
                 post.getPostId(),
                 post.getUserId(),
@@ -99,6 +95,18 @@ public class SearchIndexUpsertService {
                 post.getPublishTime(),
                 Math.max(0L, likeCount),
                 post.getMediaInfo());
+    }
+
+    private long loadLikeCount(Long postId) {
+        if (postId == null) {
+            return 0L;
+        }
+        Map<String, Long> counts = objectCounterService.getCounts(
+                ReactionTargetTypeEnumVO.POST,
+                postId,
+                List.of(ObjectCounterType.LIKE));
+        Long like = counts == null ? null : counts.get("like");
+        return like == null ? 0L : Math.max(0L, like);
     }
 
     private UserBriefVO resolveAuthor(Long userId) {

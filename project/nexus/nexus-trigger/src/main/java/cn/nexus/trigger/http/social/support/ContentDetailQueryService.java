@@ -1,8 +1,7 @@
 package cn.nexus.trigger.http.social.support;
 
 import cn.nexus.api.social.content.dto.ContentDetailResponseDTO;
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
@@ -45,16 +44,16 @@ public class ContentDetailQueryService {
 
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
-    private final IObjectCounterPort objectCounterPort;
+    private final IObjectCounterService objectCounterService;
     private final Executor aggregationExecutor;
 
     public ContentDetailQueryService(IContentRepository contentRepository,
                                     IUserBaseRepository userBaseRepository,
-                                    IObjectCounterPort objectCounterPort,
+                                    IObjectCounterService objectCounterService,
                                     @Qualifier("aggregationExecutor") Executor aggregationExecutor) {
         this.contentRepository = contentRepository;
         this.userBaseRepository = userBaseRepository;
-        this.objectCounterPort = objectCounterPort;
+        this.objectCounterService = objectCounterService;
         this.aggregationExecutor = aggregationExecutor;
     }
 
@@ -147,12 +146,12 @@ public class ContentDetailQueryService {
             return 0L;
         }
         try {
-            ObjectCounterTarget target = ObjectCounterTarget.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(postId)
-                    .counterType(ObjectCounterType.LIKE)
-                    .build();
-            return objectCounterPort.getCount(target);
+            java.util.Map<String, Long> counts = objectCounterService.getCounts(
+                    ReactionTargetTypeEnumVO.POST,
+                    postId,
+                    java.util.List.of(ObjectCounterType.LIKE));
+            Long likeCount = counts == null ? null : counts.get("like");
+            return likeCount == null ? 0L : Math.max(0L, likeCount);
         } catch (Exception e) {
             log.warn("load like count failed, postId={}", postId, e);
             return 0L;

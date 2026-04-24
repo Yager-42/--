@@ -6,8 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
@@ -32,7 +31,7 @@ class SearchServiceTest {
 
     private ISearchEnginePort searchEnginePort;
     private IFeedCardStatRepository feedCardStatRepository;
-    private IObjectCounterPort objectCounterPort;
+    private IObjectCounterService objectCounterService;
     private IReactionCachePort reactionCachePort;
     private SearchService searchService;
 
@@ -40,9 +39,9 @@ class SearchServiceTest {
     void setUp() {
         searchEnginePort = Mockito.mock(ISearchEnginePort.class);
         feedCardStatRepository = Mockito.mock(IFeedCardStatRepository.class);
-        objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        objectCounterService = Mockito.mock(IObjectCounterService.class);
         reactionCachePort = Mockito.mock(IReactionCachePort.class);
-        searchService = new SearchService(searchEnginePort, feedCardStatRepository, objectCounterPort, reactionCachePort);
+        searchService = new SearchService(searchEnginePort, feedCardStatRepository, objectCounterService, reactionCachePort);
     }
 
     @Test
@@ -93,7 +92,8 @@ class SearchServiceTest {
                 .hits(List.of(SearchEngineResultVO.SearchHitVO.builder().source(doc).build()))
                 .build());
         when(feedCardStatRepository.getBatch(List.of(101L))).thenReturn(Map.of());
-        when(objectCounterPort.getCount(target(101L))).thenReturn(12L);
+        when(objectCounterService.getCounts(ReactionTargetTypeEnumVO.POST, 101L, List.of(ObjectCounterType.LIKE)))
+                .thenReturn(Map.of("like", 12L));
 
         SearchResultVO result = searchService.search(null, "keyword", null, null, null);
 
@@ -113,13 +113,5 @@ class SearchServiceTest {
     @Test
     void search_shouldRejectInvalidSize() {
         assertThrows(AppException.class, () -> searchService.search(1L, "ok", 0, null, null));
-    }
-
-    private ObjectCounterTarget target(Long postId) {
-        return ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(postId)
-                .counterType(ObjectCounterType.LIKE)
-                .build();
     }
 }

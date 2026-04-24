@@ -1,8 +1,7 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
@@ -11,9 +10,7 @@ import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -40,7 +37,6 @@ public class FeedCardAssembleService {
     private final IObjectCounterService objectCounterService;
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
-    private final IReactionCachePort reactionCachePort;
     private final RelationQueryService relationQueryService;
     private final IFeedFollowSeenRepository feedFollowSeenRepository;
 
@@ -196,12 +192,7 @@ public class FeedCardAssembleService {
             if (postId == null) {
                 continue;
             }
-            ReactionTargetVO target = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(postId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            if (reactionCachePort.getState(userId, target)) {
+            if (objectCounterService.isLiked(ReactionTargetTypeEnumVO.POST, postId, userId)) {
                 likedSet.add(postId);
             }
         }

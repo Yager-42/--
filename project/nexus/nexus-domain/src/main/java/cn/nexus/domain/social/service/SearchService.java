@@ -1,10 +1,8 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineQueryVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineResultVO;
@@ -31,7 +29,7 @@ import org.springframework.stereotype.Service;
 public class SearchService implements ISearchService {
 
     private final ISearchEnginePort searchEnginePort;
-    private final IReactionCachePort reactionCachePort;
+    private final IObjectCounterService objectCounterService;
 
     /**
      * 执行搜索。
@@ -155,12 +153,7 @@ public class SearchService implements ISearchService {
             if (contentId == null) {
                 continue;
             }
-            ReactionTargetVO target = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(contentId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            if (reactionCachePort.getState(userId, target)) {
+            if (objectCounterService.isLiked(ReactionTargetTypeEnumVO.POST, contentId, userId)) {
                 likedSet.add(contentId);
             }
         }

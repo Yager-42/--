@@ -1,25 +1,23 @@
 package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.IReactionCommentLikeChangedMqPort;
-import cn.nexus.domain.social.adapter.port.IReactionEventLogMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionLikeUnlikeMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionNotifyMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionRecommendFeedbackMqPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.ReactionActionEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionApplyResultVO;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.ReactionResultVO;
 import cn.nexus.domain.social.model.valobj.ReactionStateVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionEventLogRecordVO;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.event.interaction.EventType;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
@@ -27,10 +25,11 @@ import cn.nexus.types.event.interaction.InteractionNotifyEvent;
 import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import cn.nexus.types.event.recommend.RecommendFeedbackEvent;
 import cn.nexus.types.exception.AppException;
+import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 点赞子域服务。
@@ -46,7 +45,7 @@ public class ReactionLikeService implements IReactionLikeService {
 
     private static final String EVT_COMMENT_LIKE_CHANGED_PREFIX = "comment_like_changed:";
 
-    private final IReactionCachePort reactionCachePort;
+    private final IObjectCounterService objectCounterService;
     private final ICommentRepository commentRepository;
     private final ISocialIdPort socialIdPort;
     private final IReactionCommentLikeChangedMqPort reactionCommentLikeChangedMqPort;
@@ -54,7 +53,6 @@ public class ReactionLikeService implements IReactionLikeService {
     private final IReactionRecommendFeedbackMqPort reactionRecommendFeedbackMqPort;
     private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort;
     private final IPostAuthorPort postAuthorPort;
-    private final IReactionEventLogMqPort reactionEventLogMqPort;
     private final IUserCounterPort userCounterPort;
 
     /**
@@ -79,15 +77,9 @@ public class ReactionLikeService implements IReactionLikeService {
         String rid = (requestId == null || requestId.isBlank()) ? ("rid-" + socialIdPort.nextId()) : requestId.trim();
         long nowMs = socialIdPort.now();
         int desiredState = action.desiredState();
-        ReactionApplyResultVO apply = reactionCachePort.applyAtomic(userId, target, desiredState);
-        if (apply == null || apply.getDelta() == null || apply.getCurrentCount() == null) {
-            throw new AppException(ResponseCode.UN_ERROR.getCode(), "reaction cache apply failed");
-        }
-        int delta = apply.getDelta();
-        long currentCount = apply.getCurrentCount();
-        boolean firstPending = apply.isFirstPending();
-
-        publishEventLogBestEffort(rid, userId, target, desiredState, delta, nowMs);
+        int delta = applyToggleDelta(userId, target, desiredState);
+        long currentCount = currentLikeCount(target);
+        boolean firstPending = false;
 
         if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
             publishPostSideEffects(rid, userId, target, delta, nowMs);
@@ -117,36 +109,41 @@ public class ReactionLikeService implements IReactionLikeService {
         requireTarget(target);
         requireLikeOnly(target);
 
-        boolean state = reactionCachePort.getState(userId, target);
-        long cnt = reactionCachePort.getCount(target);
+        boolean state = objectCounterService.isLiked(target.getTargetType(), target.getTargetId(), userId);
+        long cnt = currentLikeCount(target);
         return ReactionStateVO.builder().state(state).currentCount(cnt).build();
     }
 
     private void publishPostSideEffects(String requestId, Long userId, ReactionTargetVO target, int delta, long nowMs) {
-        Long postId = target == null ? null : target.getTargetId();
-        Long creatorId = postId == null ? null : postAuthorPort.getPostAuthorId(postId);
-        if (postId == null || creatorId == null || delta == 0) {
-            return;
+        try {
+            Long postId = target == null ? null : target.getTargetId();
+            Long creatorId = postId == null ? null : postAuthorPort.getPostAuthorId(postId);
+            if (postId == null || creatorId == null || delta == 0) {
+                return;
+            }
+            incrementLikeReceivedBestEffort(requestId, creatorId, delta);
+
+            LikeUnlikePostEvent event = new LikeUnlikePostEvent();
+            event.setEventId(requestId);
+            event.setUserId(userId);
+            event.setPostId(postId);
+            event.setPostCreatorId(creatorId);
+            event.setCreateTime(nowMs);
+
+            if (delta > 0) {
+                event.setType(1);
+                reactionLikeUnlikeMqPort.publishLike(event);
+                publishNotifyLikeAdded(requestId, userId, target);
+                return;
+            }
+
+            event.setType(0);
+            reactionLikeUnlikeMqPort.publishUnlike(event);
+            publishRecommendUnlike(requestId, userId, target);
+        } catch (Exception e) {
+            log.warn("publish post side effects failed, requestId={}, userId={}, target={}, delta={}",
+                    requestId, userId, target, delta, e);
         }
-        incrementLikeReceivedBestEffort(requestId, creatorId, delta);
-
-        LikeUnlikePostEvent event = new LikeUnlikePostEvent();
-        event.setEventId(requestId);
-        event.setUserId(userId);
-        event.setPostId(postId);
-        event.setPostCreatorId(creatorId);
-        event.setCreateTime(nowMs);
-
-        if (delta > 0) {
-            event.setType(1);
-            reactionLikeUnlikeMqPort.publishLike(event);
-            publishNotifyLikeAdded(requestId, userId, target);
-            return;
-        }
-
-        event.setType(0);
-        reactionLikeUnlikeMqPort.publishUnlike(event);
-        publishRecommendUnlike(requestId, userId, target);
     }
 
     private void publishCommentSideEffects(String requestId, Long userId, ReactionTargetVO target, int delta, long nowMs) {
@@ -308,28 +305,26 @@ public class ReactionLikeService implements IReactionLikeService {
         }
     }
 
-    private void publishEventLogBestEffort(String requestId,
-                                           Long userId,
-                                           ReactionTargetVO target,
-                                           int desiredState,
-                                           int delta,
-                                           long nowMs) {
-        if (delta == 0 || target == null || target.getTargetType() == null || target.getReactionType() == null) {
-            return;
+    private long currentLikeCount(ReactionTargetVO target) {
+        if (target == null || target.getTargetType() == null || target.getTargetId() == null) {
+            return 0L;
         }
+        Map<String, Long> counts = objectCounterService.getCounts(
+                target.getTargetType(),
+                target.getTargetId(),
+                List.of(ObjectCounterType.LIKE));
+        Long like = counts == null ? null : counts.get(ObjectCounterType.LIKE.getCode());
+        return like == null ? 0L : Math.max(0L, like);
+    }
+
+    private int applyToggleDelta(Long userId, ReactionTargetVO target, int desiredState) {
         try {
-            reactionEventLogMqPort.publish(ReactionEventLogRecordVO.builder()
-                    .eventId(requestId)
-                    .targetType(target.getTargetType().getCode())
-                    .targetId(target.getTargetId())
-                    .reactionType(target.getReactionType().getCode())
-                    .userId(userId)
-                    .desiredState(desiredState)
-                    .delta(delta)
-                    .eventTime(nowMs)
-                    .build());
+            if (desiredState == 1) {
+                return objectCounterService.like(target.getTargetType(), target.getTargetId(), userId) ? 1 : 0;
+            }
+            return objectCounterService.unlike(target.getTargetType(), target.getTargetId(), userId) ? -1 : 0;
         } catch (Exception e) {
-            log.warn("publish reaction event log failed, requestId={}, userId={}, target={}, delta={}", requestId, userId, target, delta, e);
+            throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo(), e);
         }
     }
 }

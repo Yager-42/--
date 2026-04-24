@@ -17,7 +17,7 @@ import org.mockito.Mockito;
 class FeedCardStatRepositoryTest {
 
     @Test
-    void getBatch_shouldAdaptReactionCachePort() {
+    void getBatch_shouldAdaptObjectCounterService() {
         IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         FeedCardStatRepository repository = new FeedCardStatRepository(objectCounterService);
 

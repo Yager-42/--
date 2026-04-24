@@ -1,9 +1,8 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
+import cn.nexus.domain.counter.model.event.CounterEvent;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.domain.social.adapter.port.IReactionCommentLikeChangedMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionLikeUnlikeMqPort;
@@ -29,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 /**
@@ -53,7 +53,7 @@ public class ReactionLikeService implements IReactionLikeService {
     private final IReactionRecommendFeedbackMqPort reactionRecommendFeedbackMqPort;
     private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort;
     private final IPostAuthorPort postAuthorPort;
-    private final IUserCounterPort userCounterPort;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     /**
      * 统一点赞/取消点赞入口。
@@ -80,6 +80,7 @@ public class ReactionLikeService implements IReactionLikeService {
         int delta = applyToggleDelta(userId, target, desiredState);
         long currentCount = currentLikeCount(target);
         boolean firstPending = false;
+        publishLocalCounterEventBestEffort(rid, userId, target, delta, nowMs);
 
         if (target.getTargetType() == ReactionTargetTypeEnumVO.POST) {
             publishPostSideEffects(rid, userId, target, delta, nowMs);
@@ -121,7 +122,6 @@ public class ReactionLikeService implements IReactionLikeService {
             if (postId == null || creatorId == null || delta == 0) {
                 return;
             }
-            incrementLikeReceivedBestEffort(requestId, creatorId, delta);
 
             LikeUnlikePostEvent event = new LikeUnlikePostEvent();
             event.setEventId(requestId);
@@ -152,9 +152,6 @@ public class ReactionLikeService implements IReactionLikeService {
         }
         Long rootCommentId = target.getTargetId();
         CommentBriefVO commentBrief = loadCommentBrief(rootCommentId);
-        if (commentBrief != null && commentBrief.getUserId() != null) {
-            incrementLikeReceivedBestEffort(requestId, commentBrief.getUserId(), delta);
-        }
         Long postId = commentBrief == null ? null : commentBrief.getPostId();
         if (postId != null) {
             publishCommentLikeChanged(requestId, rootCommentId, postId, delta, nowMs);
@@ -273,20 +270,6 @@ public class ReactionLikeService implements IReactionLikeService {
         return null;
     }
 
-    private void incrementLikeReceivedBestEffort(String requestId, Long ownerUserId, long delta) {
-        if (ownerUserId == null || delta == 0) {
-            return;
-        }
-        try {
-            userCounterPort.increment(ownerUserId, UserCounterType.LIKE_RECEIVED, delta);
-        } catch (Exception e) {
-            if (log.isDebugEnabled()) {
-                log.debug("increment like received failed, requestId={}, ownerUserId={}, delta={}",
-                        requestId, ownerUserId, delta, e);
-            }
-        }
-    }
-
     private void publishCommentLikeChanged(String requestId, Long rootCommentId, Long postId, long delta, long nowMs) {
         try {
             String rid = requestId == null ? "" : requestId.trim();
@@ -325,6 +308,30 @@ public class ReactionLikeService implements IReactionLikeService {
             return objectCounterService.unlike(target.getTargetType(), target.getTargetId(), userId) ? -1 : 0;
         } catch (Exception e) {
             throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo(), e);
+        }
+    }
+
+    private void publishLocalCounterEventBestEffort(String requestId,
+                                                    Long userId,
+                                                    ReactionTargetVO target,
+                                                    long delta,
+                                                    long nowMs) {
+        if (target == null || target.getTargetType() == null || target.getTargetId() == null || delta == 0) {
+            return;
+        }
+        try {
+            applicationEventPublisher.publishEvent(CounterEvent.builder()
+                    .requestId(requestId)
+                    .targetType(target.getTargetType())
+                    .targetId(target.getTargetId())
+                    .counterType(ObjectCounterType.LIKE)
+                    .actorUserId(userId)
+                    .delta(delta)
+                    .tsMs(nowMs)
+                    .build());
+        } catch (Exception e) {
+            log.warn("publish local counter event failed, requestId={}, userId={}, target={}, delta={}",
+                    requestId, userId, target, delta, e);
         }
     }
 }

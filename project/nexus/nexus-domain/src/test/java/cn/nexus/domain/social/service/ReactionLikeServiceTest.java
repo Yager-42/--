@@ -4,15 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
+import cn.nexus.domain.counter.model.event.CounterEvent;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.domain.social.adapter.port.IReactionCommentLikeChangedMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionLikeUnlikeMqPort;
@@ -33,6 +32,7 @@ import cn.nexus.types.exception.AppException;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
+import org.springframework.context.ApplicationEventPublisher;
 
 class ReactionLikeServiceTest {
 
@@ -54,7 +54,7 @@ class ReactionLikeServiceTest {
         assertEquals(1, result.getDelta());
         assertEquals("rid-99", result.getRequestId());
         verify(fixture.objectCounterService).like(ReactionTargetTypeEnumVO.POST, 101L, 1L);
-        verify(fixture.userCounterPort).increment(1L, UserCounterType.LIKE_RECEIVED, 1L);
+        verifyPublishedCounterEvent(fixture, "rid-99", ReactionTargetTypeEnumVO.POST, 101L, 1L);
     }
 
     @Test
@@ -76,7 +76,7 @@ class ReactionLikeServiceTest {
         assertEquals(1, result.getDelta());
         assertEquals("rid-199", result.getRequestId());
         verify(fixture.objectCounterService).like(ReactionTargetTypeEnumVO.COMMENT, 201L, 2L);
-        verify(fixture.userCounterPort).increment(9L, UserCounterType.LIKE_RECEIVED, 1L);
+        verifyPublishedCounterEvent(fixture, "rid-199", ReactionTargetTypeEnumVO.COMMENT, 201L, 2L);
         verify(fixture.reactionCommentLikeChangedMqPort).publish(org.mockito.ArgumentMatchers.<CommentLikeChangedEvent>argThat(e -> e != null
                 && e.getEventId() != null
                 && !e.getEventId().isBlank()
@@ -126,7 +126,7 @@ class ReactionLikeServiceTest {
 
         assertEquals(2L, result.getCurrentCount());
         assertEquals(-1, result.getDelta());
-        verify(fixture.userCounterPort).increment(9L, UserCounterType.LIKE_RECEIVED, -1L);
+        verifyPublishedCounterEvent(fixture, "rid-399", ReactionTargetTypeEnumVO.COMMENT, 201L, 2L);
     }
 
     @Test
@@ -146,7 +146,7 @@ class ReactionLikeServiceTest {
         assertEquals(0, result.getDelta());
         verify(fixture.reactionCommentLikeChangedMqPort, never()).publish(any(CommentLikeChangedEvent.class));
         verify(fixture.reactionNotifyMqPort, never()).publish(any());
-        verify(fixture.userCounterPort, never()).increment(anyLong(), any(), anyLong());
+        verify(fixture.applicationEventPublisher, never()).publishEvent(any(CounterEvent.class));
     }
 
     @Test
@@ -221,7 +221,7 @@ class ReactionLikeServiceTest {
         private final IReactionRecommendFeedbackMqPort reactionRecommendFeedbackMqPort = Mockito.mock(IReactionRecommendFeedbackMqPort.class);
         private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort = Mockito.mock(IReactionLikeUnlikeMqPort.class);
         private final IPostAuthorPort postAuthorPort = Mockito.mock(IPostAuthorPort.class);
-        private final IUserCounterPort userCounterPort = Mockito.mock(IUserCounterPort.class);
+        private final ApplicationEventPublisher applicationEventPublisher = Mockito.mock(ApplicationEventPublisher.class);
         private final ReactionLikeService service = new ReactionLikeService(
                 objectCounterService,
                 commentRepository,
@@ -231,7 +231,22 @@ class ReactionLikeServiceTest {
                 reactionRecommendFeedbackMqPort,
                 reactionLikeUnlikeMqPort,
                 postAuthorPort,
-                userCounterPort
+                applicationEventPublisher
         );
+    }
+
+    private static void verifyPublishedCounterEvent(Fixture fixture,
+                                                    String expectedRequestId,
+                                                    ReactionTargetTypeEnumVO expectedTargetType,
+                                                    Long expectedTargetId,
+                                                    Long expectedActorUserId) {
+        ArgumentCaptor<CounterEvent> eventCaptor = ArgumentCaptor.forClass(CounterEvent.class);
+        verify(fixture.applicationEventPublisher).publishEvent(eventCaptor.capture());
+        CounterEvent event = eventCaptor.getValue();
+        assertEquals(expectedRequestId, event.getRequestId());
+        assertEquals(expectedTargetType, event.getTargetType());
+        assertEquals(expectedTargetId, event.getTargetId());
+        assertEquals(ObjectCounterType.LIKE, event.getCounterType());
+        assertEquals(expectedActorUserId, event.getActorUserId());
     }
 }

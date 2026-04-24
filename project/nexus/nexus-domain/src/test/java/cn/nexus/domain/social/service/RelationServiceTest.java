@@ -8,7 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
@@ -32,7 +32,7 @@ class RelationServiceTest {
     private IUserCounterRepairOutboxRepository userCounterRepairOutboxRepository;
     private IRelationPolicyPort relationPolicyPort;
     private IRelationAdjacencyCachePort adjacencyCachePort;
-    private IUserCounterPort userCounterPort;
+    private IUserCounterService userCounterService;
     private RelationService relationService;
 
     @BeforeEach
@@ -43,7 +43,7 @@ class RelationServiceTest {
         userCounterRepairOutboxRepository = Mockito.mock(IUserCounterRepairOutboxRepository.class);
         relationPolicyPort = Mockito.mock(IRelationPolicyPort.class);
         adjacencyCachePort = Mockito.mock(IRelationAdjacencyCachePort.class);
-        userCounterPort = Mockito.mock(IUserCounterPort.class);
+        userCounterService = Mockito.mock(IUserCounterService.class);
         relationService = new RelationService(
                 socialIdPort,
                 relationRepository,
@@ -51,7 +51,7 @@ class RelationServiceTest {
                 userCounterRepairOutboxRepository,
                 relationPolicyPort,
                 adjacencyCachePort,
-                userCounterPort
+                userCounterService
         );
     }
 
@@ -68,7 +68,6 @@ class RelationServiceTest {
     @Test
     void follow_shouldReturnActiveWhenAlreadyFollowing() {
         when(relationPolicyPort.isBlocked(1L, 2L)).thenReturn(false);
-        when(userCounterPort.getCount(1L, UserCounterType.FOLLOWING)).thenReturn(10L);
         when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().status(1).build());
 
         FollowResultVO result = relationService.follow(1L, 2L);
@@ -87,8 +86,8 @@ class RelationServiceTest {
         assertEquals("NOT_FOLLOWING", result.getStatus());
         verify(relationRepository).deleteFollower(2L, 1L);
         verify(adjacencyCachePort).removeFollow(1L, 2L);
-        verify(userCounterPort).evict(1L, UserCounterType.FOLLOWING);
-        verify(userCounterPort).evict(2L, UserCounterType.FOLLOWER);
+        verify(userCounterService).evict(1L, UserCounterType.FOLLOWING);
+        verify(userCounterService).evict(2L, UserCounterType.FOLLOWER);
         verify(relationEventOutboxRepository, never()).save(any(), any(), any());
     }
 
@@ -112,10 +111,10 @@ class RelationServiceTest {
         verify(relationRepository).deleteFollower(1L, 2L);
         verify(adjacencyCachePort).removeFollow(1L, 2L);
         verify(adjacencyCachePort).removeFollow(2L, 1L);
-        verify(userCounterPort).increment(1L, UserCounterType.FOLLOWING, -1);
-        verify(userCounterPort).increment(2L, UserCounterType.FOLLOWER, -1);
-        verify(userCounterPort).increment(2L, UserCounterType.FOLLOWING, -1);
-        verify(userCounterPort).increment(1L, UserCounterType.FOLLOWER, -1);
+        verify(userCounterService).incrementFollowings(1L, -1);
+        verify(userCounterService).incrementFollowers(2L, -1);
+        verify(userCounterService).incrementFollowings(2L, -1);
+        verify(userCounterService).incrementFollowers(1L, -1);
 
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
         verify(relationEventOutboxRepository).save(eq(20L), eq("BLOCK"), payloadCaptor.capture());
@@ -125,11 +124,10 @@ class RelationServiceTest {
     @Test
     void follow_shouldRecordRepairOutboxWhenUserCounterUpdateFails() {
         when(relationPolicyPort.isBlocked(1L, 2L)).thenReturn(false);
-        when(userCounterPort.getCount(1L, UserCounterType.FOLLOWING)).thenReturn(10L);
         when(socialIdPort.nextId()).thenReturn(10L, 11L, 12L);
         when(socialIdPort.now()).thenReturn(1000L);
         Mockito.doThrow(new RuntimeException("redis down"))
-                .when(userCounterPort).increment(1L, UserCounterType.FOLLOWING, 1);
+                .when(userCounterService).incrementFollowings(1L, 1);
 
         FollowResultVO result = relationService.follow(1L, 2L);
 
@@ -142,7 +140,6 @@ class RelationServiceTest {
     @Test
     void follow_shouldNotRecordRepairOutboxWhenUserCounterUpdatesSucceed() {
         when(relationPolicyPort.isBlocked(1L, 2L)).thenReturn(false);
-        when(userCounterPort.getCount(1L, UserCounterType.FOLLOWING)).thenReturn(10L);
         when(socialIdPort.nextId()).thenReturn(10L, 11L, 12L);
         when(socialIdPort.now()).thenReturn(1000L);
 
@@ -161,9 +158,9 @@ class RelationServiceTest {
         when(relationRepository.findRelation(2L, 1L, 1))
                 .thenReturn(RelationEntity.builder().status(1).build());
         Mockito.doThrow(new RuntimeException("redis down"))
-                .when(userCounterPort).increment(1L, UserCounterType.FOLLOWING, -1);
+                .when(userCounterService).incrementFollowings(1L, -1);
         Mockito.doThrow(new RuntimeException("redis down"))
-                .when(userCounterPort).increment(2L, UserCounterType.FOLLOWING, -1);
+                .when(userCounterService).incrementFollowings(2L, -1);
 
         OperationResultVO result = relationService.block(1L, 2L);
 

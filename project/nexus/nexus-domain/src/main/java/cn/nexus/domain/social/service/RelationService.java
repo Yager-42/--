@@ -1,6 +1,6 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
@@ -36,15 +36,13 @@ public class RelationService implements IRelationService {
     private static final int RELATION_FOLLOW = 1;
     private static final int RELATION_BLOCK = 3;
     private static final int STATUS_ACTIVE = 1;
-    private static final long FOLLOW_LIMIT = 5000L;
-
     private final ISocialIdPort socialIdPort;
     private final IRelationRepository relationRepository;
     private final IRelationEventOutboxRepository relationEventOutboxRepository;
     private final IUserCounterRepairOutboxRepository userCounterRepairOutboxRepository;
     private final IRelationPolicyPort relationPolicyPort;
     private final IRelationAdjacencyCachePort adjacencyCachePort;
-    private final IUserCounterPort userCounterPort;
+    private final IUserCounterService userCounterService;
 
     /**
      * 建立关注关系。
@@ -64,11 +62,6 @@ public class RelationService implements IRelationService {
         if (relationPolicyPort.isBlocked(sourceId, targetId) || blockedPair(sourceId, targetId)) {
             return FollowResultVO.builder().status("BLOCKED").build();
         }
-        // 关注上限走缓存计数，目的是避免每次关注前都去做高成本 COUNT(*)。
-        if (userCounterPort.getCount(sourceId, UserCounterType.FOLLOWING) >= FOLLOW_LIMIT) {
-            return FollowResultVO.builder().status("LIMIT_REACHED").build();
-        }
-
         RelationEntity existFollow = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
         // 已经是 ACTIVE 就直接返回，保证重复点击不会制造重复关系和重复事件。
         if (existFollow != null && Integer.valueOf(STATUS_ACTIVE).equals(existFollow.getStatus())) {
@@ -123,8 +116,8 @@ public class RelationService implements IRelationService {
             // 没关注也顺手清一次残留数据，这是幂等修复，不是额外业务。
             afterCommit(() -> {
                 adjacencyCachePort.removeFollow(sourceId, targetId);
-                userCounterPort.evict(sourceId, UserCounterType.FOLLOWING);
-                userCounterPort.evict(targetId, UserCounterType.FOLLOWER);
+                userCounterService.evict(sourceId, UserCounterType.FOLLOWING);
+                userCounterService.evict(targetId, UserCounterType.FOLLOWER);
             });
             relationRepository.deleteFollower(targetId, sourceId);
             return FollowResultVO.builder().status("NOT_FOLLOWING").build();
@@ -272,7 +265,13 @@ public class RelationService implements IRelationService {
                                              String operation,
                                              Long eventId) {
         try {
-            userCounterPort.increment(ownerUserId, counterType, delta);
+            if (counterType == UserCounterType.FOLLOWING) {
+                userCounterService.incrementFollowings(ownerUserId, delta);
+            } else if (counterType == UserCounterType.FOLLOWER) {
+                userCounterService.incrementFollowers(ownerUserId, delta);
+            } else {
+                userCounterService.setCount(ownerUserId, counterType, Math.max(0L, userCounterService.getCount(ownerUserId, counterType) + delta));
+            }
         } catch (Exception e) {
             userCounterRepairOutboxRepository.save(ownerUserId, relatedUserId,
                     operation, "COUNT_REDIS_WRITE_FAILED", eventId == null ? null : String.valueOf(eventId));

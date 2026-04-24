@@ -1,14 +1,11 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.counter.model.event.CounterEvent;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.domain.social.adapter.port.IFeedCounterSideEffectPort;
-import cn.nexus.domain.social.adapter.port.IReactionLikeUnlikeMqPort;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -23,9 +20,8 @@ import org.springframework.stereotype.Component;
 public class KnowpostCounterSideEffectListener {
 
     private final IPostAuthorPort postAuthorPort;
-    private final IUserCounterPort userCounterPort;
+    private final IUserCounterService userCounterService;
     private final IFeedCounterSideEffectPort feedCounterSideEffectPort;
-    private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort;
 
     /**
      * Handle local post-like delta.
@@ -40,7 +36,6 @@ public class KnowpostCounterSideEffectListener {
         if (postId == null || delta == 0) {
             return;
         }
-        publishLikeUnlikeEventBestEffort(event, postId, delta);
         incrementLikeReceivedBestEffort(event.getRequestId(), postId, delta);
         applyFeedSideEffectsBestEffort(postId, delta);
     }
@@ -59,36 +54,11 @@ public class KnowpostCounterSideEffectListener {
             if (ownerUserId == null) {
                 return;
             }
-            userCounterPort.increment(ownerUserId, UserCounterType.LIKE_RECEIVED, delta);
+            userCounterService.incrementLikesReceived(ownerUserId, delta);
         } catch (Exception e) {
             if (log.isDebugEnabled()) {
                 log.debug("increment like_received failed, requestId={}, postId={}, delta={}", requestId, postId, delta, e);
             }
-        }
-    }
-
-    private void publishLikeUnlikeEventBestEffort(CounterEvent counterEvent, Long postId, long delta) {
-        try {
-            Long ownerUserId = postAuthorPort.getPostAuthorId(postId);
-            if (ownerUserId == null) {
-                return;
-            }
-            LikeUnlikePostEvent event = new LikeUnlikePostEvent();
-            event.setEventId(counterEvent.getRequestId());
-            event.setUserId(counterEvent.getActorUserId());
-            event.setPostId(postId);
-            event.setPostCreatorId(ownerUserId);
-            event.setCreateTime(counterEvent.getTsMs());
-            if (delta > 0) {
-                event.setType(1);
-                reactionLikeUnlikeMqPort.publishLike(event);
-                return;
-            }
-            event.setType(0);
-            reactionLikeUnlikeMqPort.publishUnlike(event);
-        } catch (Exception e) {
-            log.warn("publish like/unlike event failed, requestId={}, postId={}, delta={}",
-                    counterEvent.getRequestId(), postId, delta, e);
         }
     }
 

@@ -6,8 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.adapter.repository.IUserCounterRepairOutboxRepository;
 import cn.nexus.domain.social.model.valobj.UserCounterRepairOutboxVO;
@@ -22,22 +21,16 @@ class UserCounterRepairJobTest {
     void repairReady_shouldRecomputeCountsAndMarkDone() {
         IUserCounterRepairOutboxRepository outboxRepository = Mockito.mock(IUserCounterRepairOutboxRepository.class);
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
-        IUserCounterPort userCounterPort = Mockito.mock(IUserCounterPort.class);
+        IUserCounterService userCounterService = Mockito.mock(IUserCounterService.class);
         when(outboxRepository.fetchPending(eq("NEW"), any(Date.class), eq(100)))
                 .thenReturn(List.of(item(1L, 101L, 201L, "FOLLOW", "evt-1")));
-        when(relationRepository.countActiveRelationsBySource(101L, 1)).thenReturn(7);
-        when(relationRepository.countFollowerIds(101L)).thenReturn(3);
-        when(relationRepository.countActiveRelationsBySource(201L, 1)).thenReturn(5);
-        when(relationRepository.countFollowerIds(201L)).thenReturn(9);
 
-        UserCounterRepairJob job = new UserCounterRepairJob(outboxRepository, relationRepository, userCounterPort);
+        UserCounterRepairJob job = new UserCounterRepairJob(outboxRepository, relationRepository, userCounterService);
 
         job.repairReady();
 
-        verify(userCounterPort).setCount(101L, UserCounterType.FOLLOWING, 7);
-        verify(userCounterPort).setCount(101L, UserCounterType.FOLLOWER, 3);
-        verify(userCounterPort).setCount(201L, UserCounterType.FOLLOWING, 5);
-        verify(userCounterPort).setCount(201L, UserCounterType.FOLLOWER, 9);
+        verify(userCounterService).rebuildAllCounters(101L);
+        verify(userCounterService).rebuildAllCounters(201L);
         verify(outboxRepository).markDone(1L);
         verify(outboxRepository, never()).markFail(eq(1L), any(Date.class));
     }
@@ -46,15 +39,13 @@ class UserCounterRepairJobTest {
     void repairReady_shouldMarkFailWhenRepairThrows() {
         IUserCounterRepairOutboxRepository outboxRepository = Mockito.mock(IUserCounterRepairOutboxRepository.class);
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
-        IUserCounterPort userCounterPort = Mockito.mock(IUserCounterPort.class);
+        IUserCounterService userCounterService = Mockito.mock(IUserCounterService.class);
         when(outboxRepository.fetchPending(eq("NEW"), any(Date.class), eq(100)))
                 .thenReturn(List.of(item(2L, 101L, 201L, "FOLLOW", "evt-2")));
-        when(relationRepository.countActiveRelationsBySource(101L, 1)).thenReturn(7);
-        when(relationRepository.countFollowerIds(101L)).thenReturn(3);
         Mockito.doThrow(new RuntimeException("redis down"))
-                .when(userCounterPort).setCount(101L, UserCounterType.FOLLOWING, 7);
+                .when(userCounterService).rebuildAllCounters(101L);
 
-        UserCounterRepairJob job = new UserCounterRepairJob(outboxRepository, relationRepository, userCounterPort);
+        UserCounterRepairJob job = new UserCounterRepairJob(outboxRepository, relationRepository, userCounterService);
 
         job.repairReady();
 

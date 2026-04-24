@@ -1,7 +1,6 @@
 package cn.nexus.trigger.job.social;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.adapter.repository.IUserCounterRepairOutboxRepository;
 import cn.nexus.domain.social.model.valobj.UserCounterRepairOutboxVO;
@@ -21,7 +20,7 @@ public class UserCounterRepairJob {
 
     private final IUserCounterRepairOutboxRepository outboxRepository;
     private final IRelationRepository relationRepository;
-    private final IUserCounterPort userCounterPort;
+    private final IUserCounterService userCounterService;
 
     @Scheduled(fixedDelay = 60000)
     public void repairReady() {
@@ -51,10 +50,7 @@ public class UserCounterRepairJob {
             affectedUserIds.add(item.getTargetUserId());
         }
         for (Long userId : affectedUserIds) {
-            long following = Math.max(0, relationRepository.countActiveRelationsBySource(userId, 1));
-            long follower = Math.max(0, relationRepository.countFollowerIds(userId));
-            userCounterPort.setCount(userId, UserCounterType.FOLLOWING, following);
-            userCounterPort.setCount(userId, UserCounterType.FOLLOWER, follower);
+            userCounterService.rebuildAllCounters(userId);
         }
     }
 

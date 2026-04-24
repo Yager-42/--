@@ -147,6 +147,20 @@
         </foreach>
     </select>
 
+    <select id="countPublishedByUser" resultType="java.lang.Long">
+        SELECT COUNT(1)
+        FROM content_post
+        WHERE user_id = #{userId}
+          AND status = 2
+    </select>
+
+    <select id="selectPublishedIdsByUser" resultType="java.lang.Long">
+        SELECT post_id
+        FROM content_post
+        WHERE user_id = #{userId}
+          AND status = 2
+    </select>
+
     <select id="selectByUserPage" resultMap="ContentPostMap">
         SELECT post_id, user_id, title, content_uuid, summary, summary_status,
                media_type, media_info, location_info, status, visibility, version_num, is_edited, create_time, publish_time

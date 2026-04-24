@@ -26,7 +26,7 @@ class UserCounterPortTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("count:user:{7}"))
+        when(valueOperations.get("ucnt:7"))
                 .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{6L, 8L, 0L, 13L, 0L}, 5)));
 
         UserCounterPort port = new UserCounterPort(redisTemplate, relationRepository);
@@ -43,7 +43,7 @@ class UserCounterPortTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("count:user:{9}")).thenReturn("not-base64");
+        when(valueOperations.get("ucnt:9")).thenReturn("not-base64");
 
         UserCounterPort port = new UserCounterPort(redisTemplate, relationRepository);
 
@@ -58,7 +58,7 @@ class UserCounterPortTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("count:user:{11}")).thenReturn(null);
+        when(valueOperations.get("ucnt:11")).thenReturn(null);
         when(valueOperations.setIfAbsent(eq("count:rate-limit:user:{11}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
         when(valueOperations.setIfAbsent(eq("count:rebuild-lock:user:{11}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
@@ -71,7 +71,7 @@ class UserCounterPortTest {
         long count = port.getCount(11L, UserCounterType.FOLLOWING);
 
         assertEquals(7L, count);
-        verify(valueOperations).set("count:user:{11}",
+        verify(valueOperations).set("ucnt:11",
                 CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{7L, 4L, 0L, 0L, 0L}, 5)));
         verify(redisTemplate).delete("count:rebuild-lock:user:{11}");
     }
@@ -83,7 +83,7 @@ class UserCounterPortTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("count:user:{12}")).thenReturn("not-base64");
+        when(valueOperations.get("ucnt:12")).thenReturn("not-base64");
         when(valueOperations.setIfAbsent(eq("count:rate-limit:user:{12}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
         when(valueOperations.setIfAbsent(eq("count:rebuild-lock:user:{12}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
@@ -96,7 +96,7 @@ class UserCounterPortTest {
         long count = port.getCount(12L, UserCounterType.FOLLOWER);
 
         assertEquals(9L, count);
-        verify(valueOperations).set("count:user:{12}",
+        verify(valueOperations).set("ucnt:12",
                 CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{3L, 9L, 0L, 0L, 0L}, 5)));
         verify(redisTemplate).delete("count:rebuild-lock:user:{12}");
     }
@@ -108,7 +108,7 @@ class UserCounterPortTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("count:user:{15}")).thenReturn(null);
+        when(valueOperations.get("ucnt:15")).thenReturn(null);
         when(valueOperations.setIfAbsent(eq("count:rate-limit:user:{15}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.FALSE);
 
@@ -119,7 +119,7 @@ class UserCounterPortTest {
         assertEquals(0L, count);
         verify(relationRepository, never()).countActiveRelationsBySource(any(), any());
         verify(relationRepository, never()).countFollowerIds(any());
-        verify(valueOperations, never()).set(eq("count:user:{15}"), any());
+        verify(valueOperations, never()).set(eq("ucnt:15"), any());
     }
 
     @Test
@@ -129,7 +129,7 @@ class UserCounterPortTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("count:user:{16}")).thenReturn("not-base64");
+        when(valueOperations.get("ucnt:16")).thenReturn("not-base64");
         when(valueOperations.setIfAbsent(eq("count:rate-limit:user:{16}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
         when(valueOperations.setIfAbsent(eq("count:rebuild-lock:user:{16}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
@@ -142,7 +142,7 @@ class UserCounterPortTest {
         assertEquals(0L, count);
         verify(relationRepository, never()).countActiveRelationsBySource(any(), any());
         verify(relationRepository, never()).countFollowerIds(any());
-        verify(valueOperations, never()).set(eq("count:user:{16}"), any());
+        verify(valueOperations, never()).set(eq("ucnt:16"), any());
     }
 
     @Test
@@ -152,7 +152,7 @@ class UserCounterPortTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("count:user:{17}")).thenReturn("not-base64");
+        when(valueOperations.get("ucnt:17")).thenReturn("not-base64");
         when(valueOperations.setIfAbsent(eq("count:rate-limit:user:{17}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
         when(valueOperations.setIfAbsent(eq("count:rebuild-lock:user:{17}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
@@ -165,7 +165,7 @@ class UserCounterPortTest {
         long count = port.getCount(17L, UserCounterType.FOLLOWING);
 
         assertEquals(10L, count);
-        verify(valueOperations).set("count:user:{17}",
+        verify(valueOperations).set("ucnt:17",
                 CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{10L, 6L, 0L, 0L, 0L}, 5)));
         verify(redisTemplate).delete("count:rebuild-lock:user:{17}");
     }
@@ -180,7 +180,7 @@ class UserCounterPortTest {
         HashOperations<String, Object, Object> hashOperations = Mockito.mock(HashOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        when(valueOperations.get("count:user:{5}"))
+        when(valueOperations.get("ucnt:5"))
                 .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 4L, 0L, 1L, 0L}, 5)))
                 .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{0L, 4L, 0L, 1L, 0L}, 5)));
 
@@ -192,11 +192,11 @@ class UserCounterPortTest {
 
         assertEquals(0L, incremented);
         verify(hashOperations).increment("count:agg:{user}:following", "5", -9L);
-        verify(valueOperations).set("count:user:{5}",
+        verify(valueOperations).set("ucnt:5",
                 CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 4L, 0L, 6L, 0L}, 5)));
-        verify(valueOperations).set("count:user:{5}",
+        verify(valueOperations).set("ucnt:5",
                 CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{0L, 4L, 0L, 1L, 0L}, 5)));
-        verify(redisTemplate).delete("count:user:{5}");
+        verify(redisTemplate).delete("ucnt:5");
     }
 
     @Test
@@ -209,7 +209,7 @@ class UserCounterPortTest {
         HashOperations<String, Object, Object> hashOperations = Mockito.mock(HashOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        when(valueOperations.get("count:user:{23}"))
+        when(valueOperations.get("ucnt:23"))
                 .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{1L, 2L, 0L, 4L, 0L}, 5)));
 
         UserCounterPort port = new UserCounterPort(redisTemplate, relationRepository);
@@ -218,7 +218,7 @@ class UserCounterPortTest {
 
         assertEquals(7L, updated);
         verify(hashOperations).increment("count:agg:{user}:like_received", "23", 3L);
-        verify(valueOperations).set("count:user:{23}",
+        verify(valueOperations).set("ucnt:23",
                 CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{1L, 2L, 0L, 7L, 0L}, 5)));
     }
 }

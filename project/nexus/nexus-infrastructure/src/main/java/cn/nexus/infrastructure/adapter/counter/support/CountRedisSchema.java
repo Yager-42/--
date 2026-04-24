@@ -15,42 +15,45 @@ import java.util.Map;
  */
 public final class CountRedisSchema {
 
-    public static final int SLOT_WIDTH_BYTES = 5;
+    public static final String SCHEMA_ID = "v1";
+    public static final int SCHEMA_LEN = 5;
+    public static final int FIELD_SIZE = 4;
+    public static final int SLOT_WIDTH_BYTES = FIELD_SIZE;
 
     private static final CountRedisSchema POST = new CountRedisSchema(
-            "post_counter",
-            Map.of(ObjectCounterType.LIKE, 0),
+            SCHEMA_ID,
+            orderedObjectSlots(
+                    ObjectCounterType.LIKE, 1),
             Map.of());
 
     private static final CountRedisSchema COMMENT = new CountRedisSchema(
-            "comment_counter",
+            SCHEMA_ID,
             orderedObjectSlots(
-                    ObjectCounterType.LIKE, 0,
-                    ObjectCounterType.REPLY, 1),
+                    ObjectCounterType.LIKE, 1),
             Map.of());
 
     private static final CountRedisSchema USER = new CountRedisSchema(
-            "user_counter",
+            SCHEMA_ID,
             Map.of(),
             orderedUserSlots(
-                    UserCounterType.FOLLOWING, 0,
-                    UserCounterType.FOLLOWER, 1,
-                    UserCounterType.POST, 2,
-                    UserCounterType.LIKE_RECEIVED, 3,
-                    UserCounterType.FAVORITE_RECEIVED, 4));
+                    UserCounterType.FOLLOWING, 1,
+                    UserCounterType.FOLLOWER, 2,
+                    UserCounterType.POST, 3,
+                    UserCounterType.LIKE_RECEIVED, 4,
+                    UserCounterType.FAVORITE_RECEIVED, 5));
 
     private final String schemaName;
     private final Map<ObjectCounterType, Integer> objectSlots;
-    private final Map<UserCounterType, Integer> userSlots;
+    private final Map<UserCounterType, Integer> userLogicalIndexes;
     private final String[] orderedFieldNames;
 
     private CountRedisSchema(String schemaName,
                              Map<ObjectCounterType, Integer> objectSlots,
-                             Map<UserCounterType, Integer> userSlots) {
+                             Map<UserCounterType, Integer> userLogicalIndexes) {
         this.schemaName = schemaName;
         this.objectSlots = Collections.unmodifiableMap(objectSlots);
-        this.userSlots = Collections.unmodifiableMap(userSlots);
-        this.orderedFieldNames = initOrderedFieldNames(objectSlots, userSlots);
+        this.userLogicalIndexes = Collections.unmodifiableMap(userLogicalIndexes);
+        this.orderedFieldNames = initOrderedFieldNames(objectSlots, userLogicalIndexes);
     }
 
     public static CountRedisSchema forObject(ReactionTargetTypeEnumVO targetType) {
@@ -85,7 +88,9 @@ public final class CountRedisSchema {
     }
 
     public Map<UserCounterType, Integer> userSlots() {
-        return userSlots;
+        EnumMap<UserCounterType, Integer> offsets = new EnumMap<>(UserCounterType.class);
+        userLogicalIndexes.forEach((type, idx) -> offsets.put(type, idx - 1));
+        return offsets;
     }
 
     public int slotOf(ObjectCounterType counterType) {
@@ -93,11 +98,21 @@ public final class CountRedisSchema {
     }
 
     public int slotOf(UserCounterType counterType) {
-        return userSlots.getOrDefault(counterType, -1);
+        int idx = logicalIndexOf(counterType);
+        return idx < 1 ? -1 : idx - 1;
+    }
+
+    public int logicalIndexOf(UserCounterType counterType) {
+        return userLogicalIndexes.getOrDefault(counterType, -1);
+    }
+
+    public int byteOffsetOf(UserCounterType counterType) {
+        int idx = logicalIndexOf(counterType);
+        return idx < 1 ? -1 : (idx - 1) * FIELD_SIZE;
     }
 
     public int slotCount() {
-        return orderedFieldNames.length;
+        return SCHEMA_LEN;
     }
 
     public int totalPayloadBytes() {
@@ -132,12 +147,26 @@ public final class CountRedisSchema {
     }
 
     private static String[] initOrderedFieldNames(Map<ObjectCounterType, Integer> objectSlots,
-                                                  Map<UserCounterType, Integer> userSlots) {
-        Map<Integer, String> ordered = new LinkedHashMap<>();
-        objectSlots.forEach((type, slot) -> ordered.put(slot, type.getCode()));
-        userSlots.forEach((type, slot) -> ordered.put(slot, type.getCode()));
-        String[] names = new String[ordered.size()];
-        ordered.forEach((slot, name) -> names[slot] = name);
+                                                  Map<UserCounterType, Integer> userLogicalIndexes) {
+        String[] names = new String[SCHEMA_LEN];
+        if (!objectSlots.isEmpty()) {
+            names[0] = "read";
+            names[1] = "like";
+            names[2] = "fav";
+            names[3] = "comment";
+            names[4] = "repost";
+            return names;
+        }
+        userLogicalIndexes.forEach((type, idx) -> {
+            if (idx >= 1 && idx <= SCHEMA_LEN) {
+                names[idx - 1] = type.getCode();
+            }
+        });
+        for (int i = 0; i < names.length; i++) {
+            if (names[i] == null) {
+                names[i] = "reserved_" + (i + 1);
+            }
+        }
         return names;
     }
 }

@@ -10,6 +10,8 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
  */
 public final class CountRedisKeys {
 
+    public static final int CHUNK_SIZE = 32768;
+
     private CountRedisKeys() {
     }
 
@@ -17,21 +19,35 @@ public final class CountRedisKeys {
         if (target == null || target.getTargetType() == null || target.getTargetId() == null) {
             return null;
         }
-        return "count:" + lower(target.getTargetType()) + ":{" + target.getTargetId() + "}";
+        return objectSnapshot(target.getTargetType(), target.getTargetId());
+    }
+
+    public static String objectSnapshot(ReactionTargetTypeEnumVO targetType, Long targetId) {
+        if (targetType == null || targetId == null) {
+            return null;
+        }
+        return "cnt:" + CountRedisSchema.SCHEMA_ID + ":" + lower(targetType) + ":" + targetId;
     }
 
     public static String userSnapshot(Long userId) {
         if (userId == null) {
             return null;
         }
-        return "count:user:{" + userId + "}";
+        return "ucnt:" + userId;
     }
 
     public static String objectAggregationBucket(ReactionTargetTypeEnumVO targetType, ObjectCounterType counterType) {
         if (targetType == null || counterType == null) {
             return null;
         }
-        return "count:agg:{" + lower(targetType) + "}:" + counterType.getCode();
+        return "agg:" + CountRedisSchema.SCHEMA_ID + ":" + lower(targetType) + ":" + counterType.getCode();
+    }
+
+    public static String objectAggregationBucket(ReactionTargetTypeEnumVO targetType, Long targetId) {
+        if (targetType == null || targetId == null) {
+            return null;
+        }
+        return "agg:" + CountRedisSchema.SCHEMA_ID + ":" + lower(targetType) + ":" + targetId;
     }
 
     public static String userAggregationBucket(UserCounterType counterType) {
@@ -45,7 +61,7 @@ public final class CountRedisKeys {
         if (targetType == null || targetId == null) {
             return null;
         }
-        return "count:fact:" + lower(targetType) + "_like:{" + targetId + "}:" + shard;
+        return "bm:like:" + lower(targetType) + ":" + targetId + ":" + shard;
     }
 
     public static String likeBitmapShardPattern(ObjectCounterTarget target) {
@@ -53,7 +69,7 @@ public final class CountRedisKeys {
                 || target.getCounterType() != ObjectCounterType.LIKE) {
             return null;
         }
-        return "count:fact:" + lower(target.getTargetType()) + "_like:{" + target.getTargetId() + "}:*";
+        return "bm:like:" + lower(target.getTargetType()) + ":" + target.getTargetId() + ":*";
     }
 
     public static String likeFactCount(ReactionTargetTypeEnumVO targetType, Long targetId) {
@@ -91,6 +107,20 @@ public final class CountRedisKeys {
             return null;
         }
         return "count:rate-limit:user:{" + userId + "}";
+    }
+
+    public static String relationFollowings(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        return "uf:flws:" + userId;
+    }
+
+    public static String relationFollowers(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        return "uf:fans:" + userId;
     }
 
     public static String bitmapField(ObjectCounterType counterType) {

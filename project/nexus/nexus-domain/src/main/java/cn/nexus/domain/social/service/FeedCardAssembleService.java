@@ -1,8 +1,7 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
@@ -38,7 +37,7 @@ import org.springframework.stereotype.Service;
 public class FeedCardAssembleService {
 
     private final IFeedCardRepository feedCardRepository;
-    private final IObjectCounterPort objectCounterPort;
+    private final IObjectCounterService objectCounterService;
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
     private final IReactionCachePort reactionCachePort;
@@ -154,24 +153,15 @@ public class FeedCardAssembleService {
         if (candidateIds == null || candidateIds.isEmpty()) {
             return Map.of();
         }
-
-        List<ObjectCounterTarget> targets = new ArrayList<>(candidateIds.size());
-        for (Long postId : candidateIds) {
-            if (postId == null) {
-                continue;
-            }
-            targets.add(ObjectCounterTarget.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(postId)
-                    .counterType(ObjectCounterType.LIKE)
-                    .build());
-        }
-
-        Map<String, Long> countByTag = objectCounterPort.batchGetCount(targets);
         Map<Long, Long> likeCountMap = new HashMap<>(candidateIds.size());
-        for (ObjectCounterTarget target : targets) {
-            Long count = countByTag.get(target.hashTag());
-            likeCountMap.put(target.getTargetId(), count == null ? 0L : count);
+        Map<Long, Map<String, Long>> countById = objectCounterService.getCountsBatch(
+                ReactionTargetTypeEnumVO.POST,
+                candidateIds,
+                List.of(ObjectCounterType.LIKE));
+        for (Long postId : candidateIds) {
+            Map<String, Long> values = countById.get(postId);
+            Long count = values == null ? 0L : values.get("like");
+            likeCountMap.put(postId, count == null ? 0L : count);
         }
         return likeCountMap;
     }

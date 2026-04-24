@@ -6,9 +6,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
@@ -31,7 +30,7 @@ class FeedCardAssembleServiceTest {
     @Test
     void assemble_shouldLoadLikeCountFromReactionCacheBatch() {
         IFeedCardRepository feedCardRepository = Mockito.mock(IFeedCardRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
         IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
@@ -40,7 +39,7 @@ class FeedCardAssembleServiceTest {
 
         FeedCardAssembleService service = new FeedCardAssembleService(
                 feedCardRepository,
-                objectCounterPort,
+                objectCounterService,
                 contentRepository,
                 userBaseRepository,
                 reactionCachePort,
@@ -62,13 +61,11 @@ class FeedCardAssembleServiceTest {
         when(relationQueryService.batchFollowing(eq(1L), eq(List.of(201L)))).thenReturn(Set.of());
         when(feedFollowSeenRepository.batchSeen(eq(1L), eq(List.of(101L)))).thenReturn(Set.of());
 
-        ObjectCounterTarget target = ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(101L)
-                .counterType(ObjectCounterType.LIKE)
-                .build();
-        when(objectCounterPort.batchGetCount(any()))
-                .thenReturn(Map.of(target.hashTag(), 8L));
+        when(objectCounterService.getCountsBatch(
+                eq(ReactionTargetTypeEnumVO.POST),
+                eq(List.of(101L)),
+                eq(List.of(ObjectCounterType.LIKE))
+        )).thenReturn(Map.of(101L, Map.of("like", 8L)));
 
         List<FeedItemVO> items = service.assemble(
                 1L,
@@ -79,6 +76,9 @@ class FeedCardAssembleServiceTest {
 
         assertEquals(1, items.size());
         assertEquals(8L, items.get(0).getLikeCount());
-        verify(objectCounterPort).batchGetCount(any());
+        verify(objectCounterService).getCountsBatch(
+                eq(ReactionTargetTypeEnumVO.POST),
+                eq(List.of(101L)),
+                eq(List.of(ObjectCounterType.LIKE)));
     }
 }

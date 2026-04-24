@@ -8,6 +8,8 @@ import java.util.Base64;
  */
 public final class CountRedisCodec {
 
+    private static final long UINT32_MAX = 0xFFFF_FFFFL;
+
     private CountRedisCodec() {
     }
 
@@ -45,7 +47,10 @@ public final class CountRedisCodec {
     }
 
     private static long clampNonNegative(long value) {
-        return Math.max(0L, value);
+        if (value <= 0L) {
+            return 0L;
+        }
+        return Math.min(UINT32_MAX, value);
     }
 
     private static void writeSlot(byte[] bytes, int slot, long value) {

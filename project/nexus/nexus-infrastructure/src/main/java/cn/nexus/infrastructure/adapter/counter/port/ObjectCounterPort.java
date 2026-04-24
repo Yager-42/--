@@ -38,6 +38,9 @@ public class ObjectCounterPort implements IObjectCounterPort {
         if (target == null) {
             return 0L;
         }
+        if (!isSupportedMetric(target)) {
+            return 0L;
+        }
         return snapshotValue(target);
     }
 
@@ -63,6 +66,10 @@ public class ObjectCounterPort implements IObjectCounterPort {
             if (target == null) {
                 continue;
             }
+            if (!isSupportedMetric(target)) {
+                result.put(target.hashTag(), 0L);
+                continue;
+            }
             String raw = values != null && i < values.size() ? values.get(i) : null;
             result.put(target.hashTag(), snapshotValue(target, raw));
         }
@@ -72,6 +79,9 @@ public class ObjectCounterPort implements IObjectCounterPort {
     @Override
     public long increment(ObjectCounterTarget target, long delta) {
         if (target == null) {
+            return 0L;
+        }
+        if (!isSupportedMetric(target)) {
             return 0L;
         }
         if (delta == 0) {
@@ -86,6 +96,9 @@ public class ObjectCounterPort implements IObjectCounterPort {
     @Override
     public void setCount(ObjectCounterTarget target, long count) {
         if (target == null) {
+            return;
+        }
+        if (!isSupportedMetric(target)) {
             return;
         }
         writeSnapshotValue(target, Math.max(0L, count));
@@ -105,6 +118,9 @@ public class ObjectCounterPort implements IObjectCounterPort {
 
     private long snapshotValue(ObjectCounterTarget target, String rawSnapshot) {
         if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
+            return 0L;
+        }
+        if (!isSupportedMetric(target)) {
             return 0L;
         }
         CountRedisSchema schema = CountRedisSchema.forObject(target.getTargetType());
@@ -150,9 +166,15 @@ public class ObjectCounterPort implements IObjectCounterPort {
         if (target == null || target.getTargetType() == null || target.getCounterType() == null) {
             return;
         }
+        if (!isSupportedMetric(target)) {
+            return;
+        }
         CountRedisSchema schema = CountRedisSchema.forObject(target.getTargetType());
         String key = CountRedisKeys.objectSnapshot(target);
         if (schema == null || key == null) {
+            return;
+        }
+        if (schema.slotOf(target.getCounterType()) < 0) {
             return;
         }
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
@@ -162,15 +184,23 @@ public class ObjectCounterPort implements IObjectCounterPort {
     }
 
     private void writeAggregationDelta(ObjectCounterTarget target, long delta) {
-        if (target == null || target.getTargetType() != ReactionTargetTypeEnumVO.COMMENT
-                || target.getCounterType() != ObjectCounterType.REPLY || target.getTargetId() == null) {
+        if (target == null || target.getTargetType() == null || target.getCounterType() == null || target.getTargetId() == null) {
             return;
         }
-        String bucketKey = CountRedisKeys.objectAggregationBucket(target.getTargetType(), target.getCounterType());
+        if (target.getCounterType() != ObjectCounterType.LIKE) {
+            return;
+        }
+        String bucketKey = CountRedisKeys.objectAggregationBucket(target.getTargetType(), target.getTargetId());
         if (bucketKey == null) {
             return;
         }
-        new CountRedisOperations(redisTemplate).addAggregationDelta(bucketKey, String.valueOf(target.getTargetId()), delta);
+        int slot = CountRedisSchema.forObject(target.getTargetType()) == null
+                ? -1
+                : CountRedisSchema.forObject(target.getTargetType()).slotOf(target.getCounterType());
+        if (slot < 0) {
+            return;
+        }
+        new CountRedisOperations(redisTemplate).addAggregationDelta(bucketKey, String.valueOf(slot), delta);
     }
 
     private boolean needsRebuild(ObjectCounterTarget target, Long value, Map<String, Long> snapshot, String rawSnapshot) {
@@ -187,6 +217,13 @@ public class ObjectCounterPort implements IObjectCounterPort {
     }
 
     private boolean supportsBitmapRebuild(ObjectCounterTarget target) {
+        return target != null
+                && target.getCounterType() == ObjectCounterType.LIKE
+                && (target.getTargetType() == ReactionTargetTypeEnumVO.POST
+                || target.getTargetType() == ReactionTargetTypeEnumVO.COMMENT);
+    }
+
+    private boolean isSupportedMetric(ObjectCounterTarget target) {
         return target != null
                 && target.getCounterType() == ObjectCounterType.LIKE
                 && (target.getTargetType() == ReactionTargetTypeEnumVO.POST
@@ -249,10 +286,15 @@ public class ObjectCounterPort implements IObjectCounterPort {
     }
 
     private void clearAggregationOverlap(ObjectCounterTarget target) {
-        String aggregationKey = CountRedisKeys.objectAggregationBucket(target.getTargetType(), target.getCounterType());
-        if (aggregationKey == null || target.getTargetId() == null) {
+        if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
             return;
         }
-        redisTemplate.opsForHash().delete(aggregationKey, String.valueOf(target.getTargetId()));
+        String aggregationKey = CountRedisKeys.objectAggregationBucket(target.getTargetType(), target.getTargetId());
+        CountRedisSchema schema = CountRedisSchema.forObject(target.getTargetType());
+        int slot = schema == null ? -1 : schema.slotOf(target.getCounterType());
+        if (aggregationKey == null || slot < 0) {
+            return;
+        }
+        redisTemplate.opsForHash().delete(aggregationKey, String.valueOf(slot));
     }
 }

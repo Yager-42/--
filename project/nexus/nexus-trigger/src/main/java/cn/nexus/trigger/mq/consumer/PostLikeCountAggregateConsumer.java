@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * ConsumerGroup B: aggregate (1000/1s) and send count snapshots to search-index topic.
+ * ConsumerGroup B: aggregate like/unlike events and refresh post-like snapshots.
  *
  * @author m0_52354773
  * @author codex

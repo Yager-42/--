@@ -4,18 +4,14 @@ import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
 import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
-import cn.nexus.types.event.interaction.ReactionCountSnapshotEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Message;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -25,7 +21,6 @@ import java.util.List;
 public class SnapshotPostLikeCountAggregateStrategy {
 
     private final IObjectCounterPort objectCounterPort;
-    private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
 
     public void handle(List<Message> messages) {
@@ -48,20 +43,9 @@ public class SnapshotPostLikeCountAggregateStrategy {
             return;
         }
 
-        List<ReactionCountSnapshotEvent> snapshots = new ArrayList<>(postIds.size());
-
         for (Long postId : postIds) {
-            long cnt = objectCounterPort.getCount(counterTarget(postId));
-            snapshots.add(snapshot("POST", postId, "LIKE", cnt));
+            objectCounterPort.getCount(counterTarget(postId));
         }
-
-        if (snapshots.isEmpty()) {
-            return;
-        }
-
-        rabbitTemplate.convertAndSend(CountPostLike2SearchIndexMqConfig.EXCHANGE,
-                CountPostLike2SearchIndexMqConfig.ROUTING_KEY,
-                snapshots);
     }
 
     private LikeUnlikePostEvent parse(Message m) {
@@ -78,15 +62,6 @@ public class SnapshotPostLikeCountAggregateStrategy {
             log.warn("parse like/unlike message failed", e);
             return null;
         }
-    }
-
-    private ReactionCountSnapshotEvent snapshot(String targetType, Long targetId, String reactionType, long cnt) {
-        ReactionCountSnapshotEvent e = new ReactionCountSnapshotEvent();
-        e.setTargetType(targetType);
-        e.setTargetId(targetId);
-        e.setReactionType(reactionType);
-        e.setCount(Math.max(0L, cnt));
-        return e;
     }
 
     private ObjectCounterTarget counterTarget(Long postId) {

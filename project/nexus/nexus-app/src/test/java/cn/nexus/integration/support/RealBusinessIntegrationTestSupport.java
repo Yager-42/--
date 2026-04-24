@@ -34,7 +34,6 @@ import cn.nexus.infrastructure.dao.social.IUserPrivacyDao;
 import cn.nexus.infrastructure.dao.user.IUserEventOutboxDao;
 import cn.nexus.infrastructure.dao.user.IUserStatusDao;
 import cn.nexus.trigger.mq.config.FeedFanoutConfig;
-import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendFeedbackMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendItemMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendFeedbackAMqConfig;
@@ -191,8 +190,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.DLQ_FEED_RECOMMEND_FEEDBACK_A);
         purgeQueueQuietly(LikeUnlikeMqConfig.QUEUE_COUNT);
         purgeQueueQuietly(LikeUnlikeMqConfig.DLQ_COUNT);
-        purgeQueueQuietly(CountPostLike2SearchIndexMqConfig.QUEUE);
-        purgeQueueQuietly(CountPostLike2SearchIndexMqConfig.DLQ);
         purgeQueueQuietly(RelationMqConfig.Q_FOLLOW);
         purgeQueueQuietly(RelationMqConfig.Q_BLOCK);
         purgeQueueQuietly(RiskMqConfig.Q_LLM_SCAN);
@@ -511,8 +508,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         properties.putObject("author_nickname").put("type", "keyword");
         properties.putObject("author_tag_json").put("type", "keyword");
         properties.putObject("publish_time").put("type", "date").put("format", "epoch_millis");
-        properties.putObject("like_count").put("type", "integer");
-        properties.putObject("favorite_count").put("type", "integer");
         properties.putObject("view_count").put("type", "integer");
         properties.putObject("status").put("type", "keyword");
         properties.putObject("img_urls").put("type", "keyword");

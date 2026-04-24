@@ -4,15 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
-import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
-import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineQueryVO;
@@ -21,7 +17,6 @@ import cn.nexus.domain.social.model.valobj.SearchResultVO;
 import cn.nexus.domain.social.model.valobj.SearchSuggestVO;
 import cn.nexus.types.exception.AppException;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -30,18 +25,14 @@ import org.mockito.Mockito;
 class SearchServiceTest {
 
     private ISearchEnginePort searchEnginePort;
-    private IFeedCardStatRepository feedCardStatRepository;
-    private IObjectCounterService objectCounterService;
     private IReactionCachePort reactionCachePort;
     private SearchService searchService;
 
     @BeforeEach
     void setUp() {
         searchEnginePort = Mockito.mock(ISearchEnginePort.class);
-        feedCardStatRepository = Mockito.mock(IFeedCardStatRepository.class);
-        objectCounterService = Mockito.mock(IObjectCounterService.class);
         reactionCachePort = Mockito.mock(IReactionCachePort.class);
-        searchService = new SearchService(searchEnginePort, feedCardStatRepository, objectCounterService, reactionCachePort);
+        searchService = new SearchService(searchEnginePort, reactionCachePort);
     }
 
     @Test
@@ -55,16 +46,12 @@ class SearchServiceTest {
                 .tags(List.of("t1"))
                 .authorNickname("nick")
                 .authorAvatar("avatar")
-                .likeCount(1L)
                 .build();
         when(searchEnginePort.search(any())).thenReturn(SearchEngineResultVO.builder()
                 .hits(List.of(SearchEngineResultVO.SearchHitVO.builder().source(doc).highlightBody("hit").build()))
                 .hasMore(true)
                 .nextAfter("after-1")
                 .build());
-        when(feedCardStatRepository.getBatch(List.of(101L))).thenReturn(Map.of(
-                101L, FeedCardStatVO.builder().postId(101L).likeCount(8L).build()
-        ));
         when(reactionCachePort.getState(Mockito.eq(9L), any(ReactionTargetVO.class))).thenReturn(true);
 
         SearchResultVO result = searchService.search(9L, "  hello   world  ", 5, "a, b,a", "cursor");
@@ -75,14 +62,13 @@ class SearchServiceTest {
         assertEquals(List.of("a", "b"), queryCaptor.getValue().getTags());
         assertEquals(1, result.getItems().size());
         assertEquals("77", result.getItems().get(0).getAuthorId());
-        assertEquals(8L, result.getItems().get(0).getLikeCount());
         assertEquals(true, result.getItems().get(0).getLiked());
         assertEquals("after-1", result.getNextAfter());
         assertEquals(true, result.isHasMore());
     }
 
     @Test
-    void search_shouldFallbackToReactionCountWhenStatCacheMiss() {
+    void search_shouldNotExposeCountFieldsFromSearchDocument() {
         SearchDocumentVO doc = SearchDocumentVO.builder()
                 .contentId(101L)
                 .title("title")
@@ -91,14 +77,11 @@ class SearchServiceTest {
         when(searchEnginePort.search(any())).thenReturn(SearchEngineResultVO.builder()
                 .hits(List.of(SearchEngineResultVO.SearchHitVO.builder().source(doc).build()))
                 .build());
-        when(feedCardStatRepository.getBatch(List.of(101L))).thenReturn(Map.of());
-        when(objectCounterService.getCounts(ReactionTargetTypeEnumVO.POST, 101L, List.of(ObjectCounterType.LIKE)))
-                .thenReturn(Map.of("like", 12L));
 
         SearchResultVO result = searchService.search(null, "keyword", null, null, null);
 
-        assertEquals(12L, result.getItems().get(0).getLikeCount());
-        verify(feedCardStatRepository).saveBatch(any());
+        assertEquals(false, result.getItems().get(0).getLiked());
+        verify(reactionCachePort, never()).getState(any(), any());
     }
 
     @Test

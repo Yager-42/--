@@ -3,9 +3,6 @@ package cn.nexus.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.infrastructure.dao.social.po.UserBasePO;
 import cn.nexus.trigger.mq.config.SearchIndexCdcMqConfig;
@@ -51,11 +48,6 @@ class SearchIndexConsumerRealIntegrationTest extends RealMiddlewareIntegrationTe
         contentPostDao.insert(post);
         contentPostTypeDao.insertBatch(postId, java.util.List.of("integration", "search"));
         postContentKvPort.add(contentUuid, "这是一段会进入 Elasticsearch 的真实正文");
-        objectCounterPort.setCount(ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(postId)
-                .counterType(ObjectCounterType.LIKE)
-                .build(), 7L);
 
         deleteRedisKey("social:userbase:" + userId);
         deleteRedisKey("interact:content:post:" + postId);
@@ -77,7 +69,6 @@ class SearchIndexConsumerRealIntegrationTest extends RealMiddlewareIntegrationTe
             assertThat(source.path("body").asText()).isEqualTo("这是一段会进入 Elasticsearch 的真实正文");
             assertThat(source.path("author_id").asLong()).isEqualTo(userId);
             assertThat(source.path("author_nickname").asText()).isEqualTo("检索作者-" + userId);
-            assertThat(source.path("like_count").asLong()).isEqualTo(7L);
             assertThat(source.path("status").asText()).isEqualTo("published");
             assertThat(tagsOf(source)).contains("integration", "search");
         });

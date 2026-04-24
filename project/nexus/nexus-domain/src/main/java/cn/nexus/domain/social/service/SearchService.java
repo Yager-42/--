@@ -1,11 +1,7 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
-import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
-import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
@@ -19,7 +15,6 @@ import cn.nexus.types.exception.AppException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -36,8 +31,6 @@ import org.springframework.stereotype.Service;
 public class SearchService implements ISearchService {
 
     private final ISearchEnginePort searchEnginePort;
-    private final IFeedCardStatRepository feedCardStatRepository;
-    private final IObjectCounterService objectCounterService;
     private final IReactionCachePort reactionCachePort;
 
     /**
@@ -74,8 +67,7 @@ public class SearchService implements ISearchService {
             }
         }
 
-        // 第三步用缓存计数 + 批量点赞态把“索引快照”补成更接近实时的展示结果。
-        Map<Long, FeedCardStatVO> statMap = loadLikeStats(contentIds);
+        // 第三步按登录态补齐用户行为态（liked/faved），不在搜索文档中携带计数字段。
         Set<Long> likedSet = Set.of();
         if (userId != null && !contentIds.isEmpty()) {
             likedSet = loadLikedSet(userId, contentIds);
@@ -87,8 +79,6 @@ public class SearchService implements ISearchService {
             if (doc == null || doc.getContentId() == null) {
                 continue;
             }
-            FeedCardStatVO stat = statMap == null ? null : statMap.get(doc.getContentId());
-            Long likeCount = stat == null ? safeLong(doc.getLikeCount()) : safeLong(stat.getLikeCount());
             items.add(SearchResultVO.SearchItemVO.builder()
                     .id(String.valueOf(doc.getContentId()))
                     .authorId(doc.getAuthorId() == null ? null : String.valueOf(doc.getAuthorId()))
@@ -99,8 +89,6 @@ public class SearchService implements ISearchService {
                     .authorAvatar(doc.getAuthorAvatar())
                     .authorNickname(doc.getAuthorNickname())
                     .tagJson(null)
-                    .likeCount(likeCount)
-                    .favoriteCount(0L)
                     .liked(userId != null && likedSet.contains(doc.getContentId()))
                     .faved(false)
                     .isTop(null)
@@ -156,36 +144,6 @@ public class SearchService implements ISearchService {
             }
         }
         return null;
-    }
-
-    private Map<Long, FeedCardStatVO> loadLikeStats(List<Long> contentIds) {
-        Map<Long, FeedCardStatVO> cached = feedCardStatRepository.getBatch(contentIds);
-        Map<Long, FeedCardStatVO> statMap = new java.util.HashMap<>(cached == null ? Map.of() : cached);
-        if (contentIds == null || contentIds.isEmpty()) {
-            return statMap;
-        }
-        List<FeedCardStatVO> toSave = new ArrayList<>();
-        for (Long contentId : contentIds) {
-            if (contentId == null || statMap.containsKey(contentId)) {
-                continue;
-            }
-            // 这里只有缓存 miss 才回真相源，避免每次搜索命中都把互动库打成热点。
-            Map<String, Long> counts = objectCounterService.getCounts(
-                    ReactionTargetTypeEnumVO.POST,
-                    contentId,
-                    List.of(ObjectCounterType.LIKE));
-            long count = counts == null ? 0L : safeLong(counts.get("like"));
-            FeedCardStatVO stat = FeedCardStatVO.builder()
-                    .postId(contentId)
-                    .likeCount(Math.max(0L, count))
-                    .build();
-            statMap.put(contentId, stat);
-            toSave.add(stat);
-        }
-        if (!toSave.isEmpty()) {
-            feedCardStatRepository.saveBatch(toSave);
-        }
-        return statMap;
     }
 
     private Set<Long> loadLikedSet(Long userId, List<Long> contentIds) {
@@ -249,7 +207,4 @@ public class SearchService implements ISearchService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private Long safeLong(Long value) {
-        return value == null ? 0L : Math.max(0L, value);
-    }
 }

@@ -1,10 +1,7 @@
 package cn.nexus.config;
 
-import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.infrastructure.dao.social.IContentPostDao;
 import cn.nexus.infrastructure.dao.social.IContentPostTypeDao;
@@ -70,7 +67,6 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
     private final IContentPostTypeDao contentPostTypeDao;
     private final IUserBaseDao userBaseDao;
     private final IPostContentKvPort postContentKvPort;
-    private final IObjectCounterService objectCounterService;
     private final ISearchEnginePort searchEnginePort;
     private final SearchDocumentAssembler searchDocumentAssembler;
     private final RestClient searchRestClient;
@@ -199,11 +195,6 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
         if (uuid != null && !uuid.isBlank()) {
             contentText = contentByUuid.getOrDefault(uuid.trim(), "");
         }
-        Map<String, Long> counts = objectCounterService.getCounts(
-                ReactionTargetTypeEnumVO.POST,
-                po.getPostId(),
-                List.of(ObjectCounterType.LIKE));
-        long likeCount = counts == null ? 0L : Math.max(0L, counts.getOrDefault("like", 0L));
         return searchDocumentAssembler.assemble(
                 po.getPostId(),
                 po.getUserId(),
@@ -214,7 +205,6 @@ public class SearchIndexBackfillRunner implements ApplicationRunner {
                 user == null ? null : user.getAvatarUrl(),
                 user == null ? null : user.getNickname(),
                 po.getPublishTime() == null ? null : po.getPublishTime().getTime(),
-                Math.max(0L, likeCount),
                 po.getMediaInfo());
     }
 

@@ -66,8 +66,6 @@ public class SearchController implements ISearchApi {
                             .authorAvatar(item.getAuthorAvatar())
                             .authorNickname(item.getAuthorNickname())
                             .tagJson(item.getTagJson())
-                            .likeCount(item.getLikeCount())
-                            .favoriteCount(item.getFavoriteCount())
                             .liked(item.getLiked())
                             .faved(item.getFaved())
                             .isTop(item.getIsTop())

@@ -32,7 +32,6 @@ public class SearchDocumentAssembler {
      * @param authorAvatar authorAvatar 参数。类型：{@link String}
      * @param authorNickname authorNickname 参数。类型：{@link String}
      * @param publishTime publishTime 参数。类型：{@link Long}
-     * @param likeCount likeCount 参数。类型：{@link Long}
      * @param mediaInfo mediaInfo 参数。类型：{@link String}
      * @return 处理结果。类型：{@link SearchDocumentVO}
      */
@@ -45,7 +44,6 @@ public class SearchDocumentAssembler {
                                      String authorAvatar,
                                      String authorNickname,
                                      Long publishTime,
-                                     Long likeCount,
                                      String mediaInfo) {
         return SearchDocumentVO.builder()
                 .contentId(contentId)
@@ -59,9 +57,6 @@ public class SearchDocumentAssembler {
                 .authorNickname(authorNickname)
                 .authorTagJson(null)
                 .publishTime(publishTime)
-                .likeCount(likeCount == null ? 0L : Math.max(0L, likeCount))
-                .favoriteCount(0L)
-                .viewCount(0L)
                 .status("published")
                 .imgUrls(resolveImgUrls(mediaInfo))
                 .isTop(null)

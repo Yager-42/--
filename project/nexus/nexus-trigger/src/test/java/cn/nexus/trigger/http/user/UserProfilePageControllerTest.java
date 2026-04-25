@@ -43,7 +43,13 @@ class UserProfilePageControllerTest {
                         .avatarUrl("a2")
                         .build())
                 .status("ACTIVE")
-                .relation(UserRelationStatsVO.builder().followCount(5L).followerCount(6L).isFollow(true).build())
+                .relation(UserRelationStatsVO.builder()
+                        .followings(5L)
+                        .followers(6L)
+                        .posts(7L)
+                        .likedPosts(8L)
+                        .isFollow(true)
+                        .build())
                 .risk(UserRiskStatusVO.builder().status("NORMAL").capabilities(List.of("POST")).build())
                 .build());
 
@@ -55,7 +61,10 @@ class UserProfilePageControllerTest {
         assertNotNull(response.getData());
         assertEquals("u2", response.getData().getProfile().getUsername());
         assertEquals("ACTIVE", response.getData().getProfile().getStatus());
-        assertEquals(5L, response.getData().getRelation().getFollowCount());
+        assertEquals(5L, response.getData().getRelation().getFollowings());
+        assertEquals(6L, response.getData().getRelation().getFollowers());
+        assertEquals(7L, response.getData().getRelation().getPosts());
+        assertEquals(8L, response.getData().getRelation().getLikedPosts());
         assertEquals(true, response.getData().getRelation().isFollow());
         assertEquals("NORMAL", response.getData().getRisk().getStatus());
     }

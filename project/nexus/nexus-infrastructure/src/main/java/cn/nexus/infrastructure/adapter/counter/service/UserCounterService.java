@@ -4,6 +4,7 @@ import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
+import cn.nexus.domain.counter.model.valobj.UserRelationCounterVO;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
@@ -18,6 +19,7 @@ import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import java.util.concurrent.TimeUnit;
 
 /**
  * User counter service based on Redis user snapshot plus mixed-source rebuild.
@@ -28,6 +30,7 @@ public class UserCounterService implements IUserCounterService {
 
     private static final long REBUILD_LOCK_SECONDS = 15L;
     private static final long REBUILD_RATE_LIMIT_SECONDS = 30L;
+    private static final long USER_COUNTER_SAMPLE_CHECK_TTL_SECONDS = 300L;
 
     private final StringRedisTemplate redisTemplate;
     private final IRelationRepository relationRepository;
@@ -89,6 +92,23 @@ public class UserCounterService implements IUserCounterService {
             return;
         }
         rebuildSnapshot(userId, false);
+    }
+
+    @Override
+    public UserRelationCounterVO readRelationCountersWithVerification(Long userId) {
+        if (userId == null) {
+            return zeros();
+        }
+        SnapshotState state = readSnapshotState(userId);
+        if (!state.valid()) {
+            rebuildAllCounters(userId);
+            state = readSnapshotState(userId);
+            if (!state.valid()) {
+                return zeros();
+            }
+        }
+        maybeVerifyRelationSlots(userId, state.snapshot());
+        return toPublicCounters(state.snapshot());
     }
 
     private long increment(Long userId, UserCounterType counterType, long delta) {
@@ -249,5 +269,86 @@ public class UserCounterService implements IUserCounterService {
             snapshot.put(fieldNames[i], decoded[i]);
         }
         return snapshot;
+    }
+
+    private SnapshotState readSnapshotState(Long userId) {
+        String key = CountRedisKeys.userSnapshot(userId);
+        if (key == null) {
+            return new SnapshotState(false, Map.of());
+        }
+        String rawSnapshot = redisTemplate.opsForValue().get(key);
+        if (rawSnapshot == null || rawSnapshot.isBlank()) {
+            return new SnapshotState(false, Map.of());
+        }
+        try {
+            byte[] decoded = CountRedisCodec.fromRedisValue(rawSnapshot);
+            if (decoded.length < CountRedisSchema.user().totalPayloadBytes()) {
+                return new SnapshotState(false, Map.of());
+            }
+            Map<String, Long> snapshot = decodeRawSnapshot(rawSnapshot);
+            if (snapshot.size() < CountRedisSchema.user().slotCount()) {
+                return new SnapshotState(false, Map.of());
+            }
+            return new SnapshotState(true, snapshot);
+        } catch (Exception ignored) {
+            return new SnapshotState(false, Map.of());
+        }
+    }
+
+    private void maybeVerifyRelationSlots(Long userId, Map<String, Long> snapshot) {
+        if (userId == null || snapshot == null || snapshot.isEmpty()) {
+            return;
+        }
+        String checkKey = CountRedisKeys.userCounterSampleCheck(userId);
+        if (checkKey == null) {
+            return;
+        }
+        Boolean shouldCheck = redisTemplate.opsForValue()
+                .setIfAbsent(checkKey, "1", USER_COUNTER_SAMPLE_CHECK_TTL_SECONDS, TimeUnit.SECONDS);
+        if (!Boolean.TRUE.equals(shouldCheck)) {
+            return;
+        }
+        long following = valueOf(snapshot, UserCounterType.FOLLOWING);
+        long follower = valueOf(snapshot, UserCounterType.FOLLOWER);
+        long truthFollowing = Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1));
+        long truthFollower = Math.max(0L, relationRepository.countFollowerIds(userId));
+        if (following != truthFollowing || follower != truthFollower) {
+            rebuildAllCounters(userId);
+            redisTemplate.opsForValue().setIfAbsent(
+                    checkKey,
+                    "1",
+                    USER_COUNTER_SAMPLE_CHECK_TTL_SECONDS,
+                    TimeUnit.SECONDS
+            );
+        }
+    }
+
+    private UserRelationCounterVO toPublicCounters(Map<String, Long> snapshot) {
+        return UserRelationCounterVO.builder()
+                .followings(valueOf(snapshot, UserCounterType.FOLLOWING))
+                .followers(valueOf(snapshot, UserCounterType.FOLLOWER))
+                .posts(valueOf(snapshot, UserCounterType.POST))
+                .likedPosts(valueOf(snapshot, UserCounterType.LIKE_RECEIVED))
+                .build();
+    }
+
+    private long valueOf(Map<String, Long> snapshot, UserCounterType type) {
+        if (snapshot == null || type == null) {
+            return 0L;
+        }
+        Long value = snapshot.get(type.getCode());
+        return value == null ? 0L : Math.max(0L, value);
+    }
+
+    private UserRelationCounterVO zeros() {
+        return UserRelationCounterVO.builder()
+                .followings(0L)
+                .followers(0L)
+                .posts(0L)
+                .likedPosts(0L)
+                .build();
+    }
+
+    private record SnapshotState(boolean valid, Map<String, Long> snapshot) {
     }
 }

@@ -12,6 +12,8 @@ public interface IFollowerDao {
 
     int delete(@Param("userId") Long userId, @Param("followerId") Long followerId);
 
+    int insertIgnore(FollowerPO po);
+
     /**
      * 仅供 Feed fanout 批处理切片扫描使用。
      *

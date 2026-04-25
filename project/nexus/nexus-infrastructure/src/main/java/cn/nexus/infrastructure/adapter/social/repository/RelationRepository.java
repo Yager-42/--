@@ -90,8 +90,23 @@ public class RelationRepository implements IRelationRepository {
     }
 
     @Override
+    public boolean saveFollowerIfAbsent(Long id, Long userId, Long followerId, Date createTime) {
+        FollowerPO po = new FollowerPO();
+        po.setId(id);
+        po.setUserId(userId);
+        po.setFollowerId(followerId);
+        po.setCreateTime(createTime);
+        return followerDao.insertIgnore(po) > 0;
+    }
+
+    @Override
     public void deleteFollower(Long userId, Long followerId) {
         followerDao.delete(userId, followerId);
+    }
+
+    @Override
+    public boolean deleteFollowerIfPresent(Long userId, Long followerId) {
+        return followerDao.delete(userId, followerId) > 0;
     }
 
     @Override

@@ -66,6 +66,7 @@ class CountRedisSchemaSupportTest {
         assertEquals("bm:like:post:42:*", CountRedisKeys.likeBitmapShardPattern(postLike));
         assertEquals("uf:flws:7", CountRedisKeys.relationFollowings(7L));
         assertEquals("uf:fans:7", CountRedisKeys.relationFollowers(7L));
+        assertEquals("ucnt:chk:7", CountRedisKeys.userCounterSampleCheck(7L));
         assertNull(CountRedisKeys.bitmapField(ObjectCounterType.REPLY));
     }
 

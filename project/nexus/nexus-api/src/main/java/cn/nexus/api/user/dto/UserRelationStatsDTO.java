@@ -13,7 +13,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class UserRelationStatsDTO {
-    private long followCount;
-    private long followerCount;
+    private long followings;
+    private long followers;
+    private long posts;
+    private long likedPosts;
     private boolean isFollow;
 }

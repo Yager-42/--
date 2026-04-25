@@ -86,8 +86,10 @@ public class UserProfilePageController implements IUserProfilePageApi {
                 .build();
 
         UserRelationStatsDTO relationDto = relation == null ? null : UserRelationStatsDTO.builder()
-                .followCount(relation.getFollowCount())
-                .followerCount(relation.getFollowerCount())
+                .followings(relation.getFollowings())
+                .followers(relation.getFollowers())
+                .posts(relation.getPosts())
+                .likedPosts(relation.getLikedPosts())
                 .isFollow(relation.isFollow())
                 .build();
 

@@ -131,6 +131,13 @@ public final class CountRedisKeys {
         return "uf:fans:" + userId;
     }
 
+    public static String userCounterSampleCheck(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        return "ucnt:chk:" + userId;
+    }
+
     public static String bitmapField(ObjectCounterType counterType) {
         if (counterType == ObjectCounterType.LIKE) {
             return counterType.getCode();

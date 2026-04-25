@@ -105,12 +105,32 @@ public interface IRelationRepository {
     void saveFollower(Long id, Long userId, Long followerId, Date createTime);
 
     /**
+     * 投影层写入粉丝视图，只有从“不存在”变成“存在”时返回 true。
+     *
+     * @param id 记录 ID，类型：{@link Long}
+     * @param userId 被关注用户 ID，类型：{@link Long}
+     * @param followerId 粉丝用户 ID，类型：{@link Long}
+     * @param createTime 创建时间，类型：{@link Date}
+     * @return 是否发生了真实状态迁移（inactive -> active），类型：{@code boolean}
+     */
+    boolean saveFollowerIfAbsent(Long id, Long userId, Long followerId, Date createTime);
+
+    /**
      * 删除粉丝视图记录。
      *
      * @param userId 被关注用户 ID，类型：{@link Long}
      * @param followerId 粉丝用户 ID，类型：{@link Long}
      */
     void deleteFollower(Long userId, Long followerId);
+
+    /**
+     * 投影层删除粉丝视图，只有从“存在”变成“不存在”时返回 true。
+     *
+     * @param userId 被关注用户 ID，类型：{@link Long}
+     * @param followerId 粉丝用户 ID，类型：{@link Long}
+     * @return 是否发生了真实状态迁移（active -> inactive），类型：{@code boolean}
+     */
+    boolean deleteFollowerIfPresent(Long userId, Long followerId);
 
     /**
      * 仅供 Feed fanout 批处理使用的粉丝 ID 扫描接口。

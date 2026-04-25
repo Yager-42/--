@@ -1,13 +1,9 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.counter.adapter.service.IUserCounterService;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
-import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IRelationEventOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
-import cn.nexus.domain.social.adapter.repository.IUserCounterRepairOutboxRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
 import cn.nexus.domain.social.model.valobj.FollowResultVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
@@ -16,8 +12,6 @@ import cn.nexus.types.exception.AppException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Date;
 import java.util.Objects;
@@ -39,10 +33,7 @@ public class RelationService implements IRelationService {
     private final ISocialIdPort socialIdPort;
     private final IRelationRepository relationRepository;
     private final IRelationEventOutboxRepository relationEventOutboxRepository;
-    private final IUserCounterRepairOutboxRepository userCounterRepairOutboxRepository;
     private final IRelationPolicyPort relationPolicyPort;
-    private final IRelationAdjacencyCachePort adjacencyCachePort;
-    private final IUserCounterService userCounterService;
 
     /**
      * 建立关注关系。
@@ -69,8 +60,7 @@ public class RelationService implements IRelationService {
         }
 
         long relationId = socialIdPort.nextId();
-        long nowMs = socialIdPort.now();
-        Date followTime = new Date(nowMs);
+        Date followTime = new Date(socialIdPort.now());
         RelationEntity saved = RelationEntity.builder()
                 .id(relationId)
                 .sourceId(sourceId)
@@ -81,19 +71,11 @@ public class RelationService implements IRelationService {
                 .version(0L)
                 .createTime(followTime)
                 .build();
-        // 事务内只做三件最核心的事：写关系边、写粉丝倒排、写 outbox。
+        // 事务内只做两件最核心的事：写关系边 + 写 outbox。
         relationRepository.saveRelation(saved);
-        relationRepository.saveFollower(socialIdPort.nextId(), targetId, sourceId, followTime);
 
         long eventId = socialIdPort.nextId();
         relationEventOutboxRepository.save(eventId, "FOLLOW", buildFollowPayload(eventId, sourceId, targetId, "ACTIVE"));
-
-        // 缓存和邻接门面一定要等事务提交后再碰，避免回滚时出现“库没成功，缓存先脏了”。
-        afterCommit(() -> {
-            adjacencyCachePort.addFollow(sourceId, targetId, nowMs);
-            updateUserCounterWithRepair(sourceId, targetId, UserCounterType.FOLLOWING, 1, "FOLLOW", eventId);
-            updateUserCounterWithRepair(targetId, sourceId, UserCounterType.FOLLOWER, 1, "FOLLOW", eventId);
-        });
         return FollowResultVO.builder().status("ACTIVE").build();
     }
 
@@ -113,28 +95,13 @@ public class RelationService implements IRelationService {
 
         RelationEntity existFollow = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
         if (existFollow == null || !Integer.valueOf(STATUS_ACTIVE).equals(existFollow.getStatus())) {
-            // 没关注也顺手清一次残留数据，这是幂等修复，不是额外业务。
-            afterCommit(() -> {
-                adjacencyCachePort.removeFollow(sourceId, targetId);
-                userCounterService.evict(sourceId, UserCounterType.FOLLOWING);
-                userCounterService.evict(targetId, UserCounterType.FOLLOWER);
-            });
-            relationRepository.deleteFollower(targetId, sourceId);
             return FollowResultVO.builder().status("NOT_FOLLOWING").build();
         }
 
         relationRepository.deleteRelation(sourceId, targetId, RELATION_FOLLOW);
-        relationRepository.deleteFollower(targetId, sourceId);
 
         long eventId = socialIdPort.nextId();
         relationEventOutboxRepository.save(eventId, "FOLLOW", buildFollowPayload(eventId, sourceId, targetId, "UNFOLLOW"));
-
-        // 写侧不精确删除 Feed inbox，而是把“取关立刻生效”的责任交给事件链路和读侧过滤。
-        afterCommit(() -> {
-            adjacencyCachePort.removeFollow(sourceId, targetId);
-            updateUserCounterWithRepair(sourceId, targetId, UserCounterType.FOLLOWING, -1, "UNFOLLOW", eventId);
-            updateUserCounterWithRepair(targetId, sourceId, UserCounterType.FOLLOWER, -1, "UNFOLLOW", eventId);
-        });
         return FollowResultVO.builder().status("UNFOLLOWED").build();
     }
 
@@ -174,24 +141,19 @@ public class RelationService implements IRelationService {
         relationRepository.saveRelation(block);
         relationRepository.deleteRelation(sourceId, targetId, RELATION_FOLLOW);
         relationRepository.deleteRelation(targetId, sourceId, RELATION_FOLLOW);
-        relationRepository.deleteFollower(targetId, sourceId);
-        relationRepository.deleteFollower(sourceId, targetId);
 
         long eventId = socialIdPort.nextId();
         relationEventOutboxRepository.save(eventId, "BLOCK", buildBlockPayload(eventId, sourceId, targetId));
-
-        afterCommit(() -> {
-            adjacencyCachePort.removeFollow(sourceId, targetId);
-            adjacencyCachePort.removeFollow(targetId, sourceId);
-            if (forwardFollow) {
-                updateUserCounterWithRepair(sourceId, targetId, UserCounterType.FOLLOWING, -1, "BLOCK", eventId);
-                updateUserCounterWithRepair(targetId, sourceId, UserCounterType.FOLLOWER, -1, "BLOCK", eventId);
-            }
-            if (reverseFollow) {
-                updateUserCounterWithRepair(targetId, sourceId, UserCounterType.FOLLOWING, -1, "BLOCK", eventId);
-                updateUserCounterWithRepair(sourceId, targetId, UserCounterType.FOLLOWER, -1, "BLOCK", eventId);
-            }
-        });
+        if (forwardFollow) {
+            long followEventId = socialIdPort.nextId();
+            relationEventOutboxRepository.save(followEventId, "FOLLOW",
+                    buildFollowPayload(followEventId, sourceId, targetId, "UNFOLLOW"));
+        }
+        if (reverseFollow) {
+            long followEventId = socialIdPort.nextId();
+            relationEventOutboxRepository.save(followEventId, "FOLLOW",
+                    buildFollowPayload(followEventId, targetId, sourceId, "UNFOLLOW"));
+        }
         return OperationResultVO.builder()
                 .success(true)
                 .id(eventId)
@@ -236,45 +198,5 @@ public class RelationService implements IRelationService {
             return "";
         }
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    private void afterCommit(Runnable action) {
-        if (action == null) {
-            return;
-        }
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            action.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            /**
-             * 执行 afterCommit 逻辑。
-             *
-             */
-            @Override
-            public void afterCommit() {
-                action.run();
-            }
-        });
-    }
-
-    private void updateUserCounterWithRepair(Long ownerUserId,
-                                             Long relatedUserId,
-                                             UserCounterType counterType,
-                                             long delta,
-                                             String operation,
-                                             Long eventId) {
-        try {
-            if (counterType == UserCounterType.FOLLOWING) {
-                userCounterService.incrementFollowings(ownerUserId, delta);
-            } else if (counterType == UserCounterType.FOLLOWER) {
-                userCounterService.incrementFollowers(ownerUserId, delta);
-            } else {
-                userCounterService.setCount(ownerUserId, counterType, Math.max(0L, userCounterService.getCount(ownerUserId, counterType) + delta));
-            }
-        } catch (Exception e) {
-            userCounterRepairOutboxRepository.save(ownerUserId, relatedUserId,
-                    operation, "COUNT_REDIS_WRITE_FAILED", eventId == null ? null : String.valueOf(eventId));
-        }
     }
 }

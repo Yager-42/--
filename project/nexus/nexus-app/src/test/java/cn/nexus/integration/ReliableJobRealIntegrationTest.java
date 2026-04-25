@@ -5,14 +5,12 @@ import static org.awaitility.Awaitility.await;
 
 import cn.nexus.infrastructure.dao.social.ICommentDao;
 import cn.nexus.infrastructure.dao.social.IContentEventOutboxDao;
-import cn.nexus.infrastructure.dao.social.IRelationEventInboxDao;
 import cn.nexus.infrastructure.dao.social.IRelationEventOutboxDao;
 import cn.nexus.infrastructure.dao.social.IReliableMqOutboxDao;
 import cn.nexus.infrastructure.dao.social.IReliableMqReplayRecordDao;
 import cn.nexus.infrastructure.dao.social.po.CommentPO;
 import cn.nexus.infrastructure.dao.social.po.ContentEventOutboxPO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
-import cn.nexus.infrastructure.dao.social.po.RelationEventInboxPO;
 import cn.nexus.infrastructure.dao.social.po.RelationEventOutboxPO;
 import cn.nexus.infrastructure.dao.social.po.ReliableMqOutboxPO;
 import cn.nexus.infrastructure.dao.social.po.ReliableMqReplayRecordPO;
@@ -21,20 +19,19 @@ import cn.nexus.infrastructure.dao.social.po.UserPrivacyPO;
 import cn.nexus.infrastructure.dao.user.IUserEventOutboxDao;
 import cn.nexus.infrastructure.dao.user.po.UserEventOutboxPO;
 import cn.nexus.infrastructure.dao.user.po.UserStatusPO;
-import cn.nexus.infrastructure.adapter.social.port.RelationFollowEvent;
 import cn.nexus.trigger.job.social.CommentSoftDeleteCleanupJob;
 import cn.nexus.trigger.job.social.ContentEventOutboxRetryJob;
 import cn.nexus.trigger.job.social.ContentSoftDeleteCleanupJob;
 import cn.nexus.trigger.job.social.RelationEventOutboxPublishJob;
-import cn.nexus.trigger.job.social.RelationEventRetryJob;
 import cn.nexus.trigger.job.social.ReliableMqOutboxRetryJob;
 import cn.nexus.trigger.job.social.ReliableMqReplayJob;
 import cn.nexus.trigger.job.user.UserEventOutboxRetryJob;
-import cn.nexus.trigger.mq.config.RelationMqConfig;
+import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
 import cn.nexus.types.event.PostPublishedEvent;
 import cn.nexus.types.event.UserNicknameChangedEvent;
+import cn.nexus.types.event.relation.RelationCounterProjectEvent;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -74,16 +71,10 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
     private RelationEventOutboxPublishJob relationEventOutboxPublishJob;
 
     @Autowired
-    private RelationEventRetryJob relationEventRetryJob;
-
-    @Autowired
     private IContentEventOutboxDao contentEventOutboxDao;
 
     @Autowired
     private IRelationEventOutboxDao relationEventOutboxDao;
-
-    @Autowired
-    private IRelationEventInboxDao relationEventInboxDao;
 
     @Autowired
     private IReliableMqOutboxDao reliableMqOutboxDao;
@@ -215,7 +206,12 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         RelationEventOutboxPO po = new RelationEventOutboxPO();
         po.setEventId(eventId);
         po.setEventType("FOLLOW");
-        po.setPayload(objectMapper.writeValueAsString(new RelationFollowEvent(eventId, followerId, followeeId, "ACTIVE")));
+        RelationCounterProjectEvent relationEvent = new RelationCounterProjectEvent();
+        relationEvent.setRelationEventId(eventId);
+        relationEvent.setSourceId(followerId);
+        relationEvent.setTargetId(followeeId);
+        relationEvent.setStatus("ACTIVE");
+        po.setPayload(objectMapper.writeValueAsString(relationEvent));
         po.setStatus("NEW");
         po.setRetryCount(0);
         po.setNextRetryTime(new Date(System.currentTimeMillis() - 1000));
@@ -225,7 +221,7 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             assertThat(relationOutboxStatus(eventId)).isEqualTo("DONE");
-            assertThat(relationInboxStatus(String.valueOf(eventId))).isEqualTo("PROCESSED");
+            assertThat(relationConsumerStatus(eventId)).isEqualTo("DONE");
             assertThat(inboxEntries(followerId, 20))
                     .extracting(item -> item.getPostId())
                     .contains(postId);
@@ -233,7 +229,7 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
     }
 
     @Test
-    void relationEventRetryJob_shouldReplayFailedFollowInboxAndRestoreCompensation() throws Exception {
+    void relationDlqReplay_shouldRestoreFailedRelationProjection() throws Exception {
         long followeeId = uniqueId();
         long followerId = uniqueId();
         seedRelationUser(followeeId);
@@ -246,17 +242,19 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         ensureRelationConsumersReady();
 
         long eventId = uniqueId();
-        RelationEventInboxPO po = new RelationEventInboxPO();
-        po.setEventType("FOLLOW");
-        po.setFingerprint(String.valueOf(eventId));
-        po.setPayload(objectMapper.writeValueAsString(new RelationFollowEvent(eventId, followerId, followeeId, "ACTIVE")));
-        po.setStatus("FAILED");
-        relationEventInboxDao.insertIgnore(po);
+        RelationCounterProjectEvent event = new RelationCounterProjectEvent();
+        event.setEventId("relation-counter:" + eventId);
+        event.setRelationEventId(eventId);
+        event.setEventType("FOLLOW");
+        event.setSourceId(followerId);
+        event.setTargetId(followeeId);
+        event.setStatus("ACTIVE");
 
-        relationEventRetryJob.retryFailed();
+        rabbitTemplate.convertAndSend(RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_FOLLOW, event);
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(relationConsumerStatus(eventId)).isEqualTo("DONE"));
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(relationInboxStatus(po.getFingerprint())).isEqualTo("PROCESSED");
             assertThat(inboxEntries(followerId, 20))
                     .extracting(item -> item.getPostId())
                     .contains(postId);
@@ -338,8 +336,28 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         return eventId == null ? null : querySingleString("SELECT status FROM relation_event_outbox WHERE event_id = ?", eventId);
     }
 
-    private String relationInboxStatus(String fingerprint) {
-        return querySingleString("SELECT status FROM relation_event_inbox WHERE fingerprint = ?", fingerprint);
+    private String relationConsumerStatus(Long eventId) {
+        if (eventId == null || eventId <= 0) {
+            return null;
+        }
+        return queryConsumerStatus("relation-counter:" + eventId, "RelationCounterProjectConsumer");
+    }
+
+    private String queryConsumerStatus(String eventId, String consumerName) {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "SELECT status FROM reliable_mq_consumer_record WHERE event_id = ? AND consumer_name = ?")) {
+            ps.setString(1, eventId);
+            ps.setString(2, consumerName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return rs.getString(1);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("query consumer status failed eventId=" + eventId + ", consumer=" + consumerName, e);
+        }
     }
 
     private String querySingleString(String sql, Long value) {
@@ -387,11 +405,22 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
 
     private void ensureRelationTopology() {
         rabbitTemplate.execute(channel -> {
-            channel.exchangeDeclare(RelationMqConfig.EXCHANGE, "direct", true);
-            channel.queueDeclare(RelationMqConfig.Q_FOLLOW, true, false, false, null);
-            channel.queueDeclare(RelationMqConfig.Q_BLOCK, true, false, false, null);
-            channel.queueBind(RelationMqConfig.Q_FOLLOW, RelationMqConfig.EXCHANGE, RelationMqConfig.RK_FOLLOW);
-            channel.queueBind(RelationMqConfig.Q_BLOCK, RelationMqConfig.EXCHANGE, RelationMqConfig.RK_BLOCK);
+            channel.exchangeDeclare(RelationCounterRouting.EXCHANGE, "direct", true);
+            channel.exchangeDeclare(RelationCounterRouting.DLX_EXCHANGE, "direct", true);
+            channel.queueDeclare(RelationCounterRouting.Q_FOLLOW, true, false, false, java.util.Map.of(
+                    "x-dead-letter-exchange", RelationCounterRouting.DLX_EXCHANGE,
+                    "x-dead-letter-routing-key", RelationCounterRouting.RK_FOLLOW_DLX
+            ));
+            channel.queueDeclare(RelationCounterRouting.Q_BLOCK, true, false, false, java.util.Map.of(
+                    "x-dead-letter-exchange", RelationCounterRouting.DLX_EXCHANGE,
+                    "x-dead-letter-routing-key", RelationCounterRouting.RK_BLOCK_DLX
+            ));
+            channel.queueDeclare(RelationCounterRouting.DLQ_FOLLOW, true, false, false, null);
+            channel.queueDeclare(RelationCounterRouting.DLQ_BLOCK, true, false, false, null);
+            channel.queueBind(RelationCounterRouting.Q_FOLLOW, RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_FOLLOW);
+            channel.queueBind(RelationCounterRouting.Q_BLOCK, RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_BLOCK);
+            channel.queueBind(RelationCounterRouting.DLQ_FOLLOW, RelationCounterRouting.DLX_EXCHANGE, RelationCounterRouting.RK_FOLLOW_DLX);
+            channel.queueBind(RelationCounterRouting.DLQ_BLOCK, RelationCounterRouting.DLX_EXCHANGE, RelationCounterRouting.RK_BLOCK_DLX);
             return null;
         });
     }
@@ -399,8 +428,8 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
     private void ensureRelationConsumersReady() {
         startRabbitListenerContainers();
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(queueConsumerCount(RelationMqConfig.Q_FOLLOW)).isGreaterThan(0);
-            assertThat(queueConsumerCount(RelationMqConfig.Q_BLOCK)).isGreaterThan(0);
+            assertThat(queueConsumerCount(RelationCounterRouting.Q_FOLLOW)).isGreaterThan(0);
+            assertThat(queueConsumerCount(RelationCounterRouting.Q_BLOCK)).isGreaterThan(0);
         });
     }
 

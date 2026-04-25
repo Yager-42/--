@@ -41,9 +41,9 @@ import cn.nexus.trigger.mq.config.InteractionNotifyMqConfig;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
 import cn.nexus.trigger.mq.config.LikeUnlikeMqConfig;
 import cn.nexus.trigger.mq.config.ReactionEventLogMqConfig;
-import cn.nexus.trigger.mq.config.RelationMqConfig;
 import cn.nexus.trigger.mq.config.RiskMqConfig;
 import cn.nexus.trigger.mq.config.SearchIndexMqConfig;
+import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -190,8 +190,10 @@ public abstract class RealBusinessIntegrationTestSupport {
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.DLQ_FEED_RECOMMEND_FEEDBACK_A);
         purgeQueueQuietly(LikeUnlikeMqConfig.QUEUE_COUNT);
         purgeQueueQuietly(LikeUnlikeMqConfig.DLQ_COUNT);
-        purgeQueueQuietly(RelationMqConfig.Q_FOLLOW);
-        purgeQueueQuietly(RelationMqConfig.Q_BLOCK);
+        purgeQueueQuietly(RelationCounterRouting.Q_FOLLOW);
+        purgeQueueQuietly(RelationCounterRouting.Q_BLOCK);
+        purgeQueueQuietly(RelationCounterRouting.DLQ_FOLLOW);
+        purgeQueueQuietly(RelationCounterRouting.DLQ_BLOCK);
         purgeQueueQuietly(RiskMqConfig.Q_LLM_SCAN);
         purgeQueueQuietly(RiskMqConfig.DLQ_LLM_SCAN);
         purgeQueueQuietly(RiskMqConfig.Q_IMAGE_SCAN);
@@ -207,7 +209,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         // 测试环境允许清空：避免历史遗留 outbox 积压导致“新事件被 scan limit 饥饿”。
         execUpdate("DELETE FROM content_event_outbox");
         execUpdate("DELETE FROM relation_event_outbox");
-        execUpdate("DELETE FROM relation_event_inbox");
         execUpdate("DELETE FROM interaction_reaction_event_log");
         execUpdate("DELETE FROM reliable_mq_outbox");
         execUpdate("DELETE FROM reliable_mq_consumer_record");

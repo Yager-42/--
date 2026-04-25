@@ -32,6 +32,10 @@ spring:
     port: 5672
     username: guest
     password: guest
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
   ai:
     dashscope:
       api-key: ${AI_DASHSCOPE_API_KEY:}

@@ -1,6 +1,7 @@
 package cn.nexus.domain.counter.adapter.service;
 
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
+import cn.nexus.domain.counter.model.valobj.UserRelationCounterVO;
 
 /**
  * User counter service contract aligned with zhiguang-style semantics.
@@ -24,4 +25,6 @@ public interface IUserCounterService {
     void evict(Long userId, UserCounterType counterType);
 
     void rebuildAllCounters(Long userId);
+
+    UserRelationCounterVO readRelationCountersWithVerification(Long userId);
 }

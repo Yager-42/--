@@ -3,8 +3,6 @@ package cn.nexus.trigger.job.social;
 import cn.nexus.domain.social.adapter.port.IRelationEventPort;
 import cn.nexus.domain.social.adapter.repository.IRelationEventOutboxRepository;
 import cn.nexus.domain.social.model.valobj.RelationEventOutboxVO;
-import cn.nexus.infrastructure.adapter.social.port.RelationBlockEvent;
-import cn.nexus.infrastructure.adapter.social.port.RelationFollowEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Date;
 import java.util.List;
@@ -76,13 +74,17 @@ public class RelationEventOutboxPublishJob {
             return;
         }
         if ("FOLLOW".equals(item.getEventType())) {
-            RelationFollowEvent event = objectMapper.readValue(item.getPayload(), RelationFollowEvent.class);
-            relationEventPort.onFollow(event.eventId(), event.sourceId(), event.targetId(), event.status());
+            RelationOutboxPayload event = objectMapper.readValue(item.getPayload(), RelationOutboxPayload.class);
+            if (!relationEventPort.publishCounterProjection(event.eventId, "FOLLOW", event.sourceId, event.targetId, event.status)) {
+                throw new IllegalStateException("publish relation follow projection failed");
+            }
             return;
         }
         if ("BLOCK".equals(item.getEventType())) {
-            RelationBlockEvent event = objectMapper.readValue(item.getPayload(), RelationBlockEvent.class);
-            relationEventPort.onBlock(event.eventId(), event.sourceId(), event.targetId());
+            RelationOutboxPayload event = objectMapper.readValue(item.getPayload(), RelationOutboxPayload.class);
+            if (!relationEventPort.publishCounterProjection(event.eventId, "BLOCK", event.sourceId, event.targetId, null)) {
+                throw new IllegalStateException("publish relation block projection failed");
+            }
             return;
         }
         throw new IllegalArgumentException("unsupported eventType=" + item.getEventType());
@@ -92,5 +94,12 @@ public class RelationEventOutboxPublishJob {
         int cur = currentRetryCount == null ? 0 : Math.max(0, currentRetryCount);
         long delayMs = 60_000L * (cur + 1L);
         return new Date(System.currentTimeMillis() + delayMs);
+    }
+
+    private static final class RelationOutboxPayload {
+        public Long eventId;
+        public Long sourceId;
+        public Long targetId;
+        public String status;
     }
 }

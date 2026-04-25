@@ -4,10 +4,13 @@ import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
 import cn.nexus.domain.social.model.valobj.RelationUserEdgeVO;
+import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
+import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -22,6 +25,7 @@ import org.springframework.stereotype.Component;
 public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
 
     private final IRelationRepository relationRepository;
+    private final StringRedisTemplate stringRedisTemplate;
 
     /**
      * 执行 addFollow 逻辑。
@@ -44,6 +48,41 @@ public class RelationAdjacencyCachePort implements IRelationAdjacencyCachePort {
     @Override
     public void removeFollow(Long sourceId, Long targetId) {
         // 关系真相源已经落在 DB，这里不再维护邻接缓存。
+    }
+
+    @Override
+    public void addFollowWithTtl(Long sourceId, Long targetId, Long followTimeMs, long ttlSeconds) {
+        if (sourceId == null || targetId == null || ttlSeconds <= 0) {
+            return;
+        }
+        String followingsKey = CountRedisKeys.relationFollowings(sourceId);
+        String followersKey = CountRedisKeys.relationFollowers(targetId);
+        long score = followTimeMs == null ? System.currentTimeMillis() : followTimeMs;
+        try {
+            stringRedisTemplate.opsForZSet().add(followingsKey, String.valueOf(targetId), score);
+            stringRedisTemplate.opsForZSet().add(followersKey, String.valueOf(sourceId), score);
+            stringRedisTemplate.expire(followingsKey, ttlSeconds, TimeUnit.SECONDS);
+            stringRedisTemplate.expire(followersKey, ttlSeconds, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            // 邻接缓存是投影缓存，失败不影响 DB 真相与 ucnt 主链路。
+        }
+    }
+
+    @Override
+    public void removeFollowWithTtl(Long sourceId, Long targetId, long ttlSeconds) {
+        if (sourceId == null || targetId == null || ttlSeconds <= 0) {
+            return;
+        }
+        String followingsKey = CountRedisKeys.relationFollowings(sourceId);
+        String followersKey = CountRedisKeys.relationFollowers(targetId);
+        try {
+            stringRedisTemplate.opsForZSet().remove(followingsKey, String.valueOf(targetId));
+            stringRedisTemplate.opsForZSet().remove(followersKey, String.valueOf(sourceId));
+            stringRedisTemplate.expire(followingsKey, ttlSeconds, TimeUnit.SECONDS);
+            stringRedisTemplate.expire(followersKey, ttlSeconds, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            // 邻接缓存是投影缓存，失败不影响 DB 真相与 ucnt 主链路。
+        }
     }
 
     /**

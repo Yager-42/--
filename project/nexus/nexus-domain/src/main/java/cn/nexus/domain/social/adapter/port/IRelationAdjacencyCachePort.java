@@ -16,6 +16,18 @@ public interface IRelationAdjacencyCachePort {
 
     void removeFollow(Long sourceId, Long targetId);
 
+    /**
+     * 添加关注邻接并设置固定 TTL（秒）。
+     *
+     * <p>用于关系投影消费链路，保障 `uf:flws:*` / `uf:fans:*` 的 2h 生命周期语义。</p>
+     */
+    void addFollowWithTtl(Long sourceId, Long targetId, Long followTimeMs, long ttlSeconds);
+
+    /**
+     * 移除关注邻接并刷新固定 TTL（秒）。
+     */
+    void removeFollowWithTtl(Long sourceId, Long targetId, long ttlSeconds);
+
     List<Long> listFollowing(Long sourceId, int limit);
 
     List<Long> listFollowers(Long targetId, int limit);

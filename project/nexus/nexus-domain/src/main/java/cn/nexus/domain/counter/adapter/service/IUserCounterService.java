@@ -24,5 +24,9 @@ public interface IUserCounterService {
 
     void rebuildAllCounters(Long userId);
 
+    void repairClass2Counters(Long userId);
+
+    boolean applyClass2DeltaOnce(String eventId, Long userId, UserCounterType counterType, long delta);
+
     UserRelationCounterVO readRelationCountersWithVerification(Long userId);
 }

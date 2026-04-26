@@ -284,6 +284,8 @@ class ContentServiceTest {
         String payload = payloadCaptor.getValue();
         assertTrue(payload.contains("\"sourceId\":11"));
         assertTrue(payload.contains("\"targetId\":101"));
+        assertTrue(payload.contains("\"projectionKey\":\"post:101\""));
+        assertTrue(payload.contains("\"projectionVersion\":1"));
         assertTrue(payload.contains("\"status\":\"PUBLISHED\""));
     }
 
@@ -371,6 +373,12 @@ class ContentServiceTest {
                 .build();
 
         when(contentPublishAttemptRepository.findByAttemptId(1L)).thenReturn(attempt);
+        when(contentRepository.findPostMeta(101L)).thenReturn(ContentPostEntity.builder()
+                .postId(101L)
+                .userId(11L)
+                .status(1)
+                .publishTime(null)
+                .build());
         when(socialIdPort.now()).thenReturn(1000L);
         when(socialIdPort.nextId()).thenReturn(800L);
         when(contentRepository.updatePostStatusAndPublishTimeIfMatchVersion(101L, 2, 1, 3, 1000L))
@@ -390,7 +398,44 @@ class ContentServiceTest {
         String payload = payloadCaptor.getValue();
         assertTrue(payload.contains("\"sourceId\":11"));
         assertTrue(payload.contains("\"targetId\":101"));
+        assertTrue(payload.contains("\"projectionKey\":\"post:101\""));
+        assertTrue(payload.contains("\"projectionVersion\":3"));
         assertTrue(payload.contains("\"status\":\"PUBLISHED\""));
+    }
+
+    @Test
+    void applyRiskReviewResult_pass_whenAlreadyPublishedBeforeReview_shouldNotWritePostCounterOutbox() {
+        ContentPublishAttemptEntity attempt = ContentPublishAttemptEntity.builder()
+                .attemptId(1L)
+                .postId(101L)
+                .userId(11L)
+                .attemptStatus(ContentPublishAttemptStatusEnumVO.PENDING_REVIEW.getCode())
+                .riskStatus(ContentPublishAttemptRiskStatusEnumVO.REVIEW_REQUIRED.getCode())
+                .transcodeStatus(ContentPublishAttemptTranscodeStatusEnumVO.NOT_STARTED.getCode())
+                .publishedVersionNum(3)
+                .build();
+
+        when(contentPublishAttemptRepository.findByAttemptId(1L)).thenReturn(attempt);
+        when(contentRepository.findPostMeta(101L)).thenReturn(ContentPostEntity.builder()
+                .postId(101L)
+                .userId(11L)
+                .status(1)
+                .publishTime(999L)
+                .build());
+        when(socialIdPort.now()).thenReturn(1000L);
+        when(contentRepository.updatePostStatusAndPublishTimeIfMatchVersion(101L, 2, 1, 3, 1000L))
+                .thenReturn(true);
+        when(contentPublishAttemptRepository.updateAttemptStatus(
+                eq(1L), eq(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode()),
+                eq(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode()),
+                eq(ContentPublishAttemptTranscodeStatusEnumVO.DONE.getCode()),
+                any(), eq(3), any(), any(),
+                eq(ContentPublishAttemptStatusEnumVO.PENDING_REVIEW.getCode())
+        )).thenReturn(true);
+
+        contentService.applyRiskReviewResult(1L, "PASS", null);
+
+        verify(relationEventOutboxRepository, never()).save(anyLong(), eq("POST"), anyString());
     }
 
     @Test
@@ -482,7 +527,7 @@ class ContentServiceTest {
 
         assertEquals("DELETED", result.getStatus());
         verify(postContentKvPort).delete("uuid-1");
-        verify(contentEventOutboxPort).savePostDeleted(101L, 11L, 3, 1000L);
+        verify(contentEventOutboxPort).savePostDeleted(101L, 11L, 4, 1000L);
         verify(contentCacheEvictPort).evictPost(101L);
         verify(relationEventOutboxRepository, never()).save(anyLong(), eq("POST"), anyString());
     }
@@ -510,6 +555,8 @@ class ContentServiceTest {
         String payload = payloadCaptor.getValue();
         assertTrue(payload.contains("\"sourceId\":11"));
         assertTrue(payload.contains("\"targetId\":101"));
+        assertTrue(payload.contains("\"projectionKey\":\"post:101\""));
+        assertTrue(payload.contains("\"projectionVersion\":4"));
         assertTrue(payload.contains("\"status\":\"UNPUBLISHED\""));
     }
 

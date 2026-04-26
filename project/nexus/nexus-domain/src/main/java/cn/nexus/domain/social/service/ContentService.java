@@ -369,7 +369,7 @@ public class ContentService implements IContentService {
             }
 
             if (!wasPublished(existedPost)) {
-                savePostCounterOutbox(targetPostId, userId, "PUBLISHED");
+                savePostCounterOutbox(targetPostId, userId, "PUBLISHED", (long) newVersion);
             }
 
             // 事务提交后再发 MQ：避免消费者读到未提交数据导致“索引误删”等线上鬼故事。
@@ -489,13 +489,14 @@ public class ContentService implements IContentService {
                     post.getVersionNum(),
                     socialIdPort.now());
             if (ok) {
+                int deletedVersion = post.getVersionNum() == null ? 1 : post.getVersionNum() + 1;
                 if (wasPublished(post)) {
-                    savePostCounterOutbox(postId, userId, "UNPUBLISHED");
+                    savePostCounterOutbox(postId, userId, "UNPUBLISHED", (long) deletedVersion);
                 }
                 if (post.getContentUuid() != null && !post.getContentUuid().isBlank()) {
                     postContentKvPort.delete(post.getContentUuid());
                 }
-                dispatchDeleteAfterCommit(postId, userId, post.getVersionNum());
+                dispatchDeleteAfterCommit(postId, userId, deletedVersion);
             }
             return OperationResultVO.builder()
                     .success(ok)
@@ -734,7 +735,7 @@ public class ContentService implements IContentService {
                     .build());
             if (ok) {
                 if (!wasPublished(post)) {
-                    savePostCounterOutbox(postId, userId, "PUBLISHED");
+                    savePostCounterOutbox(postId, userId, "PUBLISHED", (long) newVersion);
                 }
                 dispatchUpdateAfterCommit(postId, userId, newVersion);
             }
@@ -1010,6 +1011,8 @@ public class ContentService implements IContentService {
 
         if ("PASS".equalsIgnoreCase(finalResult)) {
             Integer expectedVersion = attempt.getPublishedVersionNum();
+            ContentPostEntity postMeta = contentRepository.findPostMeta(postId);
+            boolean shouldEmitPublishedCounter = shouldEmitPublishedCounterOnReviewPass(postMeta);
             // 先推进 post：用“期望版本号 + 期望状态”做 CAS 更新，避免旧审核结果覆盖新版本发布。
             boolean okPost = contentRepository.updatePostStatusAndPublishTimeIfMatchVersion(
                     postId,
@@ -1038,7 +1041,9 @@ public class ContentService implements IContentService {
                 throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attemptId);
             }
             // 事务提交后再做缓存失效与 outbox 投递，确保“写库成功”先于“外部可见”。
-            savePostCounterOutbox(postId, userId, "PUBLISHED");
+            if (shouldEmitPublishedCounter) {
+                savePostCounterOutbox(postId, userId, "PUBLISHED", attempt.getPublishedVersionNum() == null ? 0L : attempt.getPublishedVersionNum().longValue());
+            }
             dispatchAfterCommit(postId, userId, attempt.getPublishedVersionNum());
             attempt.setAttemptStatus(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode());
             attempt.setRiskStatus(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode());
@@ -1350,20 +1355,43 @@ public class ContentService implements IContentService {
         return post != null && post.getStatus() != null && post.getStatus() == STATUS_PUBLISHED;
     }
 
-    private void savePostCounterOutbox(Long postId, Long authorId, String status) {
+    private boolean shouldEmitPublishedCounterOnReviewPass(ContentPostEntity post) {
+        if (post == null) {
+            return false;
+        }
+        return post.getPublishTime() == null;
+    }
+
+    private void savePostCounterOutbox(Long postId, Long authorId, String status, Long projectionVersion) {
         if (postId == null || authorId == null || status == null || status.isBlank()) {
             return;
         }
         long eventId = socialIdPort.nextId();
-        relationEventOutboxRepository.save(eventId, "POST", buildPostCounterPayload(eventId, authorId, postId, status));
+        relationEventOutboxRepository.save(
+                eventId,
+                "POST",
+                buildPostCounterPayload(
+                        eventId,
+                        authorId,
+                        postId,
+                        status,
+                        "post:" + postId,
+                        projectionVersion));
     }
 
-    private String buildPostCounterPayload(Long eventId, Long authorId, Long postId, String status) {
+    private String buildPostCounterPayload(Long eventId,
+                                           Long authorId,
+                                           Long postId,
+                                           String status,
+                                           String projectionKey,
+                                           Long projectionVersion) {
         return "{"
                 + "\"eventId\":" + eventId + ","
                 + "\"sourceId\":" + authorId + ","
                 + "\"targetId\":" + postId + ","
-                + "\"status\":\"" + safe(status) + "\""
+                + "\"status\":\"" + safe(status) + "\","
+                + "\"projectionKey\":\"" + safe(projectionKey) + "\","
+                + "\"projectionVersion\":" + (projectionVersion == null ? 0L : projectionVersion)
                 + "}";
     }
 

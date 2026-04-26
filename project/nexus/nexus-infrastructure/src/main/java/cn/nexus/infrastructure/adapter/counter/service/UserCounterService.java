@@ -6,6 +6,7 @@ import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.counter.model.valobj.UserRelationCounterVO;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
+import cn.nexus.domain.social.adapter.repository.IClass2UserCounterRepairTaskRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
@@ -31,10 +32,12 @@ public class UserCounterService implements IUserCounterService {
     private static final long REBUILD_LOCK_SECONDS = 15L;
     private static final long REBUILD_RATE_LIMIT_SECONDS = 30L;
     private static final long USER_COUNTER_SAMPLE_CHECK_TTL_SECONDS = 300L;
+    private static final long CLASS2_EVENT_DEDUP_TTL_SECONDS = 86400L;
 
     private final StringRedisTemplate redisTemplate;
     private final IRelationRepository relationRepository;
     private final IContentRepository contentRepository;
+    private final IClass2UserCounterRepairTaskRepository class2UserCounterRepairTaskRepository;
     private final IObjectCounterService objectCounterService;
 
     @Override
@@ -90,13 +93,56 @@ public class UserCounterService implements IUserCounterService {
     }
 
     @Override
+    public void repairClass2Counters(Long userId) {
+        if (userId == null) {
+            return;
+        }
+        CountRedisOperations operations = new CountRedisOperations(redisTemplate);
+        String snapshotKey = CountRedisKeys.userSnapshot(userId);
+        SnapshotState snapshotState = readSnapshotState(userId);
+        Map<String, Long> current = snapshotState.valid() ? snapshotState.snapshot() : CountRedisSchema.userSnapshotDefaults();
+
+        Map<String, Long> repaired = new HashMap<>(CountRedisSchema.userSnapshotDefaults());
+        repaired.put(UserCounterType.FOLLOWING.getCode(),
+                Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1)));
+        repaired.put(UserCounterType.FOLLOWER.getCode(),
+                Math.max(0L, relationRepository.countActiveRelationsByTarget(userId, 1)));
+        repaired.put(UserCounterType.POST.getCode(),
+                Math.max(0L, contentRepository.countPublishedPostsByUser(userId)));
+        repaired.put(UserCounterType.LIKE_RECEIVED.getCode(),
+                current.getOrDefault(UserCounterType.LIKE_RECEIVED.getCode(), 0L));
+        repaired.put(UserCounterType.FAVORITE_RECEIVED.getCode(),
+                current.getOrDefault(UserCounterType.FAVORITE_RECEIVED.getCode(), 0L));
+        operations.writeUserSnapshot(snapshotKey, repaired, CountRedisSchema.user());
+    }
+
+    @Override
+    public boolean applyClass2DeltaOnce(String eventId, Long userId, UserCounterType counterType, long delta) {
+        if (eventId == null || eventId.isBlank() || userId == null || counterType == null || delta == 0L) {
+            return false;
+        }
+        CountRedisOperations operations = new CountRedisOperations(redisTemplate);
+        String dedupeKey = CountRedisKeys.userProjectionEventDedup(eventId, userId, counterType);
+        if (dedupeKey == null) {
+            return false;
+        }
+        return operations.incrementSnapshotSlotOnce(
+                CountRedisKeys.userSnapshot(userId),
+                CountRedisSchema.user().slotOf(counterType),
+                delta,
+                dedupeKey,
+                CLASS2_EVENT_DEDUP_TTL_SECONDS,
+                CountRedisSchema.user());
+    }
+
+    @Override
     public UserRelationCounterVO readRelationCountersWithVerification(Long userId) {
         if (userId == null) {
             return zeros();
         }
         SnapshotState state = readSnapshotState(userId);
         if (!state.valid()) {
-            rebuildAllCounters(userId);
+            rebuildSnapshot(userId, true);
             state = readSnapshotState(userId);
             if (!state.valid()) {
                 return zeros();
@@ -203,7 +249,7 @@ public class UserCounterService implements IUserCounterService {
         rebuilt.put(UserCounterType.FOLLOWING.getCode(),
                 Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1)));
         rebuilt.put(UserCounterType.FOLLOWER.getCode(),
-                Math.max(0L, relationRepository.countFollowerIds(userId)));
+                Math.max(0L, relationRepository.countActiveRelationsByTarget(userId, 1)));
         rebuilt.put(UserCounterType.POST.getCode(),
                 Math.max(0L, contentRepository.countPublishedPostsByUser(userId)));
         rebuilt.put(UserCounterType.LIKE_RECEIVED.getCode(),
@@ -307,10 +353,16 @@ public class UserCounterService implements IUserCounterService {
         }
         long following = valueOf(snapshot, UserCounterType.FOLLOWING);
         long follower = valueOf(snapshot, UserCounterType.FOLLOWER);
+        long post = valueOf(snapshot, UserCounterType.POST);
         long truthFollowing = Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1));
-        long truthFollower = Math.max(0L, relationRepository.countFollowerIds(userId));
-        if (following != truthFollowing || follower != truthFollower) {
-            rebuildAllCounters(userId);
+        long truthFollower = Math.max(0L, relationRepository.countActiveRelationsByTarget(userId, 1));
+        long truthPost = Math.max(0L, contentRepository.countPublishedPostsByUser(userId));
+        if (following != truthFollowing || follower != truthFollower || post != truthPost) {
+            class2UserCounterRepairTaskRepository.enqueue(
+                    "USER_CLASS2",
+                    userId,
+                    "sampled class2 mismatch",
+                    "USER_CLASS2:" + userId);
             redisTemplate.opsForValue().setIfAbsent(
                     checkKey,
                     "1",

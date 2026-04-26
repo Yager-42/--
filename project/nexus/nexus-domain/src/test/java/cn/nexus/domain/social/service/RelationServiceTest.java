@@ -55,7 +55,8 @@ class RelationServiceTest {
     @Test
     void follow_shouldReturnActiveWhenAlreadyFollowing() {
         when(relationPolicyPort.isBlocked(1L, 2L)).thenReturn(false);
-        when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().status(1).build());
+        when(relationRepository.findRelationForUpdate(1L, 2L, 1))
+                .thenReturn(RelationEntity.builder().status(1).build());
 
         FollowResultVO result = relationService.follow(1L, 2L);
 
@@ -75,12 +76,17 @@ class RelationServiceTest {
         assertEquals("ACTIVE", result.getStatus());
         verify(relationRepository).saveRelation(any(RelationEntity.class));
         verify(relationRepository, never()).saveFollower(any(), any(), any(), any());
-        verify(relationEventOutboxRepository).save(eq(12L), eq("FOLLOW"), any(String.class));
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(relationEventOutboxRepository).save(eq(12L), eq("FOLLOW"), payloadCaptor.capture());
+        String payload = payloadCaptor.getValue();
+        assertTrue(payload.contains("\"projectionKey\":\"follow:1:2\""));
+        assertTrue(payload.contains("\"projectionVersion\":0"));
+        assertTrue(payload.contains("\"status\":\"ACTIVE\""));
     }
 
     @Test
     void unfollow_shouldReturnNotFollowingWhenNoActiveRelation() {
-        when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(null);
+        when(relationRepository.findRelationForUpdate(1L, 2L, 1)).thenReturn(null);
 
         FollowResultVO result = relationService.unfollow(1L, 2L);
 
@@ -92,13 +98,17 @@ class RelationServiceTest {
     @Test
     void unfollow_shouldPersistTruthAndOutboxWithoutFollowerOrCounterSideEffects() {
         when(socialIdPort.nextId()).thenReturn(20L);
+        when(relationRepository.findRelationForUpdate(1L, 2L, 1))
+                .thenReturn(RelationEntity.builder().status(1).version(3L).build());
         when(relationRepository.findRelation(1L, 2L, 1))
-                .thenReturn(RelationEntity.builder().status(1).build());
+                .thenReturn(RelationEntity.builder().status(0).version(4L).build());
+        when(relationRepository.deactivateRelation(1L, 2L, 1, 3L, 0))
+                .thenReturn(true);
 
         FollowResultVO result = relationService.unfollow(1L, 2L);
 
         assertEquals("UNFOLLOWED", result.getStatus());
-        verify(relationRepository).deleteRelation(1L, 2L, 1);
+        verify(relationRepository).deactivateRelation(1L, 2L, 1, 3L, 0);
         verify(relationRepository, never()).deleteFollower(any(), any());
         verify(relationEventOutboxRepository).save(eq(20L), eq("FOLLOW"), any(String.class));
     }
@@ -108,17 +118,25 @@ class RelationServiceTest {
         when(socialIdPort.nextId()).thenReturn(10L, 20L, 21L, 22L);
         when(socialIdPort.now()).thenReturn(1000L);
         when(relationRepository.findRelation(1L, 2L, 1))
-                .thenReturn(RelationEntity.builder().status(1).build());
+                .thenReturn(RelationEntity.builder().status(1).version(2L).build());
         when(relationRepository.findRelation(2L, 1L, 1))
-                .thenReturn(RelationEntity.builder().status(1).build());
+                .thenReturn(RelationEntity.builder().status(1).version(2L).build());
+        when(relationRepository.findRelationForUpdate(1L, 2L, 1))
+                .thenReturn(RelationEntity.builder().status(1).version(1L).build());
+        when(relationRepository.findRelationForUpdate(2L, 1L, 1))
+                .thenReturn(RelationEntity.builder().status(1).version(1L).build());
+        when(relationRepository.deactivateRelation(1L, 2L, 1, 1L, 0))
+                .thenReturn(true);
+        when(relationRepository.deactivateRelation(2L, 1L, 1, 1L, 0))
+                .thenReturn(true);
 
         OperationResultVO result = relationService.block(1L, 2L);
 
         assertTrue(result.isSuccess());
         assertEquals("BLOCKED", result.getStatus());
         verify(relationRepository).saveRelation(any(RelationEntity.class));
-        verify(relationRepository).deleteRelation(1L, 2L, 1);
-        verify(relationRepository).deleteRelation(2L, 1L, 1);
+        verify(relationRepository).deactivateRelation(1L, 2L, 1, 1L, 0);
+        verify(relationRepository).deactivateRelation(2L, 1L, 1, 1L, 0);
         verify(relationRepository, never()).deleteFollower(any(), any());
 
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);

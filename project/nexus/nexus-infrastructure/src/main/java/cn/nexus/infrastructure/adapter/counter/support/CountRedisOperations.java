@@ -41,6 +41,36 @@ public class CountRedisOperations {
                     + "return next;",
             Long.class);
 
+    private static final DefaultRedisScript<Long> INCREMENT_SNAPSHOT_SLOT_ONCE_SCRIPT = new DefaultRedisScript<>(
+            "local snapshotKey = KEYS[1]; "
+                    + "local dedupeKey = KEYS[2]; "
+                    + "local slot = tonumber(ARGV[1]); "
+                    + "local delta = tonumber(ARGV[2]); "
+                    + "local ttl = tonumber(ARGV[3]); "
+                    + "local slots = tonumber(ARGV[4]); "
+                    + "if not redis.call('SET', dedupeKey, '1', 'NX', 'EX', ttl) then return 0; end; "
+                    + "local width = 4; "
+                    + "local len = slots * width; "
+                    + "local raw = redis.call('GET', snapshotKey); "
+                    + "if (not raw) or string.len(raw) ~= len then raw = string.rep(string.char(0), len); end; "
+                    + "local start = slot * width + 1; "
+                    + "local b1, b2, b3, b4 = string.byte(raw, start, start + 3); "
+                    + "local current = b1 * 16777216 + b2 * 65536 + b3 * 256 + b4; "
+                    + "local next = current + delta; "
+                    + "if next < 0 then next = 0; end; "
+                    + "if next > 4294967295 then next = 4294967295; end; "
+                    + "local n = next; "
+                    + "local nb4 = n % 256; n = math.floor(n / 256); "
+                    + "local nb3 = n % 256; n = math.floor(n / 256); "
+                    + "local nb2 = n % 256; n = math.floor(n / 256); "
+                    + "local nb1 = n % 256; "
+                    + "local updated = string.sub(raw, 1, start - 1) "
+                    + ".. string.char(nb1, nb2, nb3, nb4) "
+                    + ".. string.sub(raw, start + width); "
+                    + "redis.call('SET', snapshotKey, updated); "
+                    + "return 1;",
+            Long.class);
+
     private final StringRedisTemplate redisTemplate;
 
     public CountRedisOperations(StringRedisTemplate redisTemplate) {
@@ -103,6 +133,28 @@ public class CountRedisOperations {
                 String.valueOf(delta),
                 String.valueOf(schema.slotCount()));
         return updated == null ? 0L : Math.max(0L, updated);
+    }
+
+    public boolean incrementSnapshotSlotOnce(String snapshotKey,
+                                             int slot,
+                                             long delta,
+                                             String dedupeKey,
+                                             long dedupeTtlSeconds,
+                                             CountRedisSchema schema) {
+        if (snapshotKey == null || snapshotKey.isBlank()
+                || dedupeKey == null || dedupeKey.isBlank()
+                || schema == null
+                || slot < 0 || slot >= schema.slotCount()) {
+            return false;
+        }
+        Long updated = redisTemplate.execute(
+                INCREMENT_SNAPSHOT_SLOT_ONCE_SCRIPT,
+                List.of(snapshotKey, dedupeKey),
+                String.valueOf(slot),
+                String.valueOf(delta),
+                String.valueOf(Math.max(1L, dedupeTtlSeconds)),
+                String.valueOf(schema.slotCount()));
+        return updated != null && updated > 0L;
     }
 
     public boolean readBitmapFact(String key, long offset) {

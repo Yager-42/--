@@ -30,7 +30,13 @@ public class RelationEventPort implements IRelationEventPort {
      * @param status status 参数。类型：{@link String}
      */
     @Override
-    public boolean publishCounterProjection(Long eventId, String eventType, Long sourceId, Long targetId, String status) {
+    public boolean publishCounterProjection(Long eventId,
+                                            String eventType,
+                                            Long sourceId,
+                                            Long targetId,
+                                            String status,
+                                            String projectionKey,
+                                            Long projectionVersion) {
         if (eventId == null || eventType == null || eventType.isBlank()) {
             return false;
         }
@@ -41,6 +47,8 @@ public class RelationEventPort implements IRelationEventPort {
         event.setSourceId(sourceId);
         event.setTargetId(targetId);
         event.setStatus(status);
+        event.setProjectionKey(projectionKey);
+        event.setProjectionVersion(projectionVersion);
         String normalizedType = eventType.trim().toUpperCase();
         String routingKey = routingKeyOf(normalizedType);
         if (routingKey == null) {

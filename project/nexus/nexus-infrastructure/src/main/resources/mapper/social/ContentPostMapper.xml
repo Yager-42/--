@@ -80,6 +80,7 @@
     <update id="softDeleteIfMatchAndVersion">
         UPDATE content_post
         SET status = 6,
+            version_num = version_num + 1,
             delete_time = #{deleteTime}
         WHERE post_id = #{postId}
           AND status = #{expectedStatus}

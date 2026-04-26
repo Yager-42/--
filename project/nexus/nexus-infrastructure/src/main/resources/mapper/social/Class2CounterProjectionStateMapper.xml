@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.nexus.infrastructure.dao.social.IClass2CounterProjectionStateDao">
+
+    <resultMap id="Class2CounterProjectionStateMap" type="cn.nexus.infrastructure.dao.social.po.Class2CounterProjectionStatePO">
+        <id property="projectionKey" column="projection_key"/>
+        <result property="projectionType" column="projection_type"/>
+        <result property="lastVersion" column="last_version"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <select id="selectForUpdate" resultMap="Class2CounterProjectionStateMap">
+        SELECT projection_key, projection_type, last_version, update_time
+        FROM class2_counter_projection_state
+        WHERE projection_key = #{projectionKey}
+        FOR UPDATE
+    </select>
+
+    <select id="selectOne" resultMap="Class2CounterProjectionStateMap">
+        SELECT projection_key, projection_type, last_version, update_time
+        FROM class2_counter_projection_state
+        WHERE projection_key = #{projectionKey}
+    </select>
+
+    <insert id="insertIgnore">
+        INSERT INTO class2_counter_projection_state(projection_key, projection_type, last_version, update_time)
+        VALUES(#{projectionKey}, #{projectionType}, #{lastVersion}, #{updateTime})
+        ON DUPLICATE KEY UPDATE projection_key = projection_key
+    </insert>
+
+    <update id="updateVersion">
+        UPDATE class2_counter_projection_state
+        SET projection_type = #{projectionType},
+            last_version = #{lastVersion},
+            update_time = #{updateTime}
+        WHERE projection_key = #{projectionKey}
+    </update>
+
+</mapper>

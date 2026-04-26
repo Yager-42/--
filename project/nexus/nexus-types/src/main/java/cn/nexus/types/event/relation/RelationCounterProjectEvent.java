@@ -16,4 +16,6 @@ public class RelationCounterProjectEvent extends BaseEvent {
     private Long sourceId;
     private Long targetId;
     private String status;
+    private String projectionKey;
+    private Long projectionVersion;
 }

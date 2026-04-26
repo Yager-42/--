@@ -19,6 +19,7 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
 class CountRedisOperationsTest {
 
@@ -95,5 +96,25 @@ class CountRedisOperationsTest {
         assertFalse(operations.writeBitmapFact("bm:like:post:42:0", 7, true));
         assertFalse(operations.tryAcquireRateLimit("count:rate-limit:rebuild:{42}", 30));
         verify(redisTemplate, never()).delete("unused");
+    }
+
+    @Test
+    void incrementSnapshotSlotOnceShouldUseLuaScriptAndDedupKey() {
+        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        when(redisTemplate.execute(any(RedisScript.class), eq(java.util.List.of("ucnt:7", "ucnt:evt:dedup:7:following:e-1")),
+                eq("0"), eq("1"), eq("86400"), eq("5")))
+                .thenReturn(1L);
+
+        CountRedisOperations operations = new CountRedisOperations(redisTemplate);
+
+        boolean applied = operations.incrementSnapshotSlotOnce(
+                "ucnt:7",
+                0,
+                1L,
+                "ucnt:evt:dedup:7:following:e-1",
+                86400L,
+                CountRedisSchema.user());
+
+        assertTrue(applied);
     }
 }

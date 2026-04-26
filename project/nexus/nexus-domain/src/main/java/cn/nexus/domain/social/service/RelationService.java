@@ -30,6 +30,7 @@ public class RelationService implements IRelationService {
     private static final int RELATION_FOLLOW = 1;
     private static final int RELATION_BLOCK = 3;
     private static final int STATUS_ACTIVE = 1;
+    private static final int STATUS_INACTIVE = 0;
     private final ISocialIdPort socialIdPort;
     private final IRelationRepository relationRepository;
     private final IRelationEventOutboxRepository relationEventOutboxRepository;
@@ -53,29 +54,49 @@ public class RelationService implements IRelationService {
         if (relationPolicyPort.isBlocked(sourceId, targetId) || blockedPair(sourceId, targetId)) {
             return FollowResultVO.builder().status("BLOCKED").build();
         }
-        RelationEntity existFollow = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
-        // 已经是 ACTIVE 就直接返回，保证重复点击不会制造重复关系和重复事件。
-        if (existFollow != null && Integer.valueOf(STATUS_ACTIVE).equals(existFollow.getStatus())) {
+
+        Date followTime = new Date(socialIdPort.now());
+        RelationEntity locked = relationRepository.findRelationForUpdate(sourceId, targetId, RELATION_FOLLOW);
+        long projectionVersion;
+        if (locked == null) {
+            long relationId = socialIdPort.nextId();
+            relationRepository.saveRelation(RelationEntity.builder()
+                    .id(relationId)
+                    .sourceId(sourceId)
+                    .targetId(targetId)
+                    .relationType(RELATION_FOLLOW)
+                    .status(STATUS_ACTIVE)
+                    .groupId(0L)
+                    .version(0L)
+                    .createTime(followTime)
+                    .build());
+            projectionVersion = 0L;
+        } else if (Integer.valueOf(STATUS_ACTIVE).equals(locked.getStatus())) {
             return FollowResultVO.builder().status("ACTIVE").build();
+        } else {
+            boolean activated = relationRepository.activateRelation(
+                    sourceId,
+                    targetId,
+                    RELATION_FOLLOW,
+                    locked.getVersion(),
+                    followTime);
+            if (!activated) {
+                throw new IllegalStateException("follow relation CAS conflict");
+            }
+            RelationEntity refreshed = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
+            projectionVersion = refreshed == null || refreshed.getVersion() == null ? 0L : refreshed.getVersion();
         }
 
-        long relationId = socialIdPort.nextId();
-        Date followTime = new Date(socialIdPort.now());
-        RelationEntity saved = RelationEntity.builder()
-                .id(relationId)
-                .sourceId(sourceId)
-                .targetId(targetId)
-                .relationType(RELATION_FOLLOW)
-                .status(STATUS_ACTIVE)
-                .groupId(0L)
-                .version(0L)
-                .createTime(followTime)
-                .build();
-        // 事务内只做两件最核心的事：写关系边 + 写 outbox。
-        relationRepository.saveRelation(saved);
-
         long eventId = socialIdPort.nextId();
-        relationEventOutboxRepository.save(eventId, "FOLLOW", buildFollowPayload(eventId, sourceId, targetId, "ACTIVE"));
+        relationEventOutboxRepository.save(eventId,
+                "FOLLOW",
+                buildFollowPayload(
+                        eventId,
+                        sourceId,
+                        targetId,
+                        "ACTIVE",
+                        "follow:" + sourceId + ":" + targetId,
+                        projectionVersion));
         return FollowResultVO.builder().status("ACTIVE").build();
     }
 
@@ -93,15 +114,32 @@ public class RelationService implements IRelationService {
             return FollowResultVO.builder().status("INVALID").build();
         }
 
-        RelationEntity existFollow = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
-        if (existFollow == null || !Integer.valueOf(STATUS_ACTIVE).equals(existFollow.getStatus())) {
+        RelationEntity locked = relationRepository.findRelationForUpdate(sourceId, targetId, RELATION_FOLLOW);
+        if (locked == null || !Integer.valueOf(STATUS_ACTIVE).equals(locked.getStatus())) {
             return FollowResultVO.builder().status("NOT_FOLLOWING").build();
         }
-
-        relationRepository.deleteRelation(sourceId, targetId, RELATION_FOLLOW);
+        boolean deactivated = relationRepository.deactivateRelation(
+                sourceId,
+                targetId,
+                RELATION_FOLLOW,
+                locked.getVersion(),
+                STATUS_INACTIVE);
+        if (!deactivated) {
+            throw new IllegalStateException("unfollow relation CAS conflict");
+        }
+        RelationEntity refreshed = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
+        long projectionVersion = refreshed == null || refreshed.getVersion() == null ? 0L : refreshed.getVersion();
 
         long eventId = socialIdPort.nextId();
-        relationEventOutboxRepository.save(eventId, "FOLLOW", buildFollowPayload(eventId, sourceId, targetId, "UNFOLLOW"));
+        relationEventOutboxRepository.save(eventId,
+                "FOLLOW",
+                buildFollowPayload(
+                        eventId,
+                        sourceId,
+                        targetId,
+                        "UNFOLLOW",
+                        "follow:" + sourceId + ":" + targetId,
+                        projectionVersion));
         return FollowResultVO.builder().status("UNFOLLOWED").build();
     }
 
@@ -139,20 +177,38 @@ public class RelationService implements IRelationService {
                 .createTime(new Date(socialIdPort.now()))
                 .build();
         relationRepository.saveRelation(block);
-        relationRepository.deleteRelation(sourceId, targetId, RELATION_FOLLOW);
-        relationRepository.deleteRelation(targetId, sourceId, RELATION_FOLLOW);
+        if (forwardFollow) {
+            deactivateFollowIfActive(sourceId, targetId);
+        }
+        if (reverseFollow) {
+            deactivateFollowIfActive(targetId, sourceId);
+        }
 
         long eventId = socialIdPort.nextId();
         relationEventOutboxRepository.save(eventId, "BLOCK", buildBlockPayload(eventId, sourceId, targetId));
         if (forwardFollow) {
             long followEventId = socialIdPort.nextId();
+            long projectionVersion = relationVersion(sourceId, targetId);
             relationEventOutboxRepository.save(followEventId, "FOLLOW",
-                    buildFollowPayload(followEventId, sourceId, targetId, "UNFOLLOW"));
+                    buildFollowPayload(
+                            followEventId,
+                            sourceId,
+                            targetId,
+                            "UNFOLLOW",
+                            "follow:" + sourceId + ":" + targetId,
+                            projectionVersion));
         }
         if (reverseFollow) {
             long followEventId = socialIdPort.nextId();
+            long projectionVersion = relationVersion(targetId, sourceId);
             relationEventOutboxRepository.save(followEventId, "FOLLOW",
-                    buildFollowPayload(followEventId, targetId, sourceId, "UNFOLLOW"));
+                    buildFollowPayload(
+                            followEventId,
+                            targetId,
+                            sourceId,
+                            "UNFOLLOW",
+                            "follow:" + targetId + ":" + sourceId,
+                            projectionVersion));
         }
         return OperationResultVO.builder()
                 .success(true)
@@ -176,12 +232,19 @@ public class RelationService implements IRelationService {
         return relation != null && Integer.valueOf(STATUS_ACTIVE).equals(relation.getStatus());
     }
 
-    private String buildFollowPayload(Long eventId, Long sourceId, Long targetId, String status) {
+    private String buildFollowPayload(Long eventId,
+                                      Long sourceId,
+                                      Long targetId,
+                                      String status,
+                                      String projectionKey,
+                                      Long projectionVersion) {
         return "{"
                 + "\"eventId\":" + eventId + ","
                 + "\"sourceId\":" + sourceId + ","
                 + "\"targetId\":" + targetId + ","
-                + "\"status\":\"" + safe(status) + "\""
+                + "\"status\":\"" + safe(status) + "\","
+                + "\"projectionKey\":\"" + safe(projectionKey) + "\","
+                + "\"projectionVersion\":" + (projectionVersion == null ? 0L : projectionVersion)
                 + "}";
     }
 
@@ -198,5 +261,29 @@ public class RelationService implements IRelationService {
             return "";
         }
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private void deactivateFollowIfActive(Long sourceId, Long targetId) {
+        RelationEntity locked = relationRepository.findRelationForUpdate(sourceId, targetId, RELATION_FOLLOW);
+        if (locked == null || !Integer.valueOf(STATUS_ACTIVE).equals(locked.getStatus())) {
+            return;
+        }
+        boolean updated = relationRepository.deactivateRelation(
+                sourceId,
+                targetId,
+                RELATION_FOLLOW,
+                locked.getVersion(),
+                STATUS_INACTIVE);
+        if (!updated) {
+            throw new IllegalStateException("block cleanup relation CAS conflict");
+        }
+    }
+
+    private long relationVersion(Long sourceId, Long targetId) {
+        RelationEntity relation = relationRepository.findRelation(sourceId, targetId, RELATION_FOLLOW);
+        if (relation == null || relation.getVersion() == null) {
+            return 0L;
+        }
+        return relation.getVersion();
     }
 }

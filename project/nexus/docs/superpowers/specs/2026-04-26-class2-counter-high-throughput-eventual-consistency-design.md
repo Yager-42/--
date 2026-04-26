@@ -49,6 +49,20 @@ Use state-transition incremental projection for the normal path, and move full r
 
 Normal RabbitMQ consumers must be O(1) relative to user fanout size and post count. They must not call `rebuildAllCounters(userId)` during ordinary successful projection.
 
+## Relation Truth Lifecycle Requirement
+
+`RELATION_FOLLOW` must keep one durable business row identity per `(sourceId, targetId, relationType)`.
+
+Required lifecycle:
+
+- first follow inserts the row with version `0`
+- unfollow does not physically delete the row; it transitions status to inactive and increments version
+- re-follow reactivates the same row and increments version again
+
+The write side must lock the row, apply `(status, version)` CAS semantics, and emit the committed post-update version into the projection event.
+
+Without this monotonic row lifecycle, durable projection ordering by relation version is not defensible.
+
 ## Normal Projection Flow
 
 ### Common Consumer Contract
@@ -61,6 +75,7 @@ Normal RabbitMQ consumers must be O(1) relative to user fanout size and post cou
 6. The processor applies only confirmed state-transition side effects.
 7. The consumer marks the event `DONE` only after all required side effects or repair registration completes.
 8. The consumer acknowledges only after the transaction succeeds.
+9. If the consumer transaction later fails after a Redis delta was already applied, replay must still be safe because Redis counter mutation is per-event idempotent by event id and counter slot.
 
 ### Follow Created Projection
 
@@ -70,13 +85,13 @@ For a `FOLLOW ACTIVE` event:
 2. Confirm the current relation truth row is active.
 3. Call `saveFollowerIfAbsent(targetId, sourceId)`.
 4. If the insert changes state:
-   - increment `USER.following` for `sourceId` by `+1`
-   - increment `USER.follower` for `targetId` by `+1`
+   - apply `USER.following` for `sourceId` by `+1` through per-event idempotent Redis delta
+   - apply `USER.follower` for `targetId` by `+1` through per-event idempotent Redis delta
    - add adjacency cache entries `uf:flws:{sourceId}` and `uf:fans:{targetId}`
 5. If the insert is ignored:
-   - do not increment counters
-   - refresh or repair adjacency cache if needed
-   - mark the event done
+   - do not guess that the system is already converged
+   - register Class 2 repair for `sourceId` and `targetId`
+   - repair may coalesce duplicates, but the event must not silently skip correction work
 
 ### Follow Canceled Projection
 
@@ -86,13 +101,25 @@ For a `FOLLOW UNFOLLOW` event:
 2. Confirm the current relation truth row is no longer active.
 3. Call `deleteFollowerIfPresent(targetId, sourceId)`.
 4. If the delete changes state:
-   - increment `USER.following` for `sourceId` by `-1`
-   - increment `USER.follower` for `targetId` by `-1`
+   - apply `USER.following` for `sourceId` by `-1` through per-event idempotent Redis delta
+   - apply `USER.follower` for `targetId` by `-1` through per-event idempotent Redis delta
    - remove adjacency cache entries
 5. If the delete affects no rows:
-   - do not decrement counters
-   - refresh or repair adjacency cache if needed
-   - mark the event done
+   - do not assume counters are already correct
+   - register Class 2 repair for `sourceId` and `targetId`
+   - repair may coalesce duplicates, but the event must not silently skip correction work
+
+### Block Projection
+
+`BLOCK` is consumed from a different RabbitMQ queue than `FOLLOW`, so it must not own follower-table or counter transitions.
+
+Required behavior:
+
+- `BLOCK` may invalidate adjacency cache in both directions
+- `BLOCK` must not delete `user_follower` rows
+- `BLOCK` must not increment or decrement `USER.following` or `USER.follower`
+
+The paired `FOLLOW UNFOLLOW` events remain the only counter-transition carriers for relation counters.
 
 ### Post Projection
 
@@ -100,11 +127,11 @@ The content write side must emit a post counter outbox event only for a real pub
 
 For a `POST PUBLISHED` event:
 
-- increment `USER.post` for the author by `+1`
+- apply `USER.post` for the author by `+1` through per-event idempotent Redis delta
 
 For a `POST UNPUBLISHED` or `POST DELETED` event:
 
-- increment `USER.post` for the author by `-1`
+- apply `USER.post` for the author by `-1` through per-event idempotent Redis delta
 
 Duplicate event ids must not increment twice.
 
@@ -123,10 +150,17 @@ Acceptable short-term fallback:
 
 Ordering granularity:
 
-- relation events use `(sourceId, targetId, relationType)`
-- post events use `postId`
+- relation events use `projection_key = follow:{sourceId}:{targetId}`
+- post events use `projection_key = post:{postId}`
 
-The system must persist the last projected version/watermark for each granularity in a durable projection-state record. An event with version less than or equal to the stored watermark is acknowledged without counter mutation.
+The system must persist the last projected version/watermark for each `projection_key` in a durable projection-state record.
+
+Required semantics:
+
+- `projection_key` is the only durable ordering identity
+- `projection_type` may be stored as audit metadata, but it is not a second primary-key dimension
+- an event with version less than or equal to the stored watermark is acknowledged without counter mutation
+- repository APIs must return an explicit result such as `ADVANCED` or `STALE`; they must not rely on JDBC affected-row guessing for the idempotency boundary
 
 If the first implementation uses monotonic outbox event id as the ordering source, the spec requires that the id source is monotonic for all events of the same relation pair or post. If that property cannot be proven, the processor must treat ordering as uncertain and enqueue repair rather than applying an incremental update.
 
@@ -147,10 +181,12 @@ The retry must not blindly skip all side effects, because Redis may still be mis
 
 Required behavior:
 
-- If state transition and Redis increment both complete, mark the event done.
+- If state transition and Redis delta both complete, mark the event done.
 - If state transition succeeds but Redis or cache side effects fail, register Class 2 repair for affected users before marking the event done.
 - If repair registration fails, do not mark the event done; allow retry or DLQ.
 - The main consumer must not run full rebuild inline for this failure path.
+- If Redis delta succeeded but the enclosing DB transaction later rolls back or `markDone(...)` fails, redelivery must not double-apply the delta; the Redis mutation path must therefore be per-event idempotent.
+- If projection watermark advanced but later side effects fail, the system must either register repair before ack or rely on retry/DLQ replay without allowing duplicate Redis delta application.
 
 Affected repair users:
 
@@ -168,8 +204,10 @@ Repair task requirements:
 - key by `userId` and repair type
 - coalesce duplicate pending tasks for the same user
 - support retry with backoff
+- support lease-based claim recovery for worker crash or long GC pause
 - record last error for operation visibility
 - allow manual enqueue
+- persist claim ownership fields such as `claim_owner`, `claimed_at`, and `lease_until`
 
 Repair worker behavior:
 
@@ -178,11 +216,13 @@ Repair worker behavior:
 3. Apply per-user rate limit, for example 30 to 60 seconds.
 4. Rebuild only Class 2 slots by default:
    - `following` from relation truth
-   - `follower` from follower table or relation truth
+   - `follower` from relation truth
    - `post` from published content rows
 5. Preserve current `like_received` and `favorite_received` slots unless an explicit full mixed-source rebuild is requested.
 6. Write the corrected `ucnt:{userId}` snapshot atomically enough for readers to see either old or new payload, never a malformed partial payload.
 7. Mark the repair task done or retry later.
+
+If the worker claims a task but cannot get the Redis rate-limit token or user lock, it must release or reschedule the task explicitly. It must not leave the task stranded in `RUNNING`.
 
 `rebuildAllCounters(userId)` may remain for full mixed-source read repair, but normal Class 2 projection and Class 2 repair should prefer a narrower operation such as `repairClass2Counters(userId)`.
 
@@ -194,7 +234,7 @@ It should keep the existing safeguards:
 
 - missing or malformed `ucnt:{userId}` triggers rebuild and second read
 - `ucnt:chk:{userId}` throttles sampled verification
-- sampled verification compares only `following` and `follower` against MySQL truth
+- sampled verification compares `following`, `follower`, and `post` against MySQL truth
 - mismatch triggers repair or guarded rebuild
 
 For high availability, sampled mismatch should prefer enqueueing Class 2 repair when the request path cannot afford synchronous rebuild. Synchronous guarded rebuild is acceptable for low-frequency malformed snapshot recovery.
@@ -206,8 +246,9 @@ The design guarantees eventual consistency for Class 2 counters if:
 - MySQL business truth and outbox writes commit atomically.
 - RabbitMQ eventually delivers or DLQ replay is performed.
 - Consumer idempotency is persisted by event id and consumer name.
-- Relation follower table has a unique key on `(user_id, follower_id)`.
-- Redis SDS increments are atomic.
+- `RELATION_FOLLOW` row version is monotonic across follow, unfollow, and re-follow.
+- Relation follower table has a unique key on `(user_id, follower_id)` for projection dedupe.
+- Redis user-slot delta application is atomic and per-event idempotent.
 - Projection failure registers repair when side effects are uncertain.
 - Repair worker eventually runs successfully.
 
@@ -232,9 +273,15 @@ Follow/unfollow race:
 - processor ordering/watermark prevents older events from mutating counters after newer entity state is projected.
 - uncertain ordering falls back to repair rather than guessing.
 
+Block/follow-unfollow cross-queue race:
+
+- `BLOCK` does not mutate follower rows or counters, so it cannot consume the only `-1` transition that `FOLLOW UNFOLLOW` needs to apply.
+- if `FOLLOW UNFOLLOW` finds projection-state uncertainty or follower-table drift, it must enqueue repair rather than silently no-op.
+
 Redis increment contention:
 
-- user slots must be incremented with Lua SDS slot increment, not read-modify-write.
+- user slots must be updated with Lua-based atomic slot mutation, not read-modify-write.
+- redelivery after partial failure must not double-apply deltas because the Redis mutation is deduped by event id and slot.
 
 MQ backlog:
 
@@ -258,6 +305,14 @@ This reduces pressure on:
 - MySQL relation/content indexes
 - Redis object counter reads
 
+This design is not a full high-availability design for Redis outage scenarios.
+
+It improves steady-state projection availability and gives durable recovery through repair plus DLQ replay, but it does not define:
+
+- Redis-free read fallback
+- Redis-free write degradation
+- zero-intervention recovery guarantees during prolonged Redis outage
+
 ## Observability
 
 The implementation should expose logs or metrics for:
@@ -269,6 +324,8 @@ The implementation should expose logs or metrics for:
 - repair task success/failure count
 - repair lag
 - consumer DLQ count
+- consumer replay count
+- repair claim lease timeout count
 - `ucnt` sampled verification mismatch count
 
 ## Testing Requirements
@@ -282,17 +339,26 @@ Unit tests:
 - old relation event is acknowledged without counter mutation
 - old post event is acknowledged without counter mutation
 - Redis increment failure after follower-table transition enqueues repair
+- Redis delta success followed by consumer transaction rollback does not double increment on replay
 - repair registration failure does not mark the event done
 - normal processor path does not call `rebuildAllCounters`
 - Class 2 repair preserves `like_received` unless full rebuild is requested
+- `BLOCK` projection does not mutate follower table or counters
+- projection-state repository returns explicit `ADVANCED` / `STALE`
+- repair-task claim reclaims expired leases
+- rate-limit or user-lock refusal does not strand repair task in `RUNNING`
 
 Integration tests:
 
 - follow/unfollow high-concurrency smoke test converges `ucnt` to MySQL truth
 - post publish/unpublish/delete converges `USER.post`
 - RabbitMQ redelivery does not double count
+- `BLOCK` delivered before paired `FOLLOW UNFOLLOW` still converges counters
 - DLQ replay or repair task processing corrects drift
+- dead-lettered relation projection is replayable through the existing replay job
 - sampled verification mismatch triggers repair or guarded rebuild
+- repair worker crash after claim is recoverable by lease expiry
+- multi-worker repair claim does not execute one task twice
 
 Load or stress tests:
 
@@ -302,10 +368,11 @@ Load or stress tests:
 ## Migration Plan
 
 1. Add tests that capture current rebuild-heavy projection cost and desired no-rebuild normal path.
-2. Add durable projection ordering/watermark support.
-3. Add the DB-backed Class 2 repair task table and repository.
-4. Change relation/post processor from rebuild-based updates to state-transition increments.
-5. Add Class 2 repair registration for uncertain side-effect failures.
-6. Add Class 2 repair worker processing with lock, coalescing, and rate limiting.
-7. Keep read-path sampled verification as a final guard.
-8. Verify old full rebuild is no longer used by normal RabbitMQ projection.
+2. Make `RELATION_FOLLOW` lifecycle monotonic across follow/unfollow/re-follow.
+3. Add durable projection ordering/watermark support keyed by `projection_key`.
+4. Add the DB-backed Class 2 repair task table and repository with lease-based claim semantics.
+5. Change relation/post processor from rebuild-based updates to state-transition increments with per-event idempotent Redis delta application.
+6. Add Class 2 repair registration for uncertain side-effect failures.
+7. Add Class 2 repair worker processing with lock, coalescing, lease reclaim, and rate limiting.
+8. Keep read-path sampled verification as a final guard.
+9. Verify old full rebuild is no longer used by normal RabbitMQ projection.

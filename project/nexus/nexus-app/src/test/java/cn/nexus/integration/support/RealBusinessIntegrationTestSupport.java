@@ -201,6 +201,9 @@ public abstract class RealBusinessIntegrationTestSupport {
         execUpdate("DELETE FROM reliable_mq_outbox");
         execUpdate("DELETE FROM reliable_mq_consumer_record");
         execUpdate("DELETE FROM reliable_mq_replay_record");
+        execUpdate("DELETE FROM class2_counter_projection_state");
+        execUpdate("DELETE FROM class2_user_counter_repair_task");
+        execUpdate("DELETE FROM user_follower");
     }
 
     protected int execUpdate(String sql) {

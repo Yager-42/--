@@ -148,6 +148,13 @@ public final class CountRedisKeys {
         return "ucnt:chk:" + userId;
     }
 
+    public static String userProjectionEventDedup(String eventId, Long userId, UserCounterType counterType) {
+        if (eventId == null || eventId.isBlank() || userId == null || counterType == null) {
+            return null;
+        }
+        return "ucnt:evt:dedup:" + userId + ":" + counterType.getCode() + ":" + eventId;
+    }
+
     public static String bitmapField(ObjectCounterType counterType) {
         if (counterType == ObjectCounterType.LIKE) {
             return counterType.getCode();

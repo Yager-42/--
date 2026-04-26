@@ -13,7 +13,22 @@ public interface IRelationDao {
 
     RelationPO selectOne(@Param("sourceId") Long sourceId, @Param("targetId") Long targetId, @Param("relationType") Integer relationType);
 
-    int delete(@Param("sourceId") Long sourceId, @Param("targetId") Long targetId, @Param("relationType") Integer relationType);
+    RelationPO selectOneForUpdate(@Param("sourceId") Long sourceId, @Param("targetId") Long targetId, @Param("relationType") Integer relationType);
+
+    int activate(@Param("sourceId") Long sourceId,
+                 @Param("targetId") Long targetId,
+                 @Param("relationType") Integer relationType,
+                 @Param("expectedVersion") Long expectedVersion,
+                 @Param("activeStatus") Integer activeStatus,
+                 @Param("inactiveStatus") Integer inactiveStatus,
+                 @Param("createTime") Date createTime);
+
+    int deactivate(@Param("sourceId") Long sourceId,
+                   @Param("targetId") Long targetId,
+                   @Param("relationType") Integer relationType,
+                   @Param("expectedVersion") Long expectedVersion,
+                   @Param("activeStatus") Integer activeStatus,
+                   @Param("inactiveStatus") Integer inactiveStatus);
 
     List<RelationPO> selectBySource(@Param("sourceId") Long sourceId, @Param("relationType") Integer relationType);
 

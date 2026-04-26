@@ -24,19 +24,19 @@ class RelationEventOutboxPublishJobTest {
         RelationEventOutboxVO outbox = RelationEventOutboxVO.builder()
                 .eventId(900L)
                 .eventType("POST")
-                .payload("{\"eventId\":900,\"sourceId\":11,\"targetId\":101,\"status\":\"PUBLISHED\"}")
+                .payload("{\"eventId\":900,\"sourceId\":11,\"targetId\":101,\"status\":\"PUBLISHED\",\"projectionKey\":\"post:101\",\"projectionVersion\":3}")
                 .retryCount(0)
                 .build();
         when(outboxRepository.fetchPending(eq("NEW"), Mockito.any(Date.class), eq(100)))
                 .thenReturn(List.of(outbox));
         when(outboxRepository.fetchPending(eq("FAIL"), Mockito.any(Date.class), eq(100)))
                 .thenReturn(List.of());
-        when(relationEventPort.publishCounterProjection(900L, "POST", 11L, 101L, "PUBLISHED"))
+        when(relationEventPort.publishCounterProjection(900L, "POST", 11L, 101L, "PUBLISHED", "post:101", 3L))
                 .thenReturn(true);
 
         job.publishPending();
 
-        verify(relationEventPort).publishCounterProjection(900L, "POST", 11L, 101L, "PUBLISHED");
+        verify(relationEventPort).publishCounterProjection(900L, "POST", 11L, 101L, "PUBLISHED", "post:101", 3L);
         verify(outboxRepository).markSent(900L);
         verify(outboxRepository, never()).markFail(eq(900L), Mockito.any(Date.class));
     }
@@ -49,19 +49,19 @@ class RelationEventOutboxPublishJobTest {
         RelationEventOutboxVO outbox = RelationEventOutboxVO.builder()
                 .eventId(901L)
                 .eventType("POST")
-                .payload("{\"eventId\":901,\"sourceId\":11,\"targetId\":101,\"status\":\"UNPUBLISHED\"}")
+                .payload("{\"eventId\":901,\"sourceId\":11,\"targetId\":101,\"status\":\"UNPUBLISHED\",\"projectionKey\":\"post:101\",\"projectionVersion\":4}")
                 .retryCount(0)
                 .build();
         when(outboxRepository.fetchPending(eq("NEW"), Mockito.any(Date.class), eq(100)))
                 .thenReturn(List.of(outbox));
         when(outboxRepository.fetchPending(eq("FAIL"), Mockito.any(Date.class), eq(100)))
                 .thenReturn(List.of());
-        when(relationEventPort.publishCounterProjection(901L, "POST", 11L, 101L, "UNPUBLISHED"))
+        when(relationEventPort.publishCounterProjection(901L, "POST", 11L, 101L, "UNPUBLISHED", "post:101", 4L))
                 .thenReturn(false);
 
         job.publishPending();
 
-        verify(relationEventPort).publishCounterProjection(901L, "POST", 11L, 101L, "UNPUBLISHED");
+        verify(relationEventPort).publishCounterProjection(901L, "POST", 11L, 101L, "UNPUBLISHED", "post:101", 4L);
         verify(outboxRepository, never()).markSent(901L);
         verify(outboxRepository).markFail(eq(901L), Mockito.any(Date.class));
     }

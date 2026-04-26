@@ -26,7 +26,14 @@ class RelationEventPortTest {
                 });
         RelationEventPort port = new RelationEventPort(rabbitTemplate);
 
-        boolean published = port.publishCounterProjection(900L, "POST", 11L, 101L, "PUBLISHED");
+        boolean published = port.publishCounterProjection(
+                900L,
+                "POST",
+                11L,
+                101L,
+                "PUBLISHED",
+                "post:101",
+                3L);
 
         assertTrue(published);
         ArgumentCaptor<RelationCounterProjectEvent> eventCaptor =
@@ -41,6 +48,8 @@ class RelationEventPortTest {
         org.junit.jupiter.api.Assertions.assertEquals(11L, event.getSourceId());
         org.junit.jupiter.api.Assertions.assertEquals(101L, event.getTargetId());
         org.junit.jupiter.api.Assertions.assertEquals("PUBLISHED", event.getStatus());
+        org.junit.jupiter.api.Assertions.assertEquals("post:101", event.getProjectionKey());
+        org.junit.jupiter.api.Assertions.assertEquals(3L, event.getProjectionVersion());
         verify(rabbitTemplate).waitForConfirmsOrDie(5000L);
     }
 }

@@ -31,14 +31,11 @@ public interface IRelationRepository {
      */
     RelationEntity findRelation(Long sourceId, Long targetId, Integer relationType);
 
-    /**
-     * 删除指定关系边。
-     *
-     * @param sourceId 发起方用户 ID，类型：{@link Long}
-     * @param targetId 目标用户 ID，类型：{@link Long}
-     * @param relationType 关系类型，类型：{@link Integer}
-     */
-    void deleteRelation(Long sourceId, Long targetId, Integer relationType);
+    RelationEntity findRelationForUpdate(Long sourceId, Long targetId, Integer relationType);
+
+    boolean activateRelation(Long sourceId, Long targetId, Integer relationType, Long expectedVersion, Date createTime);
+
+    boolean deactivateRelation(Long sourceId, Long targetId, Integer relationType, Long expectedVersion, Integer inactiveStatus);
 
     /**
      * 按发起方查询关系边列表。

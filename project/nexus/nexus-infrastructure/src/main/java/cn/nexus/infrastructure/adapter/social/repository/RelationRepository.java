@@ -17,6 +17,9 @@ import org.springframework.stereotype.Repository;
 @RequiredArgsConstructor
 public class RelationRepository implements IRelationRepository {
 
+    private static final int STATUS_ACTIVE = 1;
+    private static final int STATUS_INACTIVE = 0;
+
     private final IRelationDao relationDao;
     private final IFollowerDao followerDao;
 
@@ -35,8 +38,37 @@ public class RelationRepository implements IRelationRepository {
     }
 
     @Override
-    public void deleteRelation(Long sourceId, Long targetId, Integer relationType) {
-        relationDao.delete(sourceId, targetId, relationType);
+    public RelationEntity findRelationForUpdate(Long sourceId, Long targetId, Integer relationType) {
+        return toEntity(relationDao.selectOneForUpdate(sourceId, targetId, relationType));
+    }
+
+    @Override
+    public boolean activateRelation(Long sourceId, Long targetId, Integer relationType, Long expectedVersion, Date createTime) {
+        if (sourceId == null || targetId == null || relationType == null || expectedVersion == null) {
+            return false;
+        }
+        return relationDao.activate(
+                sourceId,
+                targetId,
+                relationType,
+                expectedVersion,
+                STATUS_ACTIVE,
+                STATUS_INACTIVE,
+                createTime) > 0;
+    }
+
+    @Override
+    public boolean deactivateRelation(Long sourceId, Long targetId, Integer relationType, Long expectedVersion, Integer inactiveStatus) {
+        if (sourceId == null || targetId == null || relationType == null || expectedVersion == null) {
+            return false;
+        }
+        return relationDao.deactivate(
+                sourceId,
+                targetId,
+                relationType,
+                expectedVersion,
+                STATUS_ACTIVE,
+                inactiveStatus == null ? STATUS_INACTIVE : inactiveStatus) > 0;
     }
 
     @Override

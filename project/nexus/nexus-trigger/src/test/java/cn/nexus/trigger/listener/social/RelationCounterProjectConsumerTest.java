@@ -29,7 +29,8 @@ class RelationCounterProjectConsumerTest {
         RelationCounterProjectConsumer consumer = new RelationCounterProjectConsumer(
                 processor,
                 consumerRecordService,
-                new TransactionTemplate(transactionManager));
+                new TransactionTemplate(transactionManager),
+                transactionManager);
         RelationCounterProjectEvent event = new RelationCounterProjectEvent();
         event.setEventId("relation-counter:900");
         event.setRelationEventId(900L);
@@ -70,7 +71,8 @@ class RelationCounterProjectConsumerTest {
         RelationCounterProjectConsumer consumer = new RelationCounterProjectConsumer(
                 processor,
                 consumerRecordService,
-                new TransactionTemplate(transactionManager));
+                new TransactionTemplate(transactionManager),
+                transactionManager);
         RelationCounterProjectEvent event = new RelationCounterProjectEvent();
         event.setEventId("relation-counter:901");
         MessageProperties properties = new MessageProperties();
@@ -85,6 +87,41 @@ class RelationCounterProjectConsumerTest {
         verify(processor, Mockito.never()).process(event);
         verify(channel).basicNack(78L, false, true);
         verify(channel, Mockito.never()).basicAck(78L, false);
+    }
+
+    @Test
+    void onPost_whenProcessorThrows_shouldRollbackMarkFailAndRegisterRepair() throws Exception {
+        RelationCounterProjectionProcessor processor = Mockito.mock(RelationCounterProjectionProcessor.class);
+        ReliableMqConsumerRecordService consumerRecordService = Mockito.mock(ReliableMqConsumerRecordService.class);
+        RecordingTransactionManager transactionManager = new RecordingTransactionManager();
+        RelationCounterProjectConsumer consumer = new RelationCounterProjectConsumer(
+                processor,
+                consumerRecordService,
+                new TransactionTemplate(transactionManager),
+                transactionManager);
+        RelationCounterProjectEvent event = new RelationCounterProjectEvent();
+        event.setEventId("relation-counter:902");
+        event.setRelationEventId(902L);
+        event.setEventType("FOLLOW");
+        event.setSourceId(11L);
+        event.setTargetId(22L);
+        event.setStatus("ACTIVE");
+        MessageProperties properties = new MessageProperties();
+        properties.setDeliveryTag(79L);
+        Message message = new Message(new byte[0], properties);
+        Channel channel = Mockito.mock(Channel.class);
+        when(consumerRecordService.startManual("relation-counter:902", "RelationCounterProjectConsumer", "{}"))
+                .thenReturn(StartResult.STARTED);
+        Mockito.doThrow(new IllegalStateException("boom")).when(processor).process(event);
+
+        consumer.onPost(event, message, channel);
+
+        verify(processor).registerFailureRepair(event, "boom");
+        verify(consumerRecordService).markFail("relation-counter:902", "RelationCounterProjectConsumer", "boom");
+        verify(channel).basicNack(79L, false, false);
+        verify(channel, Mockito.never()).basicAck(79L, false);
+        org.assertj.core.api.Assertions.assertThat(transactionManager.events)
+                .containsExactly("begin", "rollback", "begin", "commit");
     }
 
     static class RecordingTransactionManager extends AbstractPlatformTransactionManager {

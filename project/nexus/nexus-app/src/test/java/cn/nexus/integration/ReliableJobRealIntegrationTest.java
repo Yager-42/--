@@ -211,6 +211,8 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         relationEvent.setSourceId(followerId);
         relationEvent.setTargetId(followeeId);
         relationEvent.setStatus("ACTIVE");
+        relationEvent.setProjectionKey("follow:" + followerId + ":" + followeeId);
+        relationEvent.setProjectionVersion(eventId);
         po.setPayload(objectMapper.writeValueAsString(relationEvent));
         po.setStatus("NEW");
         po.setRetryCount(0);
@@ -249,6 +251,8 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         event.setSourceId(followerId);
         event.setTargetId(followeeId);
         event.setStatus("ACTIVE");
+        event.setProjectionKey("follow:" + followerId + ":" + followeeId);
+        event.setProjectionVersion(eventId);
 
         rabbitTemplate.convertAndSend(RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_FOLLOW, event);
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->

@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -26,6 +27,7 @@ public class RelationCounterProjectConsumer {
     private final RelationCounterProjectionProcessor processor;
     private final ReliableMqConsumerRecordService consumerRecordService;
     private final TransactionTemplate transactionTemplate;
+    private final PlatformTransactionManager transactionManager;
 
     @RabbitListener(queues = RelationMqConfig.Q_FOLLOW, containerFactory = "relationManualAckListenerContainerFactory")
     public void onFollow(RelationCounterProjectEvent event, Message message, Channel channel) throws Exception {
@@ -66,6 +68,8 @@ public class RelationCounterProjectConsumer {
         } catch (InProgressRedeliveryException e) {
             channel.basicNack(deliveryTag, false, true);
         } catch (Exception e) {
+            TransactionTemplate repairTemplate = new TransactionTemplate(transactionManager);
+            repairTemplate.executeWithoutResult(status -> processor.registerFailureRepair(event, e.getMessage()));
             consumerRecordService.markFail(eventId, CONSUMER_NAME, e.getMessage());
             log.error("relation counter projection consume failed, eventId={}", eventId, e);
             channel.basicNack(deliveryTag, false, false);

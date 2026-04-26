@@ -75,21 +75,42 @@ public class RelationEventOutboxPublishJob {
         }
         if ("FOLLOW".equals(item.getEventType())) {
             RelationOutboxPayload event = objectMapper.readValue(item.getPayload(), RelationOutboxPayload.class);
-            if (!relationEventPort.publishCounterProjection(event.eventId, "FOLLOW", event.sourceId, event.targetId, event.status)) {
+            if (!relationEventPort.publishCounterProjection(
+                    event.eventId,
+                    "FOLLOW",
+                    event.sourceId,
+                    event.targetId,
+                    event.status,
+                    event.projectionKey,
+                    event.projectionVersion)) {
                 throw new IllegalStateException("publish relation follow projection failed");
             }
             return;
         }
         if ("BLOCK".equals(item.getEventType())) {
             RelationOutboxPayload event = objectMapper.readValue(item.getPayload(), RelationOutboxPayload.class);
-            if (!relationEventPort.publishCounterProjection(event.eventId, "BLOCK", event.sourceId, event.targetId, null)) {
+            if (!relationEventPort.publishCounterProjection(
+                    event.eventId,
+                    "BLOCK",
+                    event.sourceId,
+                    event.targetId,
+                    null,
+                    event.projectionKey,
+                    event.projectionVersion)) {
                 throw new IllegalStateException("publish relation block projection failed");
             }
             return;
         }
         if ("POST".equals(item.getEventType())) {
             RelationOutboxPayload event = objectMapper.readValue(item.getPayload(), RelationOutboxPayload.class);
-            if (!relationEventPort.publishCounterProjection(event.eventId, "POST", event.sourceId, event.targetId, event.status)) {
+            if (!relationEventPort.publishCounterProjection(
+                    event.eventId,
+                    "POST",
+                    event.sourceId,
+                    event.targetId,
+                    event.status,
+                    event.projectionKey,
+                    event.projectionVersion)) {
                 throw new IllegalStateException("publish post counter projection failed");
             }
             return;
@@ -108,5 +129,7 @@ public class RelationEventOutboxPublishJob {
         public Long sourceId;
         public Long targetId;
         public String status;
+        public String projectionKey;
+        public Long projectionVersion;
     }
 }

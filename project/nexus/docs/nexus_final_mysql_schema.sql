@@ -155,6 +155,34 @@ CREATE TABLE IF NOT EXISTS `relation_event_outbox` (
   KEY `idx_relation_outbox_status_update_time` (`status`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='关系事件Outbox';
 
+CREATE TABLE IF NOT EXISTS `class2_counter_projection_state` (
+  `projection_key` VARCHAR(128) NOT NULL,
+  `projection_type` VARCHAR(32) NOT NULL,
+  `last_version` BIGINT NOT NULL,
+  `update_time` DATETIME NOT NULL,
+  PRIMARY KEY (`projection_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Class2计数投影水位';
+
+CREATE TABLE IF NOT EXISTS `class2_user_counter_repair_task` (
+  `task_id` BIGINT NOT NULL,
+  `repair_type` VARCHAR(32) NOT NULL,
+  `user_id` BIGINT NOT NULL,
+  `dedupe_key` VARCHAR(64) NOT NULL,
+  `status` VARCHAR(16) NOT NULL,
+  `retry_count` INT NOT NULL,
+  `claim_owner` VARCHAR(64) DEFAULT NULL,
+  `claimed_at` DATETIME DEFAULT NULL,
+  `lease_until` DATETIME DEFAULT NULL,
+  `next_retry_time` DATETIME NOT NULL,
+  `reason` VARCHAR(255) DEFAULT NULL,
+  `last_error` VARCHAR(255) DEFAULT NULL,
+  `create_time` DATETIME NOT NULL,
+  `update_time` DATETIME NOT NULL,
+  PRIMARY KEY (`task_id`),
+  UNIQUE KEY `uk_class2_user_counter_repair_task_dedupe` (`dedupe_key`),
+  KEY `idx_class2_user_counter_repair_task_claim` (`status`, `next_retry_time`, `lease_until`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Class2用户计数修复任务';
+
 CREATE TABLE IF NOT EXISTS `relation_event_inbox` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `event_type` VARCHAR(32) NOT NULL,

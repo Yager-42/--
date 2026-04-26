@@ -304,7 +304,6 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         comment.setContentId(uniqueUuid());
         comment.setStatus(2);
         comment.setLikeCount(0L);
-        comment.setReplyCount(0L);
         comment.setCreateTime(oldTime);
         comment.setUpdateTime(oldTime);
         commentDao.insert(comment);

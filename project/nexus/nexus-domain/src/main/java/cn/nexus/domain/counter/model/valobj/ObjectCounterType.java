@@ -8,8 +8,7 @@ package cn.nexus.domain.counter.model.valobj;
  */
 public enum ObjectCounterType {
 
-    LIKE("like"),
-    REPLY("reply");
+    LIKE("like");
 
     private final String code;
 

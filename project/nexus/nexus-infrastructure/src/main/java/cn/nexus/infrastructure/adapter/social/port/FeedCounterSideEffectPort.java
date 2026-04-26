@@ -3,7 +3,12 @@ package cn.nexus.infrastructure.adapter.social.port;
 import cn.nexus.domain.social.adapter.port.IFeedCounterSideEffectPort;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardStatRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
+import java.util.Iterator;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -30,6 +35,7 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedCardRepository feedCardRepository;
     private final FeedCardStatRepository feedCardStatRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     public void applyPostLikeDelta(Long postId, long delta) {
@@ -50,7 +56,9 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
                     }
                     if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(pageKey))) {
                         stringRedisTemplate.opsForSet().remove(indexKey, pageKey);
+                        continue;
                     }
+                    updatePageJson(pageKey, postId, delta);
                 }
                 if (ttlSeconds != null && ttlSeconds > 0) {
                     stringRedisTemplate.expire(indexKey, ttlSeconds, TimeUnit.SECONDS);
@@ -66,6 +74,80 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
         feedCardStatRepository.evictRedis(postId);
         deleteQuietly(FEED_CARD_KEY_PREFIX + postId);
         deleteQuietly(FEED_CARD_STAT_KEY_PREFIX + postId);
+    }
+
+    private void updatePageJson(String pageKey, Long postId, long delta) {
+        if (pageKey == null || pageKey.isBlank() || postId == null) {
+            return;
+        }
+        try {
+            Long pageTtlSeconds = stringRedisTemplate.getExpire(pageKey, TimeUnit.SECONDS);
+            String raw = stringRedisTemplate.opsForValue().get(pageKey);
+            if (raw == null || raw.isBlank()) {
+                return;
+            }
+            JsonNode root = objectMapper.readTree(raw);
+            boolean changed = applyLikeDelta(root, postId, delta);
+            if (!changed) {
+                return;
+            }
+            if (pageTtlSeconds != null && pageTtlSeconds > 0) {
+                stringRedisTemplate.opsForValue().set(pageKey, objectMapper.writeValueAsString(root), pageTtlSeconds, TimeUnit.SECONDS);
+            } else if (pageTtlSeconds != null && pageTtlSeconds == -1L) {
+                stringRedisTemplate.opsForValue().set(pageKey, objectMapper.writeValueAsString(root));
+            }
+        } catch (Exception e) {
+            log.warn("update feed page json like count failed, pageKey={}, postId={}, delta={}", pageKey, postId, delta, e);
+        }
+    }
+
+    private boolean applyLikeDelta(JsonNode node, Long postId, long delta) {
+        if (node == null || node.isNull()) {
+            return false;
+        }
+        if (node.isArray()) {
+            boolean changed = false;
+            for (JsonNode item : node) {
+                changed |= applyLikeDelta(item, postId, delta);
+            }
+            return changed;
+        }
+        if (!node.isObject()) {
+            return false;
+        }
+        ObjectNode object = (ObjectNode) node;
+        boolean changed = false;
+        if (matchesPost(object, postId) && object.has("likeCount")) {
+            long next = Math.max(0L, object.path("likeCount").asLong(0L) + delta);
+            object.put("likeCount", next);
+            changed = true;
+        }
+        Iterator<JsonNode> children = object.elements();
+        while (children.hasNext()) {
+            JsonNode child = children.next();
+            if (child instanceof ArrayNode || child instanceof ObjectNode) {
+                changed |= applyLikeDelta(child, postId, delta);
+            }
+        }
+        return changed;
+    }
+
+    private boolean matchesPost(ObjectNode object, Long postId) {
+        return matchesField(object, "postId", postId)
+                || matchesField(object, "id", postId)
+                || matchesField(object, "contentId", postId)
+                || matchesField(object, "entityId", postId);
+    }
+
+    private boolean matchesField(ObjectNode object, String field, Long postId) {
+        JsonNode value = object.get(field);
+        if (value == null || value.isNull()) {
+            return false;
+        }
+        if (value.isNumber()) {
+            return value.asLong() == postId;
+        }
+        return String.valueOf(postId).equals(value.asText());
     }
 
     private Set<String> findIndexKeys(Long postId) {

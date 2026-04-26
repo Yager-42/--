@@ -66,11 +66,6 @@ public class UserCounterService implements IUserCounterService {
     }
 
     @Override
-    public long incrementFavsReceived(Long userId, long delta) {
-        return increment(userId, UserCounterType.FAVORITE_RECEIVED, delta);
-    }
-
-    @Override
     public void setCount(Long userId, UserCounterType counterType, long count) {
         if (userId == null || counterType == null) {
             return;
@@ -123,9 +118,11 @@ public class UserCounterService implements IUserCounterService {
         if (aggregationBucket != null) {
             operations.addAggregationDelta(aggregationBucket, String.valueOf(userId), delta);
         }
-        long updated = Math.max(0L, snapshotValue(userId, counterType) + delta);
-        writeSnapshotValue(userId, counterType, updated);
-        return updated;
+        return operations.incrementSnapshotSlot(
+                CountRedisKeys.userSnapshot(userId),
+                CountRedisSchema.user().slotOf(counterType),
+                delta,
+                CountRedisSchema.user());
     }
 
     private long snapshotValue(Long userId, UserCounterType counterType) {
@@ -136,15 +133,15 @@ public class UserCounterService implements IUserCounterService {
         if (key == null) {
             return 0L;
         }
-        String rawSnapshot = redisTemplate.opsForValue().get(key);
-        if (rawSnapshot == null || rawSnapshot.isBlank()) {
+        byte[] rawSnapshot = new CountRedisOperations(redisTemplate).readSnapshotPayload(key);
+        if (rawSnapshot.length == 0) {
             return rebuildSnapshotValueIfNeeded(userId, counterType, key);
         }
         try {
             Map<String, Long> snapshot = decodeRawSnapshot(rawSnapshot);
             Long value = snapshot.get(counterType.getCode());
             if (value == null || snapshot.size() < CountRedisSchema.user().slotCount()
-                    || CountRedisCodec.fromRedisValue(rawSnapshot).length != CountRedisSchema.user().totalPayloadBytes()) {
+                    || rawSnapshot.length != CountRedisSchema.user().totalPayloadBytes()) {
                 return rebuildSnapshotValueIfNeeded(userId, counterType, key);
             }
             return Math.max(0L, value);
@@ -162,8 +159,8 @@ public class UserCounterService implements IUserCounterService {
         if (value != null) {
             return Math.max(0L, value);
         }
-        String rawSnapshot = redisTemplate.opsForValue().get(key);
-        if (rawSnapshot == null || rawSnapshot.isBlank()) {
+        byte[] rawSnapshot = new CountRedisOperations(redisTemplate).readSnapshotPayload(key);
+        if (rawSnapshot.length == 0) {
             return 0L;
         }
         try {
@@ -258,7 +255,7 @@ public class UserCounterService implements IUserCounterService {
         operations.writeUserSnapshot(key, snapshot, CountRedisSchema.user());
     }
 
-    private Map<String, Long> decodeRawSnapshot(String rawSnapshot) {
+    private Map<String, Long> decodeRawSnapshot(byte[] rawSnapshot) {
         CountRedisSchema schema = CountRedisSchema.user();
         long[] decoded = CountRedisCodec.decodeSlots(
                 CountRedisCodec.fromRedisValue(rawSnapshot),
@@ -276,13 +273,13 @@ public class UserCounterService implements IUserCounterService {
         if (key == null) {
             return new SnapshotState(false, Map.of());
         }
-        String rawSnapshot = redisTemplate.opsForValue().get(key);
-        if (rawSnapshot == null || rawSnapshot.isBlank()) {
+        byte[] rawSnapshot = new CountRedisOperations(redisTemplate).readSnapshotPayload(key);
+        if (rawSnapshot.length == 0) {
             return new SnapshotState(false, Map.of());
         }
         try {
             byte[] decoded = CountRedisCodec.fromRedisValue(rawSnapshot);
-            if (decoded.length < CountRedisSchema.user().totalPayloadBytes()) {
+            if (decoded.length != CountRedisSchema.user().totalPayloadBytes()) {
                 return new SnapshotState(false, Map.of());
             }
             Map<String, Long> snapshot = decodeRawSnapshot(rawSnapshot);

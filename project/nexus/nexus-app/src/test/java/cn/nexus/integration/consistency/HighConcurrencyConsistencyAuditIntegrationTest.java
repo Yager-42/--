@@ -30,7 +30,7 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
     private RabbitListenerEndpointRegistry rabbitListenerEndpointRegistry;
 
     @Test
-    void postLike_highConcurrencyAudit_shouldAlignRedisEventLogAndApiState() throws Exception {
+    void postLike_highConcurrencyAudit_shouldAlignRedisSnapshotAndApiState() throws Exception {
         ensureAllConsumersStarted();
         TestSession author = registerAndLoginSession("audit-like-author");
         List<TestSession> likers = new ArrayList<>();
@@ -60,14 +60,11 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             publishPendingReliableMqMessages();
             assertThat(readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE)).isEqualTo(expected);
-            assertThat(queryReactionEventLogCount("POST", postId, "LIKE")).isEqualTo(expected);
         });
 
         long redisCount = readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE);
-        long eventLogCount = queryReactionEventLogCount("POST", postId, "LIKE");
 
         assertThat(redisCount).isEqualTo(expected);
-        assertThat(eventLogCount).isEqualTo(expected);
 
         JsonNode state = assertSuccess(getJson(
                 "/api/v1/interact/reaction/state?targetId=" + postId + "&targetType=POST&type=LIKE", likers.get(0).token()));

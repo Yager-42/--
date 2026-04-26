@@ -32,8 +32,6 @@ public class CommentViewVO {
     private String content;
     private Integer status;
     private Long likeCount;
-    private Long replyCount;
     /** 毫秒时间戳（与 CommentResponseDTO.createTime 一致） */
     private Long createTime;
 }
-

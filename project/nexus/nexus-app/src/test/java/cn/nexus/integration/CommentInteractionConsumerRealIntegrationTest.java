@@ -8,7 +8,7 @@ import cn.nexus.infrastructure.dao.social.ICommentDao;
 import cn.nexus.infrastructure.dao.social.po.CommentPO;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
-import cn.nexus.types.event.interaction.RootReplyCountChangedEvent;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Date;
 import org.junit.jupiter.api.Test;
@@ -48,59 +48,20 @@ class CommentInteractionConsumerRealIntegrationTest extends RealMiddlewareIntegr
             CommentPO root = commentDao.selectBriefById(rootCommentId);
             assertThat(root).isNotNull();
             assertThat(root.getLikeCount()).isEqualTo(3L);
-            assertThat(root.getReplyCount()).isEqualTo(0L);
             assertThat(commentHotRankRepository.topIds(postId, 10)).containsExactly(rootCommentId);
             assertThat(readCommentSnapshot(rootCommentId)).containsExactly(3L, 0L);
         });
     }
 
-    @Test
-    void rootReplyCountChangedEvent_shouldUpdateRootCommentAndRemainIdempotent() {
-        long postId = uniqueId();
-        long rootCommentId = uniqueId();
-        insertRootComment(postId, rootCommentId);
-        commentHotRankRepository.clear(postId);
-
-        RootReplyCountChangedEvent event = new RootReplyCountChangedEvent();
-        event.setEventId("reply-" + uniqueUuid());
-        event.setPostId(postId);
-        event.setRootCommentId(rootCommentId);
-        event.setDelta(2L);
-        event.setTsMs(System.currentTimeMillis());
-
-        rabbitTemplate.convertAndSend(
-                InteractionCommentMqConfig.EXCHANGE,
-                InteractionCommentMqConfig.RK_REPLY_COUNT_CHANGED,
-                event
-        );
-        rabbitTemplate.convertAndSend(
-                InteractionCommentMqConfig.EXCHANGE,
-                InteractionCommentMqConfig.RK_REPLY_COUNT_CHANGED,
-                event
-        );
-
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            CommentPO root = commentDao.selectBriefById(rootCommentId);
-            assertThat(root).isNotNull();
-            assertThat(root.getReplyCount()).isEqualTo(2L);
-            assertThat(root.getLikeCount()).isEqualTo(0L);
-            assertThat(commentHotRankRepository.topIds(postId, 10)).containsExactly(rootCommentId);
-            assertThat(readCommentSnapshot(rootCommentId)).containsExactly(0L, 2L);
-            assertThat(readReplyAggregationDelta(rootCommentId)).isEqualTo(2L);
-        });
-    }
-
     private long[] readCommentSnapshot(long rootCommentId) {
-        String raw = stringRedisTemplate.opsForValue().get("count:comment:{" + rootCommentId + "}");
+        String key = "count:comment:{" + rootCommentId + "}";
+        byte[] raw = stringRedisTemplate.execute((org.springframework.data.redis.core.RedisCallback<byte[]>) connection -> {
+            if (connection == null || connection.stringCommands() == null) {
+                return null;
+            }
+            return connection.stringCommands().get(key.getBytes(StandardCharsets.UTF_8));
+        });
         return CountRedisCodec.decodeSlots(CountRedisCodec.fromRedisValue(raw), 2);
-    }
-
-    private long readReplyAggregationDelta(long rootCommentId) {
-        Object raw = stringRedisTemplate.opsForHash().get("count:agg:{comment}:reply", String.valueOf(rootCommentId));
-        if (raw == null) {
-            return 0L;
-        }
-        return Long.parseLong(String.valueOf(raw));
     }
 
     private void insertRootComment(long postId, long rootCommentId) {
@@ -114,7 +75,6 @@ class CommentInteractionConsumerRealIntegrationTest extends RealMiddlewareIntegr
         root.setContentId(uniqueUuid());
         root.setStatus(1);
         root.setLikeCount(0L);
-        root.setReplyCount(0L);
         root.setCreateTime(new Date());
         root.setUpdateTime(new Date());
         commentDao.insert(root);

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -14,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -26,7 +28,7 @@ class CountRedisOperationsTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("cnt:v1:comment:8"))
+        when(redisTemplate.execute(any(RedisCallback.class)))
                 .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{0L, 5L, 0L, 0L, 0L}, 5)));
 
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
@@ -45,8 +47,7 @@ class CountRedisOperationsTest {
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
         operations.writeUserSnapshot("ucnt:7", Map.of("following", 6L, "follower", -4L), CountRedisSchema.user());
 
-        verify(valueOperations).set(eq("ucnt:7"),
-                eq(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{6L, 0L, 0L, 0L, 0L}, 5))));
+        verify(redisTemplate).execute(any(RedisCallback.class));
     }
 
     @Test

@@ -8,6 +8,7 @@ import cn.nexus.domain.social.adapter.port.IPostContentKvPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IContentPublishAttemptRepository;
+import cn.nexus.domain.social.adapter.repository.IRelationEventOutboxRepository;
 import cn.nexus.domain.social.model.entity.ContentDraftEntity;
 import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPublishAttemptEntity;
@@ -57,6 +58,7 @@ public class ContentService implements IContentService {
     private final IMediaStoragePort mediaStoragePort;
     private final IMediaTranscodePort mediaTranscodePort;
     private final IContentEventOutboxPort contentEventOutboxPort;
+    private final IRelationEventOutboxRepository relationEventOutboxRepository;
     private final IContentCacheEvictPort contentCacheEvictPort;
     private final IRiskService riskService;
     private final RedissonClient redissonClient;
@@ -366,6 +368,10 @@ public class ContentService implements IContentService {
                 contentRepository.replacePostTypes(targetPostId, normalizedPostTypes);
             }
 
+            if (!wasPublished(existedPost)) {
+                savePostCounterOutbox(targetPostId, userId, "PUBLISHED");
+            }
+
             // 事务提交后再发 MQ：避免消费者读到未提交数据导致“索引误删”等线上鬼故事。
             if (existedPost == null) {
                 dispatchAfterCommit(targetPostId, userId, newVersion);
@@ -483,6 +489,9 @@ public class ContentService implements IContentService {
                     post.getVersionNum(),
                     socialIdPort.now());
             if (ok) {
+                if (wasPublished(post)) {
+                    savePostCounterOutbox(postId, userId, "UNPUBLISHED");
+                }
                 if (post.getContentUuid() != null && !post.getContentUuid().isBlank()) {
                     postContentKvPort.delete(post.getContentUuid());
                 }
@@ -724,6 +733,9 @@ public class ContentService implements IContentService {
                     .createTime(socialIdPort.now())
                     .build());
             if (ok) {
+                if (!wasPublished(post)) {
+                    savePostCounterOutbox(postId, userId, "PUBLISHED");
+                }
                 dispatchUpdateAfterCommit(postId, userId, newVersion);
             }
             return OperationResultVO.builder()
@@ -1026,6 +1038,7 @@ public class ContentService implements IContentService {
                 throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attemptId);
             }
             // 事务提交后再做缓存失效与 outbox 投递，确保“写库成功”先于“外部可见”。
+            savePostCounterOutbox(postId, userId, "PUBLISHED");
             dispatchAfterCommit(postId, userId, attempt.getPublishedVersionNum());
             attempt.setAttemptStatus(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode());
             attempt.setRiskStatus(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode());
@@ -1331,6 +1344,34 @@ public class ContentService implements IContentService {
                 }
             }
         });
+    }
+
+    private boolean wasPublished(ContentPostEntity post) {
+        return post != null && post.getStatus() != null && post.getStatus() == STATUS_PUBLISHED;
+    }
+
+    private void savePostCounterOutbox(Long postId, Long authorId, String status) {
+        if (postId == null || authorId == null || status == null || status.isBlank()) {
+            return;
+        }
+        long eventId = socialIdPort.nextId();
+        relationEventOutboxRepository.save(eventId, "POST", buildPostCounterPayload(eventId, authorId, postId, status));
+    }
+
+    private String buildPostCounterPayload(Long eventId, Long authorId, Long postId, String status) {
+        return "{"
+                + "\"eventId\":" + eventId + ","
+                + "\"sourceId\":" + authorId + ","
+                + "\"targetId\":" + postId + ","
+                + "\"status\":\"" + safe(status) + "\""
+                + "}";
+    }
+
+    private String safe(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private void dispatchUpdateAfterCommit(Long postId, Long operatorId, Integer versionNum) {

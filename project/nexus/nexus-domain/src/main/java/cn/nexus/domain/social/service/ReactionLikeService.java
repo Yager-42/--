@@ -5,7 +5,6 @@ import cn.nexus.domain.counter.model.event.CounterEvent;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.domain.social.adapter.port.IReactionCommentLikeChangedMqPort;
-import cn.nexus.domain.social.adapter.port.IReactionLikeUnlikeMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionNotifyMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionRecommendFeedbackMqPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
@@ -21,7 +20,6 @@ import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.event.interaction.EventType;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
-import cn.nexus.types.event.interaction.LikeUnlikePostEvent;
 import cn.nexus.types.event.recommend.RecommendFeedbackEvent;
 import cn.nexus.types.exception.AppException;
 import java.util.List;
@@ -51,7 +49,6 @@ public class ReactionLikeService implements IReactionLikeService {
     private final IReactionCommentLikeChangedMqPort reactionCommentLikeChangedMqPort;
     private final IReactionNotifyMqPort reactionNotifyMqPort;
     private final IReactionRecommendFeedbackMqPort reactionRecommendFeedbackMqPort;
-    private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort;
     private final IPostAuthorPort postAuthorPort;
     private final ApplicationEventPublisher applicationEventPublisher;
 
@@ -123,22 +120,11 @@ public class ReactionLikeService implements IReactionLikeService {
                 return;
             }
 
-            LikeUnlikePostEvent event = new LikeUnlikePostEvent();
-            event.setEventId(requestId);
-            event.setUserId(userId);
-            event.setPostId(postId);
-            event.setPostCreatorId(creatorId);
-            event.setCreateTime(nowMs);
-
             if (delta > 0) {
-                event.setType(1);
-                reactionLikeUnlikeMqPort.publishLike(event);
                 publishNotifyLikeAdded(requestId, userId, target);
                 return;
             }
 
-            event.setType(0);
-            reactionLikeUnlikeMqPort.publishUnlike(event);
             publishRecommendUnlike(requestId, userId, target);
         } catch (Exception e) {
             log.warn("publish post side effects failed, requestId={}, userId={}, target={}, delta={}",

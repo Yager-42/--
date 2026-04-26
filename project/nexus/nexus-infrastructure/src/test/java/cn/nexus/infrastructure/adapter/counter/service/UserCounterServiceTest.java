@@ -22,9 +22,11 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import java.util.concurrent.TimeUnit;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
 class UserCounterServiceTest {
 
@@ -34,11 +36,8 @@ class UserCounterServiceTest {
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
-        @SuppressWarnings("unchecked")
-        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("ucnt:7"))
-                .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{6L, 8L, 2L, 13L, 0L}, 5)));
+        Mockito.doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{6L, 8L, 2L, 13L, 0L}, 5)))
+                .when(redisTemplate).execute(any(RedisCallback.class));
 
         UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
 
@@ -57,7 +56,9 @@ class UserCounterServiceTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("ucnt:9")).thenReturn("not-base64");
+        Mockito.doReturn(new byte[]{1, 2, 3})
+                .doReturn(Boolean.TRUE)
+                .when(redisTemplate).execute(any(RedisCallback.class));
         when(valueOperations.setIfAbsent(eq("count:rate-limit:user:{9}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
         when(valueOperations.setIfAbsent(eq("count:rebuild-lock:user:{9}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
@@ -78,8 +79,7 @@ class UserCounterServiceTest {
         long likeReceived = service.getCount(9L, UserCounterType.LIKE_RECEIVED);
 
         assertEquals(5L, likeReceived);
-        verify(valueOperations).set(eq("ucnt:9"),
-                eq(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{4L, 5L, 2L, 5L, 0L}, 5))));
+        verify(redisTemplate, Mockito.times(2)).execute(any(RedisCallback.class));
         verify(redisTemplate).delete("count:rebuild-lock:user:{9}");
     }
 
@@ -92,7 +92,7 @@ class UserCounterServiceTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("ucnt:15")).thenReturn(null);
+        Mockito.doReturn(null).when(redisTemplate).execute(any(RedisCallback.class));
         when(valueOperations.setIfAbsent(eq("count:rate-limit:user:{15}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.FALSE);
 
@@ -118,8 +118,8 @@ class UserCounterServiceTest {
         HashOperations<String, Object, Object> hashOperations = Mockito.mock(HashOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        when(valueOperations.get("ucnt:23"))
-                .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{1L, 2L, 0L, 4L, 0L}, 5)));
+        when(redisTemplate.execute(any(RedisScript.class), eq(List.of("ucnt:23")), eq("3"), eq("3"), eq("5")))
+                .thenReturn(7L);
 
         UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
 
@@ -127,8 +127,8 @@ class UserCounterServiceTest {
 
         assertEquals(7L, updated);
         verify(hashOperations).increment("count:agg:{user}:like_received", "23", 3L);
-        verify(valueOperations).set("ucnt:23",
-                CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{1L, 2L, 0L, 7L, 0L}, 5)));
+        verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("ucnt:23")), eq("3"), eq("3"), eq("5"));
+        verify(redisTemplate, never()).execute(any(RedisCallback.class));
     }
 
     @Test
@@ -140,6 +140,7 @@ class UserCounterServiceTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        Mockito.doReturn(Boolean.TRUE).when(redisTemplate).execute(any(RedisCallback.class));
         when(relationRepository.countActiveRelationsBySource(31L, 1)).thenReturn(12);
         when(relationRepository.countFollowerIds(31L)).thenReturn(21);
         when(contentRepository.countPublishedPostsByUser(31L)).thenReturn(3L);
@@ -158,8 +159,7 @@ class UserCounterServiceTest {
 
         service.rebuildAllCounters(31L);
 
-        verify(valueOperations).set("ucnt:31",
-                CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{12L, 21L, 3L, 5L, 0L}, 5)));
+        verify(redisTemplate).execute(any(RedisCallback.class));
     }
 
     @Test
@@ -171,9 +171,10 @@ class UserCounterServiceTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("ucnt:41"))
-                .thenReturn(null)
-                .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 4L, 5L, 0L}, 5)));
+        Mockito.doReturn(null)
+                .doReturn(Boolean.TRUE)
+                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 4L, 5L, 0L}, 5)))
+                .when(redisTemplate).execute(any(RedisCallback.class));
         when(relationRepository.countActiveRelationsBySource(41L, 1)).thenReturn(2);
         when(relationRepository.countFollowerIds(41L)).thenReturn(3);
         when(contentRepository.countPublishedPostsByUser(41L)).thenReturn(4L);
@@ -192,8 +193,41 @@ class UserCounterServiceTest {
         assertEquals(3L, counters.getFollowers());
         assertEquals(4L, counters.getPosts());
         assertEquals(5L, counters.getLikedPosts());
-        verify(valueOperations).set("ucnt:41",
-                CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 4L, 5L, 0L}, 5)));
+        verify(redisTemplate, Mockito.times(3)).execute(any(RedisCallback.class));
+    }
+
+    @Test
+    void relationCounters_oversizedSnapshot_shouldRebuildAsMalformed() {
+        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
+        IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        byte[] oversized = new byte[24];
+        Mockito.doReturn(oversized)
+                .doReturn(Boolean.TRUE)
+                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{6L, 7L, 8L, 9L, 0L}, 5)))
+                .when(redisTemplate).execute(any(RedisCallback.class));
+        when(relationRepository.countActiveRelationsBySource(61L, 1)).thenReturn(6);
+        when(relationRepository.countFollowerIds(61L)).thenReturn(7);
+        when(contentRepository.countPublishedPostsByUser(61L)).thenReturn(8L);
+        when(contentRepository.listPublishedPostIdsByUser(61L)).thenReturn(List.of(
+                ContentPostEntity.builder().postId(6101L).build()));
+        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(6101L), eq(List.of(ObjectCounterType.LIKE))))
+                .thenReturn(Map.of("like", 9L));
+        when(valueOperations.setIfAbsent(eq("ucnt:chk:61"), eq("1"), eq(300L), eq(TimeUnit.SECONDS)))
+                .thenReturn(Boolean.FALSE);
+
+        UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
+
+        UserRelationCounterVO counters = service.readRelationCountersWithVerification(61L);
+
+        assertEquals(6L, counters.getFollowings());
+        assertEquals(7L, counters.getFollowers());
+        assertEquals(8L, counters.getPosts());
+        assertEquals(9L, counters.getLikedPosts());
     }
 
     @Test
@@ -205,9 +239,10 @@ class UserCounterServiceTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("ucnt:51"))
-                .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{9L, 9L, 3L, 7L, 0L}, 5)))
-                .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 3L, 7L, 0L}, 5)));
+        Mockito.doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{9L, 9L, 3L, 7L, 0L}, 5)))
+                .doReturn(Boolean.TRUE)
+                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 3L, 7L, 0L}, 5)))
+                .when(redisTemplate).execute(any(RedisCallback.class));
         when(valueOperations.setIfAbsent(eq("ucnt:chk:51"), eq("1"), eq(300L), eq(TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE)
                 .thenReturn(Boolean.FALSE);
@@ -230,7 +265,6 @@ class UserCounterServiceTest {
         assertEquals(3L, counters.getFollowers());
         assertEquals(3L, counters.getPosts());
         assertEquals(7L, counters.getLikedPosts());
-        verify(valueOperations).set(eq("ucnt:51"),
-                eq(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 3L, 7L, 0L}, 5))));
+        verify(redisTemplate, Mockito.times(3)).execute(any(RedisCallback.class));
     }
 }

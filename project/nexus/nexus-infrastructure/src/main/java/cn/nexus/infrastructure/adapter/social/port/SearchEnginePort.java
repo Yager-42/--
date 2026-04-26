@@ -185,9 +185,7 @@ public class SearchEnginePort implements ISearchEnginePort {
         root.put("track_total_hits", true);
         root.put("size", limit + 1);
 
-        // 查询体分三层：全文匹配、过滤条件、函数打分。这样相关性和业务排序可以分开调。
-        ObjectNode functionScore = root.putObject("query").putObject("function_score");
-        ObjectNode bool = functionScore.putObject("query").putObject("bool");
+        ObjectNode bool = root.putObject("query").putObject("bool");
         ArrayNode must = bool.putArray("must");
         ObjectNode multiMatch = must.addObject().putObject("multi_match");
         multiMatch.put("query", query.getKeyword());
@@ -208,16 +206,6 @@ public class SearchEnginePort implements ISearchEnginePort {
                 filter.addObject().putObject("terms").set("tags", values);
             }
         }
-
-        ArrayNode functions = functionScore.putArray("functions");
-        ObjectNode viewScore = functions.addObject();
-        viewScore.putObject("field_value_factor")
-                .put("field", "view_count")
-                .put("modifier", "log1p")
-                .put("missing", 0.0D);
-        viewScore.put("weight", 1.0D);
-        functionScore.put("score_mode", "sum");
-        functionScore.put("boost_mode", "sum");
 
         ObjectNode highlight = root.putObject("highlight");
         ArrayNode preTags = highlight.putArray("pre_tags");
@@ -321,7 +309,6 @@ public class SearchEnginePort implements ISearchEnginePort {
                 .authorNickname(safeText(source.get("author_nickname")))
                 .authorTagJson(safeText(source.get("author_tag_json")))
                 .publishTime(safeLong(source.get("publish_time")))
-                .viewCount(safeLong(source.get("view_count")))
                 .status(safeText(source.get("status")))
                 .imgUrls(stringList(source.get("img_urls")))
                 .isTop(safeBoolean(source.get("is_top")))
@@ -343,7 +330,6 @@ public class SearchEnginePort implements ISearchEnginePort {
         putNullable(root, "author_nickname", doc.getAuthorNickname());
         putNullable(root, "author_tag_json", doc.getAuthorTagJson());
         putNullable(root, "publish_time", doc.getPublishTime());
-        putNullable(root, "view_count", doc.getViewCount());
         putNullable(root, "status", doc.getStatus());
         root.set("img_urls", stringArray(doc.getImgUrls()));
         if (doc.getIsTop() == null) {

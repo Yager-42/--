@@ -415,7 +415,6 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         startRabbitListenerContainers();
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             assertThat(queueConsumerCount(InteractionCommentMqConfig.Q_COMMENT_LIKE_CHANGED)).isGreaterThan(0);
-            assertThat(queueConsumerCount(InteractionCommentMqConfig.Q_REPLY_COUNT_CHANGED)).isGreaterThan(0);
         });
     }
 

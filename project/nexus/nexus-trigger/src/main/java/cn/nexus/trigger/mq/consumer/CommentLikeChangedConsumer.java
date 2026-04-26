@@ -1,15 +1,15 @@
 package cn.nexus.trigger.mq.consumer;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IInteractionCommentInboxPort;
 import cn.nexus.domain.social.adapter.repository.ICommentHotRankRepository;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
+import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -19,7 +19,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * 点赞数变更事件消费者：同步一级评论 like_count 派生列并刷新热榜分数。
+ * 点赞数变更事件消费者：只刷新热榜分数；计数正确性以 object counter 为准。
  *
  * @author rr
  * @author codex
@@ -35,7 +35,7 @@ public class CommentLikeChangedConsumer {
     private final IInteractionCommentInboxPort inboxPort;
     private final ICommentRepository commentRepository;
     private final ICommentHotRankRepository hotRankRepository;
-    private final IObjectCounterPort objectCounterPort;
+    private final IObjectCounterService objectCounterService;
 
     /**
      * 消费单条消息。
@@ -53,22 +53,20 @@ public class CommentLikeChangedConsumer {
             return;
         }
 
-        long likeCount = objectCounterPort.increment(target(event.getRootCommentId(), ObjectCounterType.LIKE), event.getDelta());
-        commentRepository.addLikeCount(event.getRootCommentId(), event.getDelta());
         CommentBriefVO root = commentRepository.getBrief(event.getRootCommentId());
         if (root == null) {
             return;
         }
-        long replyCount = objectCounterPort.getCount(target(event.getRootCommentId(), ObjectCounterType.REPLY));
-        registerHotRankAfterCommit(event.getPostId(), event.getRootCommentId(), root, likeCount, replyCount);
+        long likeCount = readCommentLikeCount(event.getRootCommentId(), root);
+        registerHotRankAfterCommit(event.getPostId(), event.getRootCommentId(), root, likeCount);
     }
 
-    private void registerHotRankAfterCommit(Long postId, Long rootCommentId, CommentBriefVO root, long likeCount, long replyCount) {
+    private void registerHotRankAfterCommit(Long postId, Long rootCommentId, CommentBriefVO root, long likeCount) {
         if (postId == null || rootCommentId == null || root == null) {
             return;
         }
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            refreshHotRankBestEffort(postId, rootCommentId, root, likeCount, replyCount);
+            refreshHotRankBestEffort(postId, rootCommentId, root, likeCount);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -78,18 +76,18 @@ public class CommentLikeChangedConsumer {
              */
             @Override
             public void afterCommit() {
-                refreshHotRankBestEffort(postId, rootCommentId, root, likeCount, replyCount);
+                refreshHotRankBestEffort(postId, rootCommentId, root, likeCount);
             }
         });
     }
 
-    private void refreshHotRankBestEffort(Long postId, Long rootCommentId, CommentBriefVO root, long likeCount, long replyCount) {
+    private void refreshHotRankBestEffort(Long postId, Long rootCommentId, CommentBriefVO root, long likeCount) {
         try {
             if (root.getStatus() == null || root.getStatus() != 1) {
                 hotRankRepository.remove(postId, rootCommentId);
                 return;
             }
-            double score = safe(likeCount) * 10D + safe(replyCount) * 20D;
+            double score = safe(likeCount) * 10D;
             hotRankRepository.upsert(postId, rootCommentId, score);
         } catch (Exception e) {
             // 热榜是派生缓存：失败不影响主流程，避免用它拖死 MQ 消费。
@@ -97,15 +95,20 @@ public class CommentLikeChangedConsumer {
         }
     }
 
-    private ObjectCounterTarget target(Long commentId, ObjectCounterType counterType) {
-        return ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.COMMENT)
-                .targetId(commentId)
-                .counterType(counterType)
-                .build();
+    private long readCommentLikeCount(Long commentId, CommentBriefVO root) {
+        try {
+            Map<String, Long> counts = objectCounterService.getCounts(
+                    cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO.COMMENT,
+                    commentId,
+                    List.of(ObjectCounterType.LIKE));
+            Long like = counts == null ? null : counts.get(ObjectCounterType.LIKE.getCode());
+            return like == null ? safe(root.getLikeCount()) : safe(like);
+        } catch (Exception e) {
+            return safe(root.getLikeCount());
+        }
     }
 
-    private long safe(long v) {
-        return Math.max(0L, v);
+    private long safe(Long v) {
+        return v == null ? 0L : Math.max(0L, v);
     }
 }

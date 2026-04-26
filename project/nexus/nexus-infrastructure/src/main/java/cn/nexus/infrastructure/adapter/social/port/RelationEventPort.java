@@ -42,7 +42,10 @@ public class RelationEventPort implements IRelationEventPort {
         event.setTargetId(targetId);
         event.setStatus(status);
         String normalizedType = eventType.trim().toUpperCase();
-        String routingKey = "FOLLOW".equals(normalizedType) ? RelationCounterRouting.RK_FOLLOW : RelationCounterRouting.RK_BLOCK;
+        String routingKey = routingKeyOf(normalizedType);
+        if (routingKey == null) {
+            return false;
+        }
         try {
             rabbitTemplate.invoke(operations -> {
                 operations.convertAndSend(RelationCounterRouting.EXCHANGE, routingKey, event);
@@ -53,6 +56,19 @@ public class RelationEventPort implements IRelationEventPort {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private String routingKeyOf(String normalizedType) {
+        if ("FOLLOW".equals(normalizedType)) {
+            return RelationCounterRouting.RK_FOLLOW;
+        }
+        if ("BLOCK".equals(normalizedType)) {
+            return RelationCounterRouting.RK_BLOCK;
+        }
+        if ("POST".equals(normalizedType)) {
+            return RelationCounterRouting.RK_POST;
+        }
+        return null;
     }
 
     private ConfirmCallback ackCallback() {

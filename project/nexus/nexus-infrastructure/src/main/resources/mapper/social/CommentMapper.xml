@@ -3,19 +3,19 @@
 <mapper namespace="cn.nexus.infrastructure.dao.social.ICommentDao">
 
     <insert id="insert" parameterType="cn.nexus.infrastructure.dao.social.po.CommentPO">
-        INSERT INTO interaction_comment(comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content_id, status, like_count, reply_count, create_time, update_time)
-        VALUES(#{commentId}, #{postId}, #{userId}, #{rootId}, #{parentId}, #{replyToId}, #{contentId}, #{status}, #{likeCount}, #{replyCount}, #{createTime}, #{updateTime})
+        INSERT INTO interaction_comment(comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content_id, status, like_count, create_time, update_time)
+        VALUES(#{commentId}, #{postId}, #{userId}, #{rootId}, #{parentId}, #{replyToId}, #{contentId}, #{status}, #{likeCount}, #{createTime}, #{updateTime})
     </insert>
 
     <select id="selectBriefById" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
-        SELECT comment_id, post_id, user_id, root_id, status, like_count, reply_count
+        SELECT comment_id, post_id, user_id, root_id, status, like_count
         FROM interaction_comment
         WHERE comment_id = #{commentId}
         LIMIT 1
     </select>
 
     <select id="selectByIds" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
-        SELECT comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content_id, status, like_count, reply_count, create_time, update_time
+        SELECT comment_id, post_id, user_id, root_id, parent_id, reply_to_id, content_id, status, like_count, create_time, update_time
         FROM interaction_comment
         WHERE comment_id IN
         <foreach collection="commentIds" item="id" open="(" separator="," close=")">
@@ -45,18 +45,6 @@
         UPDATE interaction_comment
         SET status = 2, update_time = #{updateTime}
         WHERE comment_id = #{commentId} AND status = 0
-    </update>
-
-    <update id="addReplyCount">
-        UPDATE interaction_comment
-        SET reply_count = GREATEST(0, reply_count + #{delta}), update_time = NOW()
-        WHERE comment_id = #{commentId}
-    </update>
-
-    <update id="addLikeCount">
-        UPDATE interaction_comment
-        SET like_count = GREATEST(0, like_count + #{delta}), update_time = NOW()
-        WHERE comment_id = #{commentId}
     </update>
 
     <select id="pageRootIds" resultType="java.lang.Long">
@@ -141,7 +129,7 @@
     </select>
 
     <select id="selectRecentRootBriefs" resultType="cn.nexus.infrastructure.dao.social.po.CommentPO">
-        SELECT comment_id, post_id, user_id, root_id, status, like_count, reply_count
+        SELECT comment_id, post_id, user_id, root_id, status, like_count
         FROM interaction_comment
         WHERE post_id = #{postId}
           AND root_id IS NULL

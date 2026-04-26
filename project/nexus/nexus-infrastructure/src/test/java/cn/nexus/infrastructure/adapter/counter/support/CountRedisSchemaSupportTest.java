@@ -2,9 +2,8 @@ package cn.nexus.infrastructure.adapter.counter.support;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
@@ -26,7 +25,9 @@ class CountRedisSchemaSupportTest {
         assertEquals(5, comment.slotCount());
         assertEquals(20, post.totalPayloadBytes());
         assertEquals(1, post.slotOf(ObjectCounterType.LIKE));
-        assertEquals(-1, comment.slotOf(ObjectCounterType.REPLY));
+        assertFalse(comment.objectSlots().containsKey(null));
+        assertEquals(1, ObjectCounterType.values().length);
+        assertEquals(ObjectCounterType.LIKE, ObjectCounterType.values()[0]);
         assertEquals("read", post.fieldNameAt(0));
         assertEquals("like", post.fieldNameAt(1));
         assertEquals("fav", post.fieldNameAt(2));
@@ -51,23 +52,18 @@ class CountRedisSchemaSupportTest {
 
     @Test
     void keyBuildersRenderZhiguangFamilies() {
-        ObjectCounterTarget postLike = ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(42L)
-                .counterType(ObjectCounterType.LIKE)
-                .build();
-
-        assertEquals("cnt:v1:post:42", CountRedisKeys.objectSnapshot(postLike));
+        assertEquals("cnt:v1:post:42", CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.POST, 42L));
         assertEquals("cnt:v1:comment:99", CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.COMMENT, 99L));
         assertEquals("ucnt:7", CountRedisKeys.userSnapshot(7L));
         assertEquals("agg:v1:post:42",
                 CountRedisKeys.objectAggregationBucket(ReactionTargetTypeEnumVO.POST, 42L));
+        assertEquals("agg:v1:post:42:7",
+                CountRedisKeys.objectAggregationBucket(ReactionTargetTypeEnumVO.POST, 42L, 7L));
         assertEquals("bm:like:post:42:0", CountRedisKeys.likeBitmapShard(ReactionTargetTypeEnumVO.POST, 42L, 0));
-        assertEquals("bm:like:post:42:*", CountRedisKeys.likeBitmapShardPattern(postLike));
+        assertEquals("bm:like:post:42:idx", CountRedisKeys.likeBitmapShardIndex(ReactionTargetTypeEnumVO.POST, 42L));
         assertEquals("uf:flws:7", CountRedisKeys.relationFollowings(7L));
         assertEquals("uf:fans:7", CountRedisKeys.relationFollowers(7L));
         assertEquals("ucnt:chk:7", CountRedisKeys.userCounterSampleCheck(7L));
-        assertNull(CountRedisKeys.bitmapField(ObjectCounterType.REPLY));
     }
 
     @Test

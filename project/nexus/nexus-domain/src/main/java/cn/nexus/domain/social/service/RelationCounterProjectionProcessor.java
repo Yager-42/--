@@ -24,10 +24,17 @@ public class RelationCounterProjectionProcessor {
 
     @Transactional(rollbackFor = Exception.class)
     public void process(RelationCounterProjectEvent event) {
-        if (event == null || event.getSourceId() == null || event.getTargetId() == null) {
+        if (event == null) {
             return;
         }
         String type = normalize(event.getEventType());
+        if ("POST".equals(type)) {
+            applyPostProjection(event);
+            return;
+        }
+        if (event.getSourceId() == null || event.getTargetId() == null) {
+            return;
+        }
         if ("FOLLOW".equals(type)) {
             applyFollowProjection(event);
             return;
@@ -48,11 +55,12 @@ public class RelationCounterProjectionProcessor {
             Long followerRowId = event.getRelationEventId() == null ? relationSeed(sourceId, targetId) : event.getRelationEventId();
             boolean changed = relationRepository.saveFollowerIfAbsent(followerRowId, targetId, sourceId, new java.util.Date());
             if (!changed) {
+                relationAdjacencyCachePort.addFollowWithTtl(sourceId, targetId, System.currentTimeMillis(), ADJACENCY_CACHE_TTL_SECONDS);
+                rebuildRelationCounters(sourceId, targetId);
                 return;
             }
             relationAdjacencyCachePort.addFollowWithTtl(sourceId, targetId, System.currentTimeMillis(), ADJACENCY_CACHE_TTL_SECONDS);
-            userCounterService.incrementFollowings(sourceId, 1);
-            userCounterService.incrementFollowers(targetId, 1);
+            rebuildRelationCounters(sourceId, targetId);
             return;
         }
         if (!"UNFOLLOW".equals(status)) {
@@ -63,11 +71,12 @@ public class RelationCounterProjectionProcessor {
         }
         boolean changed = relationRepository.deleteFollowerIfPresent(targetId, sourceId);
         if (!changed) {
+            relationAdjacencyCachePort.removeFollowWithTtl(sourceId, targetId, ADJACENCY_CACHE_TTL_SECONDS);
+            rebuildRelationCounters(sourceId, targetId);
             return;
         }
         relationAdjacencyCachePort.removeFollowWithTtl(sourceId, targetId, ADJACENCY_CACHE_TTL_SECONDS);
-        userCounterService.incrementFollowings(sourceId, -1);
-        userCounterService.incrementFollowers(targetId, -1);
+        rebuildRelationCounters(sourceId, targetId);
     }
 
     private void applyBlockProjection(RelationCounterProjectEvent event) {
@@ -80,6 +89,28 @@ public class RelationCounterProjectionProcessor {
         boolean reverseChanged = relationRepository.deleteFollowerIfPresent(sourceId, targetId);
         if (reverseChanged) {
             relationAdjacencyCachePort.removeFollowWithTtl(targetId, sourceId, ADJACENCY_CACHE_TTL_SECONDS);
+        }
+    }
+
+    private void applyPostProjection(RelationCounterProjectEvent event) {
+        Long authorId = event.getSourceId();
+        if (authorId == null) {
+            return;
+        }
+        String status = normalize(event.getStatus());
+        if ("PUBLISHED".equals(status)) {
+            userCounterService.rebuildAllCounters(authorId);
+            return;
+        }
+        if ("UNPUBLISHED".equals(status) || "DELETED".equals(status)) {
+            userCounterService.rebuildAllCounters(authorId);
+        }
+    }
+
+    private void rebuildRelationCounters(Long sourceId, Long targetId) {
+        userCounterService.rebuildAllCounters(sourceId);
+        if (targetId != null && !targetId.equals(sourceId)) {
+            userCounterService.rebuildAllCounters(targetId);
         }
     }
 

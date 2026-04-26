@@ -7,9 +7,13 @@ import static org.mockito.Mockito.when;
 
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardStatRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ValueOperations;
@@ -18,7 +22,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 class FeedCounterSideEffectPortTest {
 
     @Test
-    void applyPostLikeDelta_shouldEvictCardCachesAndPruneStaleIndexMembers() {
+    void applyPostLikeDelta_shouldEvictCardCachesAndPruneStaleIndexMembers() throws Exception {
         StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")
         SetOperations<String, String> setOperations = Mockito.mock(SetOperations.class);
@@ -37,6 +41,10 @@ class FeedCounterSideEffectPortTest {
         when(setOperations.members(indexKey)).thenReturn(Set.of(stalePageKey, alivePageKey));
         when(redisTemplate.hasKey(stalePageKey)).thenReturn(false);
         when(redisTemplate.hasKey(alivePageKey)).thenReturn(true);
+        when(redisTemplate.getExpire(alivePageKey, TimeUnit.SECONDS)).thenReturn(90L);
+        when(valueOperations.get(alivePageKey)).thenReturn("""
+                {"items":[{"postId":101,"likeCount":4},{"postId":202,"likeCount":9}]}
+                """);
 
         when(redisTemplate.execute(Mockito.<org.springframework.data.redis.core.RedisCallback<Set<String>>>any()))
                 .thenReturn(Set.of(indexKey));
@@ -49,6 +57,11 @@ class FeedCounterSideEffectPortTest {
         port.applyPostLikeDelta(101L, 1L);
 
         verify(setOperations).remove(indexKey, stalePageKey);
+        ArgumentCaptor<String> pageJson = ArgumentCaptor.forClass(String.class);
+        verify(valueOperations).set(Mockito.eq(alivePageKey), pageJson.capture(), Mockito.eq(90L), Mockito.eq(TimeUnit.SECONDS));
+        JsonNode root = new ObjectMapper().readTree(pageJson.getValue());
+        Assertions.assertEquals(5L, root.path("items").get(0).path("likeCount").asLong());
+        Assertions.assertEquals(9L, root.path("items").get(1).path("likeCount").asLong());
         verify(redisTemplate).expire(indexKey, 600L, TimeUnit.SECONDS);
         verify(feedCardRepository).evictLocal(101L);
         verify(feedCardRepository).evictRedis(101L);

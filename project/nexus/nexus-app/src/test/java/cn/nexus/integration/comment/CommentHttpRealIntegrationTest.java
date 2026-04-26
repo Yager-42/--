@@ -53,7 +53,7 @@ class CommentHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
             JsonNode list = assertSuccess(getJson("/api/v1/comment/list?postId=" + postId + "&limit=10&preloadReplyLimit=5", commenter.token()));
             JsonNode firstItem = list.path("items").get(0);
             assertThat(firstItem.path("root").path("commentId").asLong()).isEqualTo(rootCommentId);
-            assertThat(firstItem.path("root").path("replyCount").asLong()).isEqualTo(1L);
+            assertThat(firstItem.path("root").has("replyCount")).isFalse();
             assertThat(firstItem.path("repliesPreview").get(0).path("commentId").asLong()).isEqualTo(replyCommentId);
 
             JsonNode replies = assertSuccess(getJson("/api/v1/comment/reply/list?rootId=" + rootCommentId + "&limit=10", commenter.token()));

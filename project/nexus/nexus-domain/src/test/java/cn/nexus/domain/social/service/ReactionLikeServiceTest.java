@@ -14,7 +14,6 @@ import cn.nexus.domain.counter.model.event.CounterEvent;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.domain.social.adapter.port.IReactionCommentLikeChangedMqPort;
-import cn.nexus.domain.social.adapter.port.IReactionLikeUnlikeMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionNotifyMqPort;
 import cn.nexus.domain.social.adapter.port.IReactionRecommendFeedbackMqPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
@@ -191,7 +190,7 @@ class ReactionLikeServiceTest {
         when(fixture.objectCounterService.getCounts(ReactionTargetTypeEnumVO.POST, 101L, java.util.List.of(cn.nexus.domain.counter.model.valobj.ObjectCounterType.LIKE)))
                 .thenReturn(java.util.Map.of("like", 1L));
         Mockito.doThrow(new RuntimeException("mq down"))
-                .when(fixture.reactionLikeUnlikeMqPort).publishLike(any());
+                .when(fixture.reactionNotifyMqPort).publish(any());
 
         assertDoesNotThrow(() -> fixture.service.applyReaction(1L, target, ReactionActionEnumVO.ADD, null));
     }
@@ -219,7 +218,6 @@ class ReactionLikeServiceTest {
         private final IReactionCommentLikeChangedMqPort reactionCommentLikeChangedMqPort = Mockito.mock(IReactionCommentLikeChangedMqPort.class);
         private final IReactionNotifyMqPort reactionNotifyMqPort = Mockito.mock(IReactionNotifyMqPort.class);
         private final IReactionRecommendFeedbackMqPort reactionRecommendFeedbackMqPort = Mockito.mock(IReactionRecommendFeedbackMqPort.class);
-        private final IReactionLikeUnlikeMqPort reactionLikeUnlikeMqPort = Mockito.mock(IReactionLikeUnlikeMqPort.class);
         private final IPostAuthorPort postAuthorPort = Mockito.mock(IPostAuthorPort.class);
         private final ApplicationEventPublisher applicationEventPublisher = Mockito.mock(ApplicationEventPublisher.class);
         private final ReactionLikeService service = new ReactionLikeService(
@@ -229,7 +227,6 @@ class ReactionLikeServiceTest {
                 reactionCommentLikeChangedMqPort,
                 reactionNotifyMqPort,
                 reactionRecommendFeedbackMqPort,
-                reactionLikeUnlikeMqPort,
                 postAuthorPort,
                 applicationEventPublisher
         );

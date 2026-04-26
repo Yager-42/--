@@ -3,7 +3,6 @@ package cn.nexus.integration.support;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
 import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
@@ -39,8 +38,6 @@ import cn.nexus.trigger.mq.config.FeedRecommendItemMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendFeedbackAMqConfig;
 import cn.nexus.trigger.mq.config.InteractionNotifyMqConfig;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
-import cn.nexus.trigger.mq.config.LikeUnlikeMqConfig;
-import cn.nexus.trigger.mq.config.ReactionEventLogMqConfig;
 import cn.nexus.trigger.mq.config.RiskMqConfig;
 import cn.nexus.trigger.mq.config.SearchIndexMqConfig;
 import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
@@ -106,9 +103,6 @@ public abstract class RealBusinessIntegrationTestSupport {
 
     @Autowired
     protected IContentPostTypeDao contentPostTypeDao;
-
-    @Autowired
-    protected IObjectCounterPort objectCounterPort;
 
     @Autowired
     protected IPostContentKvPort postContentKvPort;
@@ -181,15 +175,10 @@ public abstract class RealBusinessIntegrationTestSupport {
         purgeQueueQuietly(FeedRecommendFeedbackMqConfig.DLQ_RECOMMEND_FEEDBACK);
         purgeQueueQuietly(InteractionCommentMqConfig.Q_COMMENT_CREATED);
         purgeQueueQuietly(InteractionCommentMqConfig.Q_COMMENT_LIKE_CHANGED);
-        purgeQueueQuietly(InteractionCommentMqConfig.Q_REPLY_COUNT_CHANGED);
         purgeQueueQuietly(InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY);
         purgeQueueQuietly(InteractionNotifyMqConfig.DLQ_INTERACTION_NOTIFY);
-        purgeQueueQuietly(ReactionEventLogMqConfig.QUEUE);
-        purgeQueueQuietly(ReactionEventLogMqConfig.DLQ);
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.Q_FEED_RECOMMEND_FEEDBACK_A);
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.DLQ_FEED_RECOMMEND_FEEDBACK_A);
-        purgeQueueQuietly(LikeUnlikeMqConfig.QUEUE_COUNT);
-        purgeQueueQuietly(LikeUnlikeMqConfig.DLQ_COUNT);
         purgeQueueQuietly(RelationCounterRouting.Q_FOLLOW);
         purgeQueueQuietly(RelationCounterRouting.Q_BLOCK);
         purgeQueueQuietly(RelationCounterRouting.DLQ_FOLLOW);
@@ -209,7 +198,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         // 测试环境允许清空：避免历史遗留 outbox 积压导致“新事件被 scan limit 饥饿”。
         execUpdate("DELETE FROM content_event_outbox");
         execUpdate("DELETE FROM relation_event_outbox");
-        execUpdate("DELETE FROM interaction_reaction_event_log");
         execUpdate("DELETE FROM reliable_mq_outbox");
         execUpdate("DELETE FROM reliable_mq_consumer_record");
         execUpdate("DELETE FROM reliable_mq_replay_record");
@@ -303,7 +291,12 @@ public abstract class RealBusinessIntegrationTestSupport {
             return 0L;
         }
         try {
-            String raw = stringRedisTemplate.opsForValue().get(key);
+            byte[] raw = stringRedisTemplate.execute((org.springframework.data.redis.core.RedisCallback<byte[]>) connection -> {
+                if (connection == null || connection.stringCommands() == null) {
+                    return null;
+                }
+                return connection.stringCommands().get(key.getBytes(StandardCharsets.UTF_8));
+            });
             byte[] bytes = CountRedisCodec.fromRedisValue(raw);
             long[] values = CountRedisCodec.decodeSlots(bytes, schema.slotCount());
             if (slot >= values.length) {
@@ -312,25 +305,6 @@ public abstract class RealBusinessIntegrationTestSupport {
             return Math.max(0L, values[slot]);
         } catch (Exception e) {
             throw new IllegalStateException("read count redis snapshot failed, key=" + key + ", slot=" + slot, e);
-        }
-    }
-
-    protected long queryReactionEventLogCount(String targetType, long targetId, String reactionType) {
-        String sql = "SELECT COUNT(1) FROM interaction_reaction_event_log WHERE target_type = ? AND target_id = ? AND reaction_type = ?";
-        try (java.sql.Connection conn = dataSource.getConnection();
-             java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, targetType);
-            ps.setLong(2, targetId);
-            ps.setString(3, reactionType);
-            try (java.sql.ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    return 0L;
-                }
-                return rs.getLong(1);
-            }
-        } catch (Exception e) {
-            throw new IllegalStateException("query interaction_reaction_event_log count failed, targetType=" + targetType
-                    + ", targetId=" + targetId + ", reactionType=" + reactionType, e);
         }
     }
 
@@ -509,7 +483,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         properties.putObject("author_nickname").put("type", "keyword");
         properties.putObject("author_tag_json").put("type", "keyword");
         properties.putObject("publish_time").put("type", "date").put("format", "epoch_millis");
-        properties.putObject("view_count").put("type", "integer");
         properties.putObject("status").put("type", "keyword");
         properties.putObject("img_urls").put("type", "keyword");
         properties.putObject("is_top").put("type", "keyword");

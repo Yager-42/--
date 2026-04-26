@@ -5,8 +5,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IInteractionCommentInboxPort;
 import cn.nexus.domain.social.adapter.repository.ICommentHotRankRepository;
@@ -14,25 +13,24 @@ import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class CommentLikeChangedConsumerTest {
 
     @Test
-    void onMessage_shouldReadUnifiedCounterBeforeRefreshingHotRank() {
+    void onMessage_shouldReadObjectLikeBeforeRefreshingHotRank() {
         IInteractionCommentInboxPort inboxPort = Mockito.mock(IInteractionCommentInboxPort.class);
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
         ICommentHotRankRepository hotRankRepository = Mockito.mock(ICommentHotRankRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         CommentLikeChangedConsumer consumer = new CommentLikeChangedConsumer(
                 inboxPort,
                 commentRepository,
                 hotRankRepository,
-                objectCounterPort);
+                objectCounterService);
 
         CommentLikeChangedEvent event = new CommentLikeChangedEvent();
         event.setEventId("evt-like-1");
@@ -41,20 +39,19 @@ class CommentLikeChangedConsumerTest {
         event.setDelta(1L);
 
         when(inboxPort.save("evt-like-1", "COMMENT_LIKE_CHANGED", null)).thenReturn(true);
-        when(objectCounterPort.increment(target(101L, ObjectCounterType.LIKE), 1L)).thenReturn(6L);
-        when(objectCounterPort.getCount(target(101L, ObjectCounterType.REPLY))).thenReturn(4L);
+        when(objectCounterService.getCounts(ReactionTargetTypeEnumVO.COMMENT, 101L, List.of(ObjectCounterType.LIKE)))
+                .thenReturn(Map.of("like", 6L));
         when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder()
                 .commentId(101L)
                 .postId(88L)
                 .status(1)
+                .likeCount(5L)
                 .build());
 
         consumer.onMessage(event);
 
-        verify(objectCounterPort).increment(target(101L, ObjectCounterType.LIKE), 1L);
-        verify(commentRepository).addLikeCount(101L, 1L);
-        verify(objectCounterPort).getCount(target(101L, ObjectCounterType.REPLY));
-        verify(hotRankRepository).upsert(88L, 101L, 140D);
+        verify(objectCounterService).getCounts(ReactionTargetTypeEnumVO.COMMENT, 101L, List.of(ObjectCounterType.LIKE));
+        verify(hotRankRepository).upsert(88L, 101L, 60D);
     }
 
     @Test
@@ -62,12 +59,12 @@ class CommentLikeChangedConsumerTest {
         IInteractionCommentInboxPort inboxPort = Mockito.mock(IInteractionCommentInboxPort.class);
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
         ICommentHotRankRepository hotRankRepository = Mockito.mock(ICommentHotRankRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         CommentLikeChangedConsumer consumer = new CommentLikeChangedConsumer(
                 inboxPort,
                 commentRepository,
                 hotRankRepository,
-                objectCounterPort);
+                objectCounterService);
 
         CommentLikeChangedEvent event = new CommentLikeChangedEvent();
         event.setEventId("evt-like-dup");
@@ -79,8 +76,7 @@ class CommentLikeChangedConsumerTest {
 
         consumer.onMessage(event);
 
-        verify(objectCounterPort, never()).increment(any(), Mockito.anyLong());
-        verify(commentRepository, never()).addLikeCount(Mockito.anyLong(), Mockito.anyLong());
+        verify(objectCounterService, never()).getCounts(any(), Mockito.anyLong(), any());
         verify(hotRankRepository, never()).upsert(Mockito.anyLong(), Mockito.anyLong(), Mockito.anyDouble());
     }
 
@@ -89,12 +85,12 @@ class CommentLikeChangedConsumerTest {
         IInteractionCommentInboxPort inboxPort = Mockito.mock(IInteractionCommentInboxPort.class);
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
         ICommentHotRankRepository hotRankRepository = Mockito.mock(ICommentHotRankRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         CommentLikeChangedConsumer consumer = new CommentLikeChangedConsumer(
                 inboxPort,
                 commentRepository,
                 hotRankRepository,
-                objectCounterPort);
+                objectCounterService);
 
         CommentLikeChangedEvent event = new CommentLikeChangedEvent();
         event.setEventId("evt-like-idem");
@@ -103,27 +99,20 @@ class CommentLikeChangedConsumerTest {
         event.setDelta(1L);
 
         when(inboxPort.save("evt-like-idem", "COMMENT_LIKE_CHANGED", null)).thenReturn(true, false);
-        when(objectCounterPort.increment(target(101L, ObjectCounterType.LIKE), 1L)).thenReturn(6L);
-        when(objectCounterPort.getCount(target(101L, ObjectCounterType.REPLY))).thenReturn(4L);
+        when(objectCounterService.getCounts(ReactionTargetTypeEnumVO.COMMENT, 101L, List.of(ObjectCounterType.LIKE)))
+                .thenReturn(Map.of("like", 6L));
         when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder()
                 .commentId(101L)
                 .postId(88L)
                 .status(1)
+                .likeCount(5L)
                 .build());
 
         consumer.onMessage(event);
         consumer.onMessage(event);
 
-        verify(objectCounterPort, Mockito.times(1)).increment(target(101L, ObjectCounterType.LIKE), 1L);
-        verify(commentRepository, Mockito.times(1)).addLikeCount(101L, 1L);
-        verify(hotRankRepository, Mockito.times(1)).upsert(88L, 101L, 140D);
-    }
-
-    private ObjectCounterTarget target(Long commentId, ObjectCounterType counterType) {
-        return ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.COMMENT)
-                .targetId(commentId)
-                .counterType(counterType)
-                .build();
+        verify(objectCounterService, Mockito.times(1))
+                .getCounts(ReactionTargetTypeEnumVO.COMMENT, 101L, List.of(ObjectCounterType.LIKE));
+        verify(hotRankRepository, Mockito.times(1)).upsert(88L, 101L, 60D);
     }
 }

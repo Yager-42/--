@@ -2,6 +2,8 @@ package cn.nexus.infrastructure.mq.reliable;
 
 import cn.nexus.infrastructure.dao.social.IReliableMqConsumerRecordDao;
 import cn.nexus.infrastructure.dao.social.po.ReliableMqConsumerRecordPO;
+import java.time.Duration;
+import java.util.Date;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -23,8 +25,16 @@ public class ReliableMqConsumerRecordService {
     public static final String STATUS_DONE = "DONE";
     /** 消费状态：失败（允许重放）。 */
     public static final String STATUS_FAIL = "FAIL";
+    private static final long PROCESSING_STALE_MILLIS = Duration.ofMinutes(5).toMillis();
 
     private final IReliableMqConsumerRecordDao consumerRecordDao;
+
+    public enum StartResult {
+        STARTED,
+        DUPLICATE_DONE,
+        IN_PROGRESS,
+        INVALID
+    }
 
     /**
      * 尝试开始消费（幂等入口）。
@@ -37,8 +47,12 @@ public class ReliableMqConsumerRecordService {
      * @return 是否允许开始消费 {@code boolean}
      */
     public boolean start(String eventId, String consumerName, String payloadJson) {
+        return startManual(eventId, consumerName, payloadJson) == StartResult.STARTED;
+    }
+
+    public StartResult startManual(String eventId, String consumerName, String payloadJson) {
         if (eventId == null || eventId.isBlank() || consumerName == null || consumerName.isBlank()) {
-            return false;
+            return StartResult.INVALID;
         }
         ReliableMqConsumerRecordPO po = new ReliableMqConsumerRecordPO();
         po.setEventId(eventId);
@@ -46,19 +60,22 @@ public class ReliableMqConsumerRecordService {
         po.setPayloadJson(payloadJson);
         po.setStatus(STATUS_PROCESSING);
         if (consumerRecordDao.insertIgnore(po) > 0) {
-            return true;
+            return StartResult.STARTED;
         }
         // 已存在记录：根据状态决定是否允许重放。
         ReliableMqConsumerRecordPO existed = consumerRecordDao.selectOne(eventId, consumerName);
         if (existed == null) {
-            return false;
+            return StartResult.IN_PROGRESS;
         }
-        if (STATUS_DONE.equals(existed.getStatus()) || STATUS_PROCESSING.equals(existed.getStatus())) {
-            return false;
+        if (STATUS_DONE.equals(existed.getStatus())) {
+            return StartResult.DUPLICATE_DONE;
         }
-        // FAIL -> PROCESSING：允许重放再次进入处理。
+        if (STATUS_PROCESSING.equals(existed.getStatus()) && !isStale(existed.getUpdateTime())) {
+            return StartResult.IN_PROGRESS;
+        }
+        // FAIL/PROCESSING -> PROCESSING：允许 broker redelivery 恢复崩溃窗口。
         consumerRecordDao.updateStatus(eventId, consumerName, STATUS_PROCESSING, null);
-        return true;
+        return StartResult.STARTED;
     }
 
     /**
@@ -80,5 +97,12 @@ public class ReliableMqConsumerRecordService {
      */
     public void markFail(String eventId, String consumerName, String lastError) {
         consumerRecordDao.updateStatus(eventId, consumerName, STATUS_FAIL, lastError);
+    }
+
+    private boolean isStale(Date updateTime) {
+        if (updateTime == null) {
+            return true;
+        }
+        return System.currentTimeMillis() - updateTime.getTime() >= PROCESSING_STALE_MILLIS;
     }
 }

@@ -18,8 +18,6 @@ public interface IUserCounterService {
 
     long incrementLikesReceived(Long userId, long delta);
 
-    long incrementFavsReceived(Long userId, long delta);
-
     void setCount(Long userId, UserCounterType counterType, long count);
 
     void evict(Long userId, UserCounterType counterType);

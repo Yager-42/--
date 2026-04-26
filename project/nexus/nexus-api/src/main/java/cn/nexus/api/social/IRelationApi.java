@@ -5,6 +5,7 @@ import cn.nexus.api.social.relation.dto.BlockRequestDTO;
 import cn.nexus.api.social.relation.dto.BlockResponseDTO;
 import cn.nexus.api.social.relation.dto.FollowRequestDTO;
 import cn.nexus.api.social.relation.dto.FollowResponseDTO;
+import cn.nexus.api.social.relation.dto.RelationCounterResponseDTO;
 import cn.nexus.api.social.relation.dto.RelationListRequestDTO;
 import cn.nexus.api.social.relation.dto.RelationListResponseDTO;
 import cn.nexus.api.social.relation.dto.RelationStateBatchRequestDTO;
@@ -20,6 +21,8 @@ public interface IRelationApi {
     Response<FollowResponseDTO> unfollow(FollowRequestDTO requestDTO);
 
     Response<BlockResponseDTO> block(BlockRequestDTO requestDTO);
+
+    Response<RelationCounterResponseDTO> counter();
 
     Response<RelationListResponseDTO> following(RelationListRequestDTO requestDTO);
 

@@ -6,11 +6,14 @@ import cn.nexus.api.social.relation.dto.BlockRequestDTO;
 import cn.nexus.api.social.relation.dto.BlockResponseDTO;
 import cn.nexus.api.social.relation.dto.FollowRequestDTO;
 import cn.nexus.api.social.relation.dto.FollowResponseDTO;
+import cn.nexus.api.social.relation.dto.RelationCounterResponseDTO;
 import cn.nexus.api.social.relation.dto.RelationListRequestDTO;
 import cn.nexus.api.social.relation.dto.RelationListResponseDTO;
 import cn.nexus.api.social.relation.dto.RelationStateBatchRequestDTO;
 import cn.nexus.api.social.relation.dto.RelationStateBatchResponseDTO;
 import cn.nexus.api.social.relation.dto.RelationUserDTO;
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
+import cn.nexus.domain.counter.model.valobj.UserRelationCounterVO;
 import cn.nexus.domain.social.model.valobj.FollowResultVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
 import cn.nexus.domain.social.model.valobj.RelationListVO;
@@ -49,6 +52,9 @@ public class RelationController implements IRelationApi {
 
     @Resource
     private RelationQueryService relationQueryService;
+
+    @Resource
+    private IUserCounterService userCounterService;
 
     /**
      * 发起关注请求。
@@ -122,6 +128,29 @@ public class RelationController implements IRelationApi {
         } catch (Exception e) {
             log.error("relation block api failed, req={}", requestDTO, e);
             return Response.<BlockResponseDTO>builder()
+                    .code(ResponseCode.UN_ERROR.getCode())
+                    .info(ResponseCode.UN_ERROR.getInfo())
+                    .build();
+        }
+    }
+
+    /**
+     * 查询当前用户的关系计数。
+     *
+     * @return 关系计数响应，类型：{@link Response}
+     */
+    @GetMapping("/counter")
+    @Override
+    public Response<RelationCounterResponseDTO> counter() {
+        try {
+            Long userId = UserContext.requireUserId();
+            UserRelationCounterVO vo = userCounterService.readRelationCountersWithVerification(userId);
+            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), toCounterDTO(vo));
+        } catch (AppException e) {
+            return Response.<RelationCounterResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
+        } catch (Exception e) {
+            log.error("relation counter api failed", e);
+            return Response.<RelationCounterResponseDTO>builder()
                     .code(ResponseCode.UN_ERROR.getCode())
                     .info(ResponseCode.UN_ERROR.getInfo())
                     .build();
@@ -210,6 +239,18 @@ public class RelationController implements IRelationApi {
         return RelationListResponseDTO.builder()
                 .items(vo.getItems().stream().map(this::toRelationUserDTO).collect(Collectors.toList()))
                 .nextCursor(vo.getNextCursor())
+                .build();
+    }
+
+    private RelationCounterResponseDTO toCounterDTO(UserRelationCounterVO vo) {
+        if (vo == null) {
+            return RelationCounterResponseDTO.builder().build();
+        }
+        return RelationCounterResponseDTO.builder()
+                .followings(vo.getFollowings())
+                .followers(vo.getFollowers())
+                .posts(vo.getPosts())
+                .likedPosts(vo.getLikedPosts())
                 .build();
     }
 

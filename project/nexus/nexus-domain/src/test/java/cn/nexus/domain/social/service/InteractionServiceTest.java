@@ -32,7 +32,6 @@ import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.types.event.interaction.CommentCreatedEvent;
 import cn.nexus.types.event.interaction.EventType;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
-import cn.nexus.types.event.interaction.RootReplyCountChangedEvent;
 import cn.nexus.types.exception.AppException;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -248,7 +247,7 @@ class InteractionServiceTest {
     }
 
     @Test
-    void applyCommentRiskReviewResult_shouldApprovePendingReplyAndPublishEvents() {
+    void applyCommentRiskReviewResult_shouldApprovePendingReplyWithoutReplyCountEvent() {
         ISocialIdPort socialIdPort = Mockito.mock(ISocialIdPort.class);
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
         ICommentEventPort commentEventPort = Mockito.mock(ICommentEventPort.class);
@@ -283,7 +282,6 @@ class InteractionServiceTest {
 
         assertEquals("APPROVED", result.getStatus());
         verify(commentEventPort).publish(Mockito.any(CommentCreatedEvent.class));
-        verify(commentEventPort).publish(Mockito.any(RootReplyCountChangedEvent.class));
         verify(interactionNotifyEventPort).publish(Mockito.any(InteractionNotifyEvent.class));
     }
 

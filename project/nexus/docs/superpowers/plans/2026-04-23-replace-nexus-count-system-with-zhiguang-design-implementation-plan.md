@@ -8,6 +8,8 @@
 
 **Tech Stack:** Spring Boot, Redis, Redisson, RabbitMQ, Kafka, MyBatis, JUnit 5, Mockito, existing Nexus multi-module Maven build. Canal is not required for the revised DB-derived counter projection path.
 
+**Implementation status as of 2026-04-26:** implementation tasks are marked against the current code state. Commit-only steps remain unchecked because no commit was requested or created in this session. App real integration verification remains unchecked because the local environment cannot reach Cassandra at `127.0.0.1:9042`; focused unit/module verification passed and is recorded in the final completion note.
+
 **Counter Classes:**
 
 - Class 1 interaction counters: `POST.like`, `COMMENT.like`, and `USER.like_received`. `like_received` is intentionally classified with likes, not with DB-derived relation/post counters, because it is derived from like interaction truth. These use Redis bitmap truth plus Kafka aggregation. Bitmap state transitions must be idempotent, but `cnt:*` and `like_received` are best-effort display values and do not carry a no-drift final-consistency guarantee.
@@ -34,7 +36,7 @@
 - Reference: `nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RootReplyCountChangedConsumer.java`
 - Reference: `nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationEventListener.java`
 
-- [ ] **Step 1: Re-read the approved spec and list the required hard deletes**
+- [x] **Step 1: Re-read the approved spec and list the required hard deletes**
 
 Record the hard deletes in the working notes before touching code:
 
@@ -46,7 +48,7 @@ Record the hard deletes in the working notes before touching code:
 - search-index consumers for count-field propagation into ES
 - old `ObjectCounterPort`/`UserCounterPort` abstractions after callers move to the new Nexus-named counter services
 
-- [ ] **Step 2: Confirm the old implementation boundaries in current code**
+- [x] **Step 2: Confirm the old implementation boundaries in current code**
 
 Run:
 
@@ -57,7 +59,7 @@ rg -n "RootReplyCountChangedConsumer|PostLikeCountAggregateConsumer|UserCounterR
 Expected:
 - Existing old-chain files are present and will become delete or rewrite targets.
 
-- [ ] **Step 3: Create a short cutover checklist in working notes**
+- [x] **Step 3: Create a short cutover checklist in working notes**
 
 The checklist must separate:
 
@@ -86,7 +88,7 @@ git commit -m "docs: add zhiguang counter replacement implementation plan"
 - Test: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/support/CountRedisSchemaSupportTest.java`
 - Test: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/support/CountRedisOperationsTest.java`
 
-- [ ] **Step 1: Write failing tests for zhiguang slot layouts**
+- [x] **Step 1: Write failing tests for zhiguang slot layouts**
 
 Cover:
 
@@ -98,7 +100,7 @@ Cover:
 - user internal byte offset is `(idx - 1) * 4`; do not describe this as storage slots `0..4`
 - `COMMENT.reply` absent from active counter type mapping
 
-- [ ] **Step 2: Run the schema tests and confirm failure**
+- [x] **Step 2: Run the schema tests and confirm failure**
 
 Run:
 
@@ -109,7 +111,7 @@ mvn -pl nexus-infrastructure -Dtest=CountRedisSchemaSupportTest,CountRedisOperat
 Expected:
 - FAIL on slot count, slot mapping, or reply-slot expectations.
 
-- [ ] **Step 3: Rewrite `CountRedisSchema` to the approved fixed-slot contract**
+- [x] **Step 3: Rewrite `CountRedisSchema` to the approved fixed-slot contract**
 
 Implementation notes:
 
@@ -118,7 +120,7 @@ Implementation notes:
 - user schema must materialize five fixed user logical indexes with `(idx - 1) * 4` byte offsets
 - schema names and slot ordering should match the approved spec, not the current `post_counter/comment_counter/user_counter` contract
 
-- [ ] **Step 4: Update key helpers and codec helpers to support the new payload widths and naming**
+- [x] **Step 4: Update key helpers and codec helpers to support the new payload widths and naming**
 
 Implementation notes:
 
@@ -128,7 +130,7 @@ Implementation notes:
 - object aggregation key is `agg:v1:{etype}:{eid}`
 - keep helper APIs small and explicit around object snapshot, object agg, bitmap shard, user snapshot, relation cache keys
 
-- [ ] **Step 5: Run the focused schema tests again**
+- [x] **Step 5: Run the focused schema tests again**
 
 Run:
 
@@ -158,7 +160,7 @@ git commit -m "refactor: replace count redis schema with zhiguang slots"
 - Delete: `nexus-domain/src/main/java/cn/nexus/domain/counter/adapter/port/IObjectCounterPort.java`
 - Test: replace port-centered tests with service-centered tests under `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/` or matching module package
 
-- [ ] **Step 1: Write failing tests for object-count behavior**
+- [x] **Step 1: Write failing tests for object-count behavior**
 
 Cover:
 
@@ -173,7 +175,7 @@ Cover:
 - lock miss returns zero and escalates backoff state
 - rebuild clears overlapping `agg` fields
 
-- [ ] **Step 2: Run the object-counter service tests and confirm failure**
+- [x] **Step 2: Run the object-counter service tests and confirm failure**
 
 Run:
 
@@ -184,7 +186,7 @@ mvn -pl nexus-infrastructure -Dtest=*Counter* test
 Expected:
 - FAIL because current implementation is snapshot arithmetic, not bitmap truth.
 
-- [ ] **Step 3: Add the object counter service API**
+- [x] **Step 3: Add the object counter service API**
 
 Implementation notes:
 
@@ -194,7 +196,7 @@ Implementation notes:
 - delete old object counter port abstractions after migrating callers
 - do not keep compatibility adapters or implement the replacement as an `ObjectCounterPort` rewrite with a service wrapper on top
 
-- [ ] **Step 4: Replace arithmetic increment logic with bitmap-truth toggle logic**
+- [x] **Step 4: Replace arithmetic increment logic with bitmap-truth toggle logic**
 
 Implementation notes:
 
@@ -204,7 +206,7 @@ Implementation notes:
 - `getCountsBatch(...)` must not rebuild; missing or malformed object SDS returns zero for requested metrics
 - old `increment(...)`-centric logic should not remain the conceptual center of the object counting design
 
-- [ ] **Step 5: Implement zhiguang rebuild protections**
+- [x] **Step 5: Implement zhiguang rebuild protections**
 
 Implementation notes:
 
@@ -216,7 +218,7 @@ Implementation notes:
 - current shard discovery can use existing Redis scan support, but behavior must match the approved degrade semantics
 - `CounterRebuildConsumer` is a separate disaster-replay consumer and must remain disabled by default unless `counter.rebuild.enabled=true`
 
-- [ ] **Step 6: Run focused object-counter tests**
+- [x] **Step 6: Run focused object-counter tests**
 
 Run:
 
@@ -243,7 +245,7 @@ git commit -m "refactor: add object counter service"
 - Test: `nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/strategy/SnapshotPostLikeCountAggregateStrategyTest.java`
 - Test: new Kafka aggregation tests
 
-- [ ] **Step 1: Write failing tests for Kafka `counter-events` aggregation**
+- [x] **Step 1: Write failing tests for Kafka `counter-events` aggregation**
 
 Cover:
 
@@ -255,7 +257,7 @@ Cover:
 - bitmap shard indexes replace broad `KEYS bm:*` scans for rebuild
 - no RabbitMQ dependency in primary object count path
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 Run:
 
@@ -266,7 +268,7 @@ mvn -pl nexus-trigger -Dtest=SnapshotPostLikeCountAggregateStrategyTest test
 Expected:
 - FAIL or become obsolete because current consumer is RabbitMQ-based.
 
-- [ ] **Step 3: Delete the RabbitMQ primary path and add Kafka producer/consumer equivalents**
+- [x] **Step 3: Delete the RabbitMQ primary path and add Kafka producer/consumer equivalents**
 
 Implementation notes:
 
@@ -278,14 +280,14 @@ Implementation notes:
 - scope this task to the persisted object-count primary path only
 - do not mix search-index consumers into the copied zhiguang counter chain
 
-- [ ] **Step 4: Wire the new Kafka topics in config**
+- [x] **Step 4: Wire the new Kafka topics in config**
 
 Implementation notes:
 
 - topic name must be `counter-events`
 - no old RabbitMQ count queue should remain the authoritative path
 
-- [ ] **Step 5: Run trigger tests for the new object aggregation path**
+- [x] **Step 5: Run trigger tests for the new object aggregation path**
 
 Run:
 
@@ -321,7 +323,7 @@ git commit -m "refactor: replace rabbitmq count aggregation with kafka"
 - Modify: `nexus-api/src/main/java/cn/nexus/api/social/search/dto/SearchItemDTO.java`
 - Test: update search service, search engine, upsert, backfill, and search API tests that assert count fields
 
-- [ ] **Step 1: Write or update deletion assertions for ES count propagation**
+- [x] **Step 1: Write or update deletion assertions for ES count propagation**
 
 Cover:
 
@@ -334,7 +336,7 @@ Cover:
 - verify against the Nexus search module before deleting any non-count search behavior
 - ES data-shape changes are outside this count replacement and must not reintroduce count consumers
 
-- [ ] **Step 2: Delete the search-index count-field path**
+- [x] **Step 2: Delete the search-index count-field path**
 
 Implementation notes:
 
@@ -344,7 +346,7 @@ Implementation notes:
 - preserve `liked`/`faved` response fields only as user-state fields computed outside the ES document count schema
 - this is a hard delete because later ES document fields will not carry these counters
 
-- [ ] **Step 3: Verify no search-index count consumer remains**
+- [x] **Step 3: Verify no search-index count consumer remains**
 
 Run:
 
@@ -376,7 +378,7 @@ git commit -m "refactor: remove search index count propagation"
 - Test: `nexus-domain/src/test/java/cn/nexus/domain/social/service/ReactionLikeServiceTest.java`
 - Test: `nexus-app/src/test/java/cn/nexus/integration/interaction/ReactionHttpRealIntegrationTest.java`
 
-- [ ] **Step 1: Write failing tests for zhiguang-style reaction semantics**
+- [x] **Step 1: Write failing tests for zhiguang-style reaction semantics**
 
 Cover:
 
@@ -389,7 +391,7 @@ Cover:
 - `like_received` side effects are fast-path local side effects, not a durable correctness boundary
 - comment-like notification remains as non-count business behavior
 
-- [ ] **Step 2: Run the domain and integration tests and confirm failure**
+- [x] **Step 2: Run the domain and integration tests and confirm failure**
 
 Run:
 
@@ -401,7 +403,7 @@ mvn -pl nexus-app -Dtest=ReactionHttpRealIntegrationTest test
 Expected:
 - FAIL because current service still depends on old cache/MQ/event-log semantics.
 
-- [ ] **Step 3: Rewrite `ReactionLikeService` to use the new object counter API**
+- [x] **Step 3: Rewrite `ReactionLikeService` to use the new object counter API**
 
 Implementation notes:
 
@@ -415,7 +417,7 @@ Implementation notes:
 - keep comment-like notification outside the persisted counter correctness contract
 - document comment-like object counting as a Nexus extension over the zhiguang-proven `knowpost` path
 
-- [ ] **Step 4: Remove old replay-only ports and code paths**
+- [x] **Step 4: Remove old replay-only ports and code paths**
 
 Implementation notes:
 
@@ -424,7 +426,7 @@ Implementation notes:
 - keep comment-like notification as business-side notification behavior outside counting
 - keep only other business-side notifications/recommend feedback that still matter outside counting
 
-- [ ] **Step 5: Run the focused tests again**
+- [x] **Step 5: Run the focused tests again**
 
 Run:
 
@@ -454,7 +456,7 @@ git commit -m "refactor: rewrite reaction likes around counter core"
 - Test: new unit tests for the listener
 - Test: `nexus-app/src/test/java/cn/nexus/integration/feed/FeedHttpRealIntegrationTest.java`
 
-- [ ] **Step 1: Write failing tests for `knowpost` local side effects**
+- [x] **Step 1: Write failing tests for `knowpost` local side effects**
 
 Cover:
 
@@ -464,7 +466,7 @@ Cover:
 - Redis page JSON TTL is preserved
 - non-`knowpost` entity types do not run this listener
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 Run:
 
@@ -475,7 +477,7 @@ mvn -pl nexus-app -Dtest=FeedHttpRealIntegrationTest test
 Expected:
 - FAIL because current Nexus has no zhiguang-equivalent local listener.
 
-- [ ] **Step 3: Add the `knowpost` listener and reverse-index-based cache invalidation**
+- [x] **Step 3: Add the `knowpost` listener and reverse-index-based cache invalidation**
 
 Implementation notes:
 
@@ -485,7 +487,7 @@ Implementation notes:
 - the same successful toggle point that publishes Kafka `counter-events` must also publish the local Spring `CounterEvent`
 - update `like_received` as a fast path; `rebuildAllCounters(userId)` can only best-effort correct it from retained interaction truth
 
-- [ ] **Step 4: Run the listener and feed tests again**
+- [x] **Step 4: Run the listener and feed tests again**
 
 Run:
 
@@ -515,7 +517,7 @@ git commit -m "feat: add knowpost local counter side effects"
 - Modify: repositories needed to count posts and sum owned object counters
 - Test: replace port-centered tests with service-centered tests under `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/` or matching module package
 
-- [ ] **Step 1: Write failing tests for `rebuildAllCounters(userId)`**
+- [x] **Step 1: Write failing tests for `rebuildAllCounters(userId)`**
 
 Cover:
 
@@ -526,7 +528,7 @@ Cover:
 - malformed `ucnt` self-heals
 - sampled verification inputs are compatible
 
-- [ ] **Step 2: Run the tests and confirm failure**
+- [x] **Step 2: Run the tests and confirm failure**
 
 Run:
 
@@ -537,7 +539,7 @@ mvn -pl nexus-infrastructure -Dtest=*UserCounter* test
 Expected:
 - FAIL because current user rebuild covers only relation-derived slots.
 
-- [ ] **Step 3: Add the user counter service API**
+- [x] **Step 3: Add the user counter service API**
 
 Implementation notes:
 
@@ -547,7 +549,7 @@ Implementation notes:
 - delete old user counter port abstractions after migrating callers
 - do not keep compatibility adapters or implement the replacement as a `UserCounterPort` rewrite with a service wrapper on top
 
-- [ ] **Step 4: Replace user rebuild logic with mixed-source rebuild**
+- [x] **Step 4: Replace user rebuild logic with mixed-source rebuild**
 
 Implementation notes:
 
@@ -555,7 +557,7 @@ Implementation notes:
 - stop treating follow/follower as the only rebuildable slots
 - keep SDS fixed-slot snapshot shape
 
-- [ ] **Step 5: Run the focused tests again**
+- [x] **Step 5: Run the focused tests again**
 
 Run:
 
@@ -588,7 +590,7 @@ git commit -m "refactor: add user counter service"
 - Test: `nexus-domain/src/test/java/cn/nexus/domain/social/service/RelationServiceTest.java`
 - Test: `nexus-app/src/test/java/cn/nexus/integration/relation/RelationHttpRealIntegrationTest.java`
 
-- [ ] **Step 1: Write failing tests for the relation outbox chain**
+- [x] **Step 1: Write failing tests for the relation outbox chain**
 
 Cover:
 
@@ -601,7 +603,7 @@ Cover:
 - consumer manually acknowledges only after persistent idempotent processing succeeds
 - processor records processed event ids persistently and uses actual relation state transitions before updating follower table plus `uf:flws:*` plus `uf:fans:*` plus `ucnt`
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 Run:
 
@@ -613,7 +615,7 @@ mvn -pl nexus-app -Dtest=RelationHttpRealIntegrationTest test
 Expected:
 - FAIL because current implementation still performs direct after-commit counter writes or lacks the new reliable RabbitMQ outbox projection path.
 
-- [ ] **Step 3: Rewrite `RelationService` to stop direct counter writes**
+- [x] **Step 3: Rewrite `RelationService` to stop direct counter writes**
 
 Implementation notes:
 
@@ -625,7 +627,7 @@ Implementation notes:
 - remove `userCounterRepairOutboxRepository` counting semantics
 - remove old after-commit `userCounterPort.increment(...)`
 
-- [ ] **Step 4: Introduce RabbitMQ outbox publisher and projection consumer scaffolding**
+- [x] **Step 4: Introduce RabbitMQ outbox publisher and projection consumer scaffolding**
 
 Implementation notes:
 
@@ -637,7 +639,7 @@ Implementation notes:
 - consumer hands payload to a relation processor
 - processor owns persistent idempotency and cache/count mutation
 
-- [ ] **Step 5: Rewrite relation-side listener logic into an idempotent state-transition processor**
+- [x] **Step 5: Rewrite relation-side listener logic into an idempotent state-transition processor**
 
 Implementation notes:
 
@@ -651,7 +653,7 @@ Implementation notes:
 - record idempotency success before acknowledging the RabbitMQ message
 - keep unrelated feed/risk/notification side effects as separate downstream consumers or local listeners outside the relation count processor
 
-- [ ] **Step 6: Run focused relation tests again**
+- [x] **Step 6: Run focused relation tests again**
 
 Run:
 
@@ -678,7 +680,7 @@ git commit -m "refactor: replace relation counting with rabbitmq projection"
 - Modify: any infrastructure repository helpers needed by sampled verification
 - Test: `nexus-app/src/test/java/cn/nexus/integration/relation/RelationHttpRealIntegrationTest.java`
 
-- [ ] **Step 1: Write failing tests for relation read-path sampled verification**
+- [x] **Step 1: Write failing tests for relation read-path sampled verification**
 
 Cover:
 
@@ -703,7 +705,7 @@ mvn -pl nexus-app -Dtest=RelationHttpRealIntegrationTest test
 Expected:
 - FAIL because current read path does not yet match zhiguang sampled verification shape.
 
-- [ ] **Step 3: Rewrite relation read/controller assembly**
+- [x] **Step 3: Rewrite relation read/controller assembly**
 
 Implementation notes:
 
@@ -745,7 +747,7 @@ git commit -m "refactor: align relation read path with zhiguang verification"
 - Test: `nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/RootReplyCountChangedConsumerTest.java`
 - Test: comment query/integration tests
 
-- [ ] **Step 1: Write failing tests that assert reply is no longer a counter capability**
+- [x] **Step 1: Write failing tests that assert reply is no longer a counter capability**
 
 Cover:
 
@@ -756,7 +758,7 @@ Cover:
 - do not return counter-backed `replyCount`
 - do not derive `replyCount` from comment truth data in this count-system replacement
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 Run:
 
@@ -767,7 +769,7 @@ mvn -pl nexus-trigger -Dtest=RootReplyCountChangedConsumerTest test
 Expected:
 - FAIL because reply consumer still exists.
 
-- [ ] **Step 3: Delete reply persistence behavior**
+- [x] **Step 3: Delete reply persistence behavior**
 
 Implementation notes:
 
@@ -777,7 +779,7 @@ Implementation notes:
 - do not keep `replyCount=0` as a compatibility fallback
 - remove any remaining reply-specific aggregation overlap logic
 
-- [ ] **Step 4: Run comment-related tests**
+- [x] **Step 4: Run comment-related tests**
 
 Run:
 
@@ -806,7 +808,7 @@ git commit -m "refactor: remove reply persistence from counting"
 - Preserve the new RabbitMQ DB-derived projection path introduced for relation, post, and retained business-truth counters
 - Tests: old trigger/job/repository tests affected by deletions
 
-- [ ] **Step 1: Write or update tests to assert dead paths are removed**
+- [x] **Step 1: Write or update tests to assert dead paths are removed**
 
 Cover:
 
@@ -815,7 +817,7 @@ Cover:
 - no user-counter repair job remains authoritative
 - new RabbitMQ projection outbox, publisher, consumers, DLQ, and idempotency records are not treated as legacy recovery contracts
 
-- [ ] **Step 2: Delete the legacy recovery files and tests**
+- [x] **Step 2: Delete the legacy recovery files and tests**
 
 Run:
 
@@ -826,7 +828,7 @@ rg -n "ReactionRedisRecoveryRunner|CountAofCheckpointJob|CountRdbCheckpointJob|U
 Expected:
 - remaining references are delete targets or rewrite targets.
 
-- [ ] **Step 3: Re-run module tests most affected by deletions**
+- [x] **Step 3: Re-run module tests most affected by deletions**
 
 Run:
 
@@ -853,7 +855,7 @@ git commit -m "refactor: remove legacy count recovery contracts"
 - Modify: content counter outbox publisher/consumer or post-publish downstream files
 - Test: content publish tests and feed distribution tests
 
-- [ ] **Step 1: Write failing tests for post-count outbox projection**
+- [x] **Step 1: Write failing tests for post-count outbox projection**
 
 Cover:
 
@@ -863,7 +865,7 @@ Cover:
 - RabbitMQ projection updates `ucnt.post` only after persistent idempotency succeeds
 - `ucnt.post` can be rebuilt from published content rows when the projection is missing, damaged, or suspected-drift
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 Run:
 
@@ -874,7 +876,7 @@ mvn -pl nexus-domain -Dtest=ContentServiceTest,FeedDistributionServiceTest test
 Expected:
 - FAIL because post count is not yet wired to the Class 2 outbox projection semantics.
 
-- [ ] **Step 3: Add the post-count outbox projection at the correct publish state transition point**
+- [x] **Step 3: Add the post-count outbox projection at the correct publish state transition point**
 
 Implementation notes:
 
@@ -884,7 +886,7 @@ Implementation notes:
 - consumer processing must be persistently idempotent before acknowledging the RabbitMQ message
 - keep the anti-duplicate publish state-transition guard so retries or updates do not create duplicate outbox events
 
-- [ ] **Step 4: Run tests again**
+- [x] **Step 4: Run tests again**
 
 Run:
 
@@ -909,7 +911,7 @@ git commit -m "feat: wire post publish into user post counter"
 - Modify: comment and feed assembly code that reads counts
 - Test: relation, feed, comment, interaction integration tests
 
-- [ ] **Step 1: Write failing tests for public count fields outside the dedicated relation sampled-verification path**
+- [x] **Step 1: Write failing tests for public count fields outside the dedicated relation sampled-verification path**
 
 Cover:
 
@@ -918,7 +920,7 @@ Cover:
 - non-relation pages do not expose internal slot names such as `like_received` or `favorite_received`
 - no API still expects reply from persisted count subsystem
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 Run:
 
@@ -929,7 +931,7 @@ mvn -pl nexus-app -Dtest=FeedHttpRealIntegrationTest,CommentHttpRealIntegrationT
 Expected:
 - FAIL on stale old-field assumptions or removed reply count behavior.
 
-- [ ] **Step 3: Rewrite read adapters and DTO assembly**
+- [x] **Step 3: Rewrite read adapters and DTO assembly**
 
 Implementation notes:
 
@@ -964,7 +966,7 @@ git commit -m "refactor: align public count reads with zhiguang contracts"
 **Files:**
 - Verify only
 
-- [ ] **Step 1: Run infrastructure and domain tests**
+- [x] **Step 1: Run infrastructure and domain tests**
 
 Run:
 
@@ -975,7 +977,7 @@ mvn -pl nexus-infrastructure,nexus-domain test
 Expected:
 - PASS
 
-- [ ] **Step 2: Run trigger tests**
+- [x] **Step 2: Run trigger tests**
 
 Run:
 
@@ -997,7 +999,7 @@ mvn -pl nexus-app -Dtest=ReactionHttpRealIntegrationTest,RelationHttpRealIntegra
 Expected:
 - PASS
 
-- [ ] **Step 4: Run targeted grep-based contract verification**
+- [x] **Step 4: Run targeted grep-based contract verification**
 
 Run:
 
@@ -1008,7 +1010,7 @@ rg -n "COMMENT.reply|RootReplyCountChangedConsumer|UserCounterRepairJob|Reaction
 Expected:
 - only historical docs or intentionally retained non-count business references remain
 
-- [ ] **Step 5: Write a short completion note in the spec or follow-up docs if needed**
+- [x] **Step 5: Write a short completion note in the spec or follow-up docs if needed**
 
 Record:
 
@@ -1023,3 +1025,36 @@ Record:
 git add .
 git commit -m "test: verify zhiguang counter replacement end to end"
 ```
+
+## Final Completion Note - 2026-04-26
+
+Implemented status:
+
+- `/api/v1/relation/counter` is exposed through `IRelationApi` and `RelationController`, returns only `followings`, `followers`, `posts`, and `likedPosts`, and calls `IUserCounterService.readRelationCountersWithVerification(userId)`.
+- `COMMENT.reply` is removed from production counter capability: `ObjectCounterType` only exposes `LIKE`, `CommentPO.replyCount` is removed, and `CommentMapper.xml` no longer maps `reply_count`.
+- `cnt:*` and `ucnt:*` snapshot writes now use raw binary SDS payloads via Redis string commands; the Base64 string snapshot contract has been removed from the counter codec path.
+- Kafka `counter-events` aggregation writes to sharded `agg:v1:{etype}:{eid}:{shard}` buckets and flushes by atomically draining bucket fields plus atomically incrementing SDS slots, avoiding read-modify-set snapshot overwrite.
+- Relation projection replay can compensate Redis adjacency cache and `ucnt` side effects when the follower-table state transition is already applied, by replaying adjacency side effects and rebuilding both users' counters.
+- `knowpost` feed side effects update matching Redis page JSON items in place through `feed:public:index:{entityId}:{hour}`, preserve the page key TTL, prune stale reverse-index members, and keep card/stat eviction fallback.
+- Relation counter real HTTP integration coverage was added for missing/damaged `ucnt`, `ucnt:chk:{userId}` 300-second sampling TTL, and relation-slot-only verification behavior.
+- High-concurrency Kafka aggregation coverage was added for multiple shards flushing the same object, deltas arriving during flush, and malformed snapshot recovery through the atomic SDS increment script.
+- Relation/post projection consumer idempotency was tightened: `RelationCounterProjectConsumer` now uses `startManual(...)` inside a transaction with processor execution and `markDone`, acknowledges only after transaction success, requeues fresh `PROCESSING` records, and allows stale `PROCESSING` recovery.
+- User counter increments now use Redis Lua SDS slot increments instead of read-modify-write snapshots, so concurrent follow/post/like_received deltas do not overwrite each other.
+- `RelationCounterProjectionProcessor` replays relation side effects by rebuilding from truth instead of incrementing on projection replay, and POST projection only requires `sourceId`/author id rather than a non-null relation `targetId`.
+- Comment-like MQ consumption no longer writes `interaction_comment.like_count`; the old `addLikeCount` repository/DAO/mapper write capability has been removed, leaving object counter snapshots as the count source and hot-rank refresh as a derived side effect.
+
+Final transports and contracts:
+
+- Interaction counters use Kafka topic `counter-events`, Redis bitmap truth keys `bm:like:{etype}:{eid}:{chunk}`, aggregation active index `agg:v1:active`, sharded aggregation buckets, and binary SDS object snapshots `cnt:v1:{etype}:{eid}`.
+- DB-derived relation/post projections use RabbitMQ `relation.counter.exchange`, queues `relation.counter.follow.queue`, `relation.counter.block.queue`, `relation.counter.post.queue`, DLX `relation.counter.dlx`, DLQs for follow/block/post, publisher confirms through the outbox publish job, and `reliable_mq_consumer_record` idempotency in the projection consumer.
+- `USER.favorite_received` remains a reserved inactive slot. Public relation APIs expose it as neither a field nor an active counter.
+- Search-index count propagation was removed from the count replacement scope; search DTO/index mapping tests assert count fields are absent.
+
+Verification evidence:
+
+- Passed: `mvn -pl nexus-app -am -DskipTests test-compile`.
+- Passed: `mvn -pl nexus-domain,nexus-infrastructure,nexus-trigger -am -Dtest=RelationCounterProjectionProcessorTest,CountRedisOperationsTest,CountRedisSchemaSupportTest,ObjectCounterServiceTest,UserCounterServiceTest,CounterAggregationConsumerTest,RelationControllerTest,CounterReplacementContractTest,FeedCounterSideEffectPortTest -Dsurefire.failIfNoSpecifiedTests=false test`.
+- Passed: `mvn -pl nexus-domain,nexus-infrastructure,nexus-trigger -am -Dtest=RelationCounterProjectionProcessorTest,CountRedisOperationsTest,CountRedisSchemaSupportTest,ObjectCounterServiceTest,UserCounterServiceTest,CounterAggregationConsumerTest,RelationControllerTest,CounterReplacementContractTest,FeedCounterSideEffectPortTest,CommentLikeChangedConsumerTest,ReliableMqConsumerRecordServiceTest,RelationCounterProjectConsumerTest -Dsurefire.failIfNoSpecifiedTests=false test`.
+- Passed: `mvn -pl nexus-domain,nexus-infrastructure,nexus-trigger -am test`.
+- Passed static contract check: no production hits for `ObjectCounterType.REPLY`, `REPLY("reply")`, `addLikeCount`, `commentRepository.addLikeCount`, `SET like_count = GREATEST`, `replyCount`, `reply_count`, `PostLikeCountAggregateConsumer`, `RootReplyCountChangedConsumer`, `ReactionRedisRecoveryRunner`, `UserCounterRepairJob`, or `ReactionEventLog`.
+- Blocked by local environment: `mvn -pl nexus-app -am -Dtest=RelationHttpRealIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test` failed during Spring context startup because Cassandra `127.0.0.1:9042` was unreachable, before relation business assertions executed.

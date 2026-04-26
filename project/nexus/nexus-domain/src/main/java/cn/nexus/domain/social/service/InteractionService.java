@@ -155,10 +155,6 @@ public class InteractionService implements IInteractionService {
         publishCreated(cid, postId, rootId, userId, nowMs);
         publishNotifyCommentCreated(cid, postId, rootId, parentIdToSave, userId, nowMs);
         publishNotifyCommentMentioned(cid, postId, rootId, parentIdToSave, userId, nowMs, content);
-        if (rootId != null) {
-            publishReplyCountChanged(rootId, postId, +1L, nowMs);
-        }
-
         // `@username` 提及走旁路事件；即使发布失败，也不能反向拖垮评论主流程。
         return CommentResultVO.builder().commentId(cid).createTime(nowMs).status("OK").build();
     }
@@ -195,9 +191,6 @@ public class InteractionService implements IInteractionService {
             publishCreated(commentId, c.getPostId(), c.getRootId(), c.getUserId(), nowMs);
             publishNotifyCommentCreated(commentId, c.getPostId(), c.getRootId(), c.getParentId(), c.getUserId(), nowMs);
             publishNotifyCommentMentioned(commentId, c.getPostId(), c.getRootId(), c.getParentId(), c.getUserId(), nowMs, c.getContent());
-            if (c.getRootId() != null) {
-                publishReplyCountChanged(c.getRootId(), c.getPostId(), +1L, nowMs);
-            }
             return ok(commentId, "APPROVED", "已通过");
         }
 
@@ -272,12 +265,9 @@ public class InteractionService implements IInteractionService {
             return fail(commentId, "NO_PERMISSION", "无权限");
         }
 
-        // 回复删除只影响本楼的 reply_count，不需要清热榜和置顶。
+        // 回复删除只影响楼内回复业务列表，不再维护持久化 reply 计数。
         if (c.getRootId() != null) {
-            boolean deleted = commentRepository.softDelete(commentId, nowMs);
-            if (deleted) {
-                publishReplyCountChanged(c.getRootId(), c.getPostId(), -1L, nowMs);
-            }
+            commentRepository.softDelete(commentId, nowMs);
             return ok(commentId, "DELETED", "已删除");
         }
 
@@ -544,19 +534,6 @@ public class InteractionService implements IInteractionService {
             break;
         }
         return end <= 0 ? "" : raw.substring(0, end);
-    }
-
-    private void publishReplyCountChanged(Long rootCommentId, Long postId, Long delta, Long nowMs) {
-        try {
-            cn.nexus.types.event.interaction.RootReplyCountChangedEvent changed = new cn.nexus.types.event.interaction.RootReplyCountChangedEvent();
-            changed.setRootCommentId(rootCommentId);
-            changed.setPostId(postId);
-            changed.setDelta(delta);
-            changed.setTsMs(nowMs);
-            commentEventPort.publish(changed);
-        } catch (Exception e) {
-            log.warn("publish RootReplyCountChangedEvent failed, rootCommentId={}, postId={}, delta={}", rootCommentId, postId, delta, e);
-        }
     }
 
     private String renderTitle(String bizType) {

@@ -23,8 +23,6 @@ public class CommentPO {
     private String contentId;
     private Integer status;
     private Long likeCount;
-    private Long replyCount;
     private Date createTime;
     private Date updateTime;
 }
-

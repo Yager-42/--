@@ -1,7 +1,6 @@
 package cn.nexus.infrastructure.adapter.counter.support;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.util.Arrays;
 
 /**
  * Fixed-width slot codec used by Count Redis snapshots.
@@ -35,15 +34,15 @@ public final class CountRedisCodec {
         return values;
     }
 
-    public static String toRedisValue(byte[] bytes) {
-        return Base64.getEncoder().encodeToString(bytes == null ? new byte[0] : bytes);
+    public static byte[] toRedisValue(byte[] bytes) {
+        return bytes == null ? new byte[0] : Arrays.copyOf(bytes, bytes.length);
     }
 
-    public static byte[] fromRedisValue(String raw) {
-        if (raw == null || raw.isBlank()) {
+    public static byte[] fromRedisValue(byte[] raw) {
+        if (raw == null || raw.length == 0) {
             return new byte[0];
         }
-        return Base64.getDecoder().decode(raw.getBytes(StandardCharsets.UTF_8));
+        return Arrays.copyOf(raw, raw.length);
     }
 
     private static long clampNonNegative(long value) {

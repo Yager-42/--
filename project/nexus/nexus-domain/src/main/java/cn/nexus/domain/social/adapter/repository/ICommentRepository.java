@@ -60,10 +60,6 @@ public interface ICommentRepository {
      */
     int deleteSoftDeletedBefore(Date cutoff, int limit);
 
-    void addReplyCount(Long rootCommentId, Long delta);
-
-    void addLikeCount(Long rootCommentId, Long delta);
-
     /**
      * 一级评论分页（时间倒序，游标分页）。
      *
@@ -97,7 +93,7 @@ public interface ICommentRepository {
      *
      * @param postId 帖子 ID
      * @param limit  扫描上限（建议 5000）
-     * @return 一级评论简要信息列表（包含 like_count/reply_count）
+     * @return 一级评论简要信息列表（包含 like_count）
      */
     List<CommentBriefVO> listRecentRootBriefs(Long postId, int limit);
 }

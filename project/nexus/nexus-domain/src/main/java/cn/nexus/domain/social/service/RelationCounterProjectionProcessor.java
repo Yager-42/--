@@ -2,6 +2,8 @@ package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
+import cn.nexus.domain.social.adapter.repository.IPostCounterProjectionRepository;
+import cn.nexus.domain.social.adapter.repository.IPostCounterProjectionRepository.EdgeResult;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.types.event.relation.RelationCounterProjectEvent;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +23,7 @@ public class RelationCounterProjectionProcessor {
     private final IRelationRepository relationRepository;
     private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IUserCounterService userCounterService;
+    private final IPostCounterProjectionRepository postCounterProjectionRepository;
 
     @Transactional(rollbackFor = Exception.class)
     public void process(RelationCounterProjectEvent event) {
@@ -94,23 +97,25 @@ public class RelationCounterProjectionProcessor {
 
     private void applyPostProjection(RelationCounterProjectEvent event) {
         Long authorId = event.getSourceId();
-        if (authorId == null) {
+        Long postId = event.getTargetId();
+        // Behavioral change from legacy: null postId returns early instead of triggering
+        // a full rebuild. Null postId events are not expected in normal operation.
+        if (authorId == null || postId == null) {
             return;
         }
         String status = normalize(event.getStatus());
-        if ("PUBLISHED".equals(status)) {
-            userCounterService.rebuildAllCounters(authorId);
-            return;
+        boolean targetPublished = "PUBLISHED".equals(status);
+        // UNPUBLISHED and DELETED both mean not-published
+        Long relationEventId = event.getRelationEventId();
+        if (relationEventId == null) {
+            relationEventId = 0L;
         }
-        if ("UNPUBLISHED".equals(status) || "DELETED".equals(status)) {
-            userCounterService.rebuildAllCounters(authorId);
-        }
-    }
 
-    private void rebuildRelationCounters(Long sourceId, Long targetId) {
-        userCounterService.rebuildAllCounters(sourceId);
-        if (targetId != null && !targetId.equals(sourceId)) {
-            userCounterService.rebuildAllCounters(targetId);
+        EdgeResult result = postCounterProjectionRepository.compareAndWrite(
+                postId, authorId, targetPublished, relationEventId);
+
+        if (result == EdgeResult.EDGE_TRANSITION) {
+            userCounterService.incrementPosts(authorId, targetPublished ? 1L : -1L);
         }
     }
 

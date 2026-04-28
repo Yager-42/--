@@ -8,17 +8,13 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.counter.model.valobj.UserRelationCounterVO;
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
-import cn.nexus.domain.social.model.entity.ContentPostEntity;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import java.util.concurrent.TimeUnit;
@@ -66,19 +62,12 @@ class UserCounterServiceTest {
         when(relationRepository.countActiveRelationsBySource(9L, 1)).thenReturn(4);
         when(relationRepository.countFollowerIds(9L)).thenReturn(5);
         when(contentRepository.countPublishedPostsByUser(9L)).thenReturn(2L);
-        when(contentRepository.listPublishedPostIdsByUser(9L)).thenReturn(List.of(
-                ContentPostEntity.builder().postId(901L).build(),
-                ContentPostEntity.builder().postId(902L).build()));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(901L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(Map.of("like", 3L));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(902L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(Map.of("like", 2L));
 
         UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
 
         long likeReceived = service.getCount(9L, UserCounterType.LIKE_RECEIVED);
 
-        assertEquals(5L, likeReceived);
+        assertEquals(0L, likeReceived);
         verify(redisTemplate, Mockito.times(2)).execute(any(RedisCallback.class));
         verify(redisTemplate).delete("count:rebuild-lock:user:{9}");
     }
@@ -144,16 +133,6 @@ class UserCounterServiceTest {
         when(relationRepository.countActiveRelationsBySource(31L, 1)).thenReturn(12);
         when(relationRepository.countFollowerIds(31L)).thenReturn(21);
         when(contentRepository.countPublishedPostsByUser(31L)).thenReturn(3L);
-        when(contentRepository.listPublishedPostIdsByUser(31L)).thenReturn(List.of(
-                ContentPostEntity.builder().postId(3101L).build(),
-                ContentPostEntity.builder().postId(3102L).build(),
-                ContentPostEntity.builder().postId(3103L).build()));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(3101L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(Map.of("like", 1L));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(3102L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(Map.of("like", 4L));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(3103L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(Map.of());
 
         UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
 
@@ -173,15 +152,11 @@ class UserCounterServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         Mockito.doReturn(null)
                 .doReturn(Boolean.TRUE)
-                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 4L, 5L, 0L}, 5)))
+                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 4L, 0L, 0L}, 5)))
                 .when(redisTemplate).execute(any(RedisCallback.class));
         when(relationRepository.countActiveRelationsBySource(41L, 1)).thenReturn(2);
         when(relationRepository.countFollowerIds(41L)).thenReturn(3);
         when(contentRepository.countPublishedPostsByUser(41L)).thenReturn(4L);
-        when(contentRepository.listPublishedPostIdsByUser(41L)).thenReturn(List.of(
-                ContentPostEntity.builder().postId(4101L).build()));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(4101L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(Map.of("like", 5L));
         when(valueOperations.setIfAbsent(eq("ucnt:chk:41"), eq("1"), eq(300L), eq(TimeUnit.SECONDS)))
                 .thenReturn(Boolean.FALSE);
 
@@ -192,7 +167,7 @@ class UserCounterServiceTest {
         assertEquals(2L, counters.getFollowings());
         assertEquals(3L, counters.getFollowers());
         assertEquals(4L, counters.getPosts());
-        assertEquals(5L, counters.getLikedPosts());
+        assertEquals(0L, counters.getLikedPosts());
         verify(redisTemplate, Mockito.times(3)).execute(any(RedisCallback.class));
     }
 
@@ -208,15 +183,11 @@ class UserCounterServiceTest {
         byte[] oversized = new byte[24];
         Mockito.doReturn(oversized)
                 .doReturn(Boolean.TRUE)
-                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{6L, 7L, 8L, 9L, 0L}, 5)))
+                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{6L, 7L, 8L, 0L, 0L}, 5)))
                 .when(redisTemplate).execute(any(RedisCallback.class));
         when(relationRepository.countActiveRelationsBySource(61L, 1)).thenReturn(6);
         when(relationRepository.countFollowerIds(61L)).thenReturn(7);
         when(contentRepository.countPublishedPostsByUser(61L)).thenReturn(8L);
-        when(contentRepository.listPublishedPostIdsByUser(61L)).thenReturn(List.of(
-                ContentPostEntity.builder().postId(6101L).build()));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(6101L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(Map.of("like", 9L));
         when(valueOperations.setIfAbsent(eq("ucnt:chk:61"), eq("1"), eq(300L), eq(TimeUnit.SECONDS)))
                 .thenReturn(Boolean.FALSE);
 
@@ -227,7 +198,7 @@ class UserCounterServiceTest {
         assertEquals(6L, counters.getFollowings());
         assertEquals(7L, counters.getFollowers());
         assertEquals(8L, counters.getPosts());
-        assertEquals(9L, counters.getLikedPosts());
+        assertEquals(0L, counters.getLikedPosts());
     }
 
     @Test
@@ -241,7 +212,7 @@ class UserCounterServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         Mockito.doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{9L, 9L, 3L, 7L, 0L}, 5)))
                 .doReturn(Boolean.TRUE)
-                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 3L, 7L, 0L}, 5)))
+                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 3L, 0L, 0L}, 5)))
                 .when(redisTemplate).execute(any(RedisCallback.class));
         when(valueOperations.setIfAbsent(eq("ucnt:chk:51"), eq("1"), eq(300L), eq(TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE)
@@ -249,10 +220,6 @@ class UserCounterServiceTest {
         when(relationRepository.countActiveRelationsBySource(51L, 1)).thenReturn(2);
         when(relationRepository.countFollowerIds(51L)).thenReturn(3);
         when(contentRepository.countPublishedPostsByUser(51L)).thenReturn(3L);
-        when(contentRepository.listPublishedPostIdsByUser(51L)).thenReturn(List.of(
-                ContentPostEntity.builder().postId(5101L).build()));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(5101L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(Map.of("like", 7L));
 
         UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
 
@@ -264,7 +231,7 @@ class UserCounterServiceTest {
         assertEquals(2L, counters.getFollowings());
         assertEquals(3L, counters.getFollowers());
         assertEquals(3L, counters.getPosts());
-        assertEquals(7L, counters.getLikedPosts());
+        assertEquals(0L, counters.getLikedPosts());
         verify(redisTemplate, Mockito.times(3)).execute(any(RedisCallback.class));
     }
 }

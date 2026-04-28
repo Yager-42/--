@@ -199,6 +199,10 @@ public class UserCounterService implements IUserCounterService {
     }
 
     private Map<String, Long> rebuildUserSnapshot(Long userId) {
+        return rebuildClass2Slots(userId, Map.of());
+    }
+
+    private Map<String, Long> rebuildClass2Slots(Long userId, Map<String, Long> previousSnapshot) {
         Map<String, Long> rebuilt = CountRedisSchema.userSnapshotDefaults();
         rebuilt.put(UserCounterType.FOLLOWING.getCode(),
                 Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1)));
@@ -206,8 +210,14 @@ public class UserCounterService implements IUserCounterService {
                 Math.max(0L, relationRepository.countFollowerIds(userId)));
         rebuilt.put(UserCounterType.POST.getCode(),
                 Math.max(0L, contentRepository.countPublishedPostsByUser(userId)));
-        rebuilt.put(UserCounterType.LIKE_RECEIVED.getCode(),
-                Math.max(0L, sumLikeReceivedBestEffort(userId)));
+        long preservedLikeReceived = 0L;
+        if (previousSnapshot != null) {
+            Long prev = previousSnapshot.get(UserCounterType.LIKE_RECEIVED.getCode());
+            if (prev != null) {
+                preservedLikeReceived = Math.max(0L, prev);
+            }
+        }
+        rebuilt.put(UserCounterType.LIKE_RECEIVED.getCode(), preservedLikeReceived);
         rebuilt.put(UserCounterType.FAVORITE_RECEIVED.getCode(), 0L);
         return rebuilt;
     }

@@ -52,31 +52,31 @@ public class RelationCounterProjectionProcessor {
             if (!isActiveFollow(sourceId, targetId)) {
                 return;
             }
-            Long followerRowId = event.getRelationEventId() == null ? relationSeed(sourceId, targetId) : event.getRelationEventId();
-            boolean changed = relationRepository.saveFollowerIfAbsent(followerRowId, targetId, sourceId, new java.util.Date());
-            if (!changed) {
-                relationAdjacencyCachePort.addFollowWithTtl(sourceId, targetId, System.currentTimeMillis(), ADJACENCY_CACHE_TTL_SECONDS);
-                rebuildRelationCounters(sourceId, targetId);
+            Long followerRowId = event.getRelationEventId() == null
+                    ? relationSeed(sourceId, targetId)
+                    : event.getRelationEventId();
+            boolean changed = relationRepository.saveFollowerIfAbsent(
+                    followerRowId, targetId, sourceId, new java.util.Date());
+            relationAdjacencyCachePort.addFollowWithTtl(
+                    sourceId, targetId, System.currentTimeMillis(), ADJACENCY_CACHE_TTL_SECONDS);
+            if (changed) {
+                userCounterService.incrementFollowings(sourceId, 1L);
+                userCounterService.incrementFollowers(targetId, 1L);
+            }
+            return;
+        }
+        if ("UNFOLLOW".equals(status)) {
+            if (isActiveFollow(sourceId, targetId)) {
                 return;
             }
-            relationAdjacencyCachePort.addFollowWithTtl(sourceId, targetId, System.currentTimeMillis(), ADJACENCY_CACHE_TTL_SECONDS);
-            rebuildRelationCounters(sourceId, targetId);
-            return;
+            boolean changed = relationRepository.deleteFollowerIfPresent(targetId, sourceId);
+            relationAdjacencyCachePort.removeFollowWithTtl(
+                    sourceId, targetId, ADJACENCY_CACHE_TTL_SECONDS);
+            if (changed) {
+                userCounterService.incrementFollowings(sourceId, -1L);
+                userCounterService.incrementFollowers(targetId, -1L);
+            }
         }
-        if (!"UNFOLLOW".equals(status)) {
-            return;
-        }
-        if (isActiveFollow(sourceId, targetId)) {
-            return;
-        }
-        boolean changed = relationRepository.deleteFollowerIfPresent(targetId, sourceId);
-        if (!changed) {
-            relationAdjacencyCachePort.removeFollowWithTtl(sourceId, targetId, ADJACENCY_CACHE_TTL_SECONDS);
-            rebuildRelationCounters(sourceId, targetId);
-            return;
-        }
-        relationAdjacencyCachePort.removeFollowWithTtl(sourceId, targetId, ADJACENCY_CACHE_TTL_SECONDS);
-        rebuildRelationCounters(sourceId, targetId);
     }
 
     private void applyBlockProjection(RelationCounterProjectEvent event) {

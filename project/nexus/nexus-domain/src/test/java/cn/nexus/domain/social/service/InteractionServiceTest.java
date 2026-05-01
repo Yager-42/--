@@ -1,12 +1,10 @@
 package cn.nexus.domain.social.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -25,14 +23,12 @@ import cn.nexus.domain.social.model.valobj.CommentViewVO;
 import cn.nexus.domain.social.model.valobj.NotificationListVO;
 import cn.nexus.domain.social.model.valobj.NotificationVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
-import cn.nexus.domain.social.model.valobj.ReactionResultVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
 import cn.nexus.domain.social.model.valobj.RiskDecisionVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.types.event.interaction.CommentCreatedEvent;
 import cn.nexus.types.event.interaction.EventType;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
-import cn.nexus.types.exception.AppException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
@@ -44,7 +40,7 @@ class InteractionServiceTest {
     @Test
     void comment_shouldPublishMentionEventsForResolvedUsernames() {
         ISocialIdPort socialIdPort = Mockito.mock(ISocialIdPort.class);
-        IReactionLikeService reactionLikeService = Mockito.mock(IReactionLikeService.class);
+        IPostActionService postActionService = Mockito.mock(IPostActionService.class);
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
         ICommentPinRepository commentPinRepository = Mockito.mock(ICommentPinRepository.class);
         ICommentHotRankRepository commentHotRankRepository = Mockito.mock(ICommentHotRankRepository.class);
@@ -57,7 +53,7 @@ class InteractionServiceTest {
 
         InteractionService service = new InteractionService(
                 socialIdPort,
-                reactionLikeService,
+                postActionService,
                 commentRepository,
                 commentPinRepository,
                 commentHotRankRepository,
@@ -103,7 +99,7 @@ class InteractionServiceTest {
     @Test
     void comment_shouldReturnPendingReviewWithoutSideEffects() {
         ISocialIdPort socialIdPort = Mockito.mock(ISocialIdPort.class);
-        IReactionLikeService reactionLikeService = Mockito.mock(IReactionLikeService.class);
+        IPostActionService postActionService = Mockito.mock(IPostActionService.class);
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
         ICommentPinRepository commentPinRepository = Mockito.mock(ICommentPinRepository.class);
         ICommentHotRankRepository commentHotRankRepository = Mockito.mock(ICommentHotRankRepository.class);
@@ -114,7 +110,7 @@ class InteractionServiceTest {
         IInteractionNotificationRepository interactionNotificationRepository = Mockito.mock(IInteractionNotificationRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
 
-        InteractionService service = new InteractionService(socialIdPort, reactionLikeService, commentRepository, commentPinRepository,
+        InteractionService service = new InteractionService(socialIdPort, postActionService, commentRepository, commentPinRepository,
                 commentHotRankRepository, contentRepository, riskService, commentEventPort, interactionNotifyEventPort,
                 interactionNotificationRepository, userBaseRepository);
 
@@ -129,41 +125,17 @@ class InteractionServiceTest {
     }
 
     @Test
-    void react_shouldDelegateCommentTargetWithoutPublishingCommentLikeChangedEvent() {
-        ISocialIdPort socialIdPort = Mockito.mock(ISocialIdPort.class);
-        IReactionLikeService reactionLikeService = Mockito.mock(IReactionLikeService.class);
-        ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
-        ICommentPinRepository commentPinRepository = Mockito.mock(ICommentPinRepository.class);
-        ICommentHotRankRepository commentHotRankRepository = Mockito.mock(ICommentHotRankRepository.class);
-        IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
-        IRiskService riskService = Mockito.mock(IRiskService.class);
-        ICommentEventPort commentEventPort = Mockito.mock(ICommentEventPort.class);
-        IInteractionNotifyEventPort interactionNotifyEventPort = Mockito.mock(IInteractionNotifyEventPort.class);
-        IInteractionNotificationRepository interactionNotificationRepository = Mockito.mock(IInteractionNotificationRepository.class);
-        IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-
-        InteractionService service = new InteractionService(socialIdPort, reactionLikeService, commentRepository, commentPinRepository,
-                commentHotRankRepository, contentRepository, riskService, commentEventPort, interactionNotifyEventPort,
-                interactionNotificationRepository, userBaseRepository);
-
-        when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder().commentId(101L).postId(9L).status(1).build());
-        when(reactionLikeService.applyReaction(any(), any(), any(), any()))
-                .thenReturn(ReactionResultVO.builder().delta(1).currentCount(3L).build());
-
-        service.react(1L, 101L, "COMMENT", "LIKE", "ADD", "req-1");
-
-        ArgumentCaptor<ReactionTargetVO> captor = ArgumentCaptor.forClass(ReactionTargetVO.class);
-        verify(reactionLikeService).applyReaction(Mockito.eq(1L), captor.capture(), Mockito.any(), Mockito.eq("req-1"));
-        assertEquals(101L, captor.getValue().getTargetId());
-        assertEquals("COMMENT", captor.getValue().getTargetType().getCode());
-        assertEquals("LIKE", captor.getValue().getReactionType().getCode());
-        Mockito.verifyNoInteractions(commentEventPort, interactionNotifyEventPort);
+    void interactionServiceShouldNotExposeGenericReactionEntryPoints() {
+        assertFalse(Arrays.stream(IInteractionService.class.getDeclaredMethods())
+                .anyMatch(method -> method.getName().equals("react") || method.getName().equals("reactionState")));
+        assertFalse(Arrays.stream(InteractionService.class.getDeclaredMethods())
+                .anyMatch(method -> method.getName().equals("react") || method.getName().equals("reactionState")));
     }
 
     @Test
     void notifications_shouldRenderContentAndCursor() {
         ISocialIdPort socialIdPort = Mockito.mock(ISocialIdPort.class);
-        IReactionLikeService reactionLikeService = Mockito.mock(IReactionLikeService.class);
+        IPostActionService postActionService = Mockito.mock(IPostActionService.class);
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
         ICommentPinRepository commentPinRepository = Mockito.mock(ICommentPinRepository.class);
         ICommentHotRankRepository commentHotRankRepository = Mockito.mock(ICommentHotRankRepository.class);
@@ -174,11 +146,11 @@ class InteractionServiceTest {
         IInteractionNotificationRepository interactionNotificationRepository = Mockito.mock(IInteractionNotificationRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
 
-        InteractionService service = new InteractionService(socialIdPort, reactionLikeService, commentRepository, commentPinRepository,
+        InteractionService service = new InteractionService(socialIdPort, postActionService, commentRepository, commentPinRepository,
                 commentHotRankRepository, contentRepository, riskService, commentEventPort, interactionNotifyEventPort,
                 interactionNotificationRepository, userBaseRepository);
         when(interactionNotificationRepository.pageByUser(1L, null, 20)).thenReturn(List.of(
-                NotificationVO.builder().notificationId(99L).bizType("COMMENT_LIKED").unreadCount(2L).createTime(1000L).build()
+                NotificationVO.builder().notificationId(99L).bizType("POST_LIKED").unreadCount(2L).createTime(1000L).build()
         ));
 
         NotificationListVO result = service.notifications(1L, null);
@@ -188,10 +160,11 @@ class InteractionServiceTest {
     }
 
     @Test
-    void reactionState_shouldRejectInvalidTarget() {
+    void notificationsShouldNotRenderCommentLikedBusinessType() {
+        IInteractionNotificationRepository repository = Mockito.mock(IInteractionNotificationRepository.class);
         InteractionService service = new InteractionService(
                 Mockito.mock(ISocialIdPort.class),
-                Mockito.mock(IReactionLikeService.class),
+                Mockito.mock(IPostActionService.class),
                 Mockito.mock(ICommentRepository.class),
                 Mockito.mock(ICommentPinRepository.class),
                 Mockito.mock(ICommentHotRankRepository.class),
@@ -199,10 +172,16 @@ class InteractionServiceTest {
                 Mockito.mock(IRiskService.class),
                 Mockito.mock(ICommentEventPort.class),
                 Mockito.mock(IInteractionNotifyEventPort.class),
-                Mockito.mock(IInteractionNotificationRepository.class),
+                repository,
                 Mockito.mock(IUserBaseRepository.class));
+        when(repository.pageByUser(1L, null, 20)).thenReturn(List.of(
+                NotificationVO.builder().notificationId(99L).bizType("COMMENT_LIKED").unreadCount(2L).createTime(1000L).build()
+        ));
 
-        assertThrows(AppException.class, () -> service.reactionState(1L, null, "POST", "LIKE"));
+        NotificationListVO result = service.notifications(1L, null);
+
+        assertEquals("通知", result.getNotifications().get(0).getTitle());
+        assertEquals("你有新的互动", result.getNotifications().get(0).getContent());
     }
 
     @Test
@@ -211,7 +190,7 @@ class InteractionServiceTest {
         ICommentRepository commentRepository = Mockito.mock(ICommentRepository.class);
         InteractionService service = new InteractionService(
                 socialIdPort,
-                Mockito.mock(IReactionLikeService.class),
+                Mockito.mock(IPostActionService.class),
                 commentRepository,
                 Mockito.mock(ICommentPinRepository.class),
                 Mockito.mock(ICommentHotRankRepository.class),
@@ -231,7 +210,7 @@ class InteractionServiceTest {
         IInteractionNotificationRepository interactionNotificationRepository = Mockito.mock(IInteractionNotificationRepository.class);
         InteractionService service = new InteractionService(
                 Mockito.mock(ISocialIdPort.class),
-                Mockito.mock(IReactionLikeService.class),
+                Mockito.mock(IPostActionService.class),
                 Mockito.mock(ICommentRepository.class),
                 Mockito.mock(ICommentPinRepository.class),
                 Mockito.mock(ICommentHotRankRepository.class),
@@ -254,7 +233,7 @@ class InteractionServiceTest {
         IInteractionNotifyEventPort interactionNotifyEventPort = Mockito.mock(IInteractionNotifyEventPort.class);
         InteractionService service = new InteractionService(
                 socialIdPort,
-                Mockito.mock(IReactionLikeService.class),
+                Mockito.mock(IPostActionService.class),
                 commentRepository,
                 Mockito.mock(ICommentPinRepository.class),
                 Mockito.mock(ICommentHotRankRepository.class),
@@ -293,7 +272,7 @@ class InteractionServiceTest {
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         InteractionService service = new InteractionService(
                 socialIdPort,
-                Mockito.mock(IReactionLikeService.class),
+                Mockito.mock(IPostActionService.class),
                 commentRepository,
                 commentPinRepository,
                 Mockito.mock(ICommentHotRankRepository.class),
@@ -325,7 +304,7 @@ class InteractionServiceTest {
         IInteractionNotificationRepository interactionNotificationRepository = Mockito.mock(IInteractionNotificationRepository.class);
         InteractionService service = new InteractionService(
                 Mockito.mock(ISocialIdPort.class),
-                Mockito.mock(IReactionLikeService.class),
+                Mockito.mock(IPostActionService.class),
                 Mockito.mock(ICommentRepository.class),
                 Mockito.mock(ICommentPinRepository.class),
                 Mockito.mock(ICommentHotRankRepository.class),

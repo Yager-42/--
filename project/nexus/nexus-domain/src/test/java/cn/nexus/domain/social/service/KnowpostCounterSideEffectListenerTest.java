@@ -9,7 +9,6 @@ import cn.nexus.domain.counter.model.event.CounterEvent;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IFeedCounterSideEffectPort;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -29,9 +28,10 @@ class KnowpostCounterSideEffectListenerTest {
 
         listener.onCounterChanged(CounterEvent.builder()
                 .requestId("rid-1")
-                .targetType(ReactionTargetTypeEnumVO.POST)
+                .targetType("post")
                 .targetId(101L)
-                .counterType(ObjectCounterType.LIKE)
+                .metric(ObjectCounterType.LIKE.getCode())
+                .slot(1)
                 .actorUserId(2L)
                 .delta(1L)
                 .tsMs(1000L)
@@ -53,9 +53,10 @@ class KnowpostCounterSideEffectListenerTest {
 
         listener.onCounterChanged(CounterEvent.builder()
                 .requestId("rid-2")
-                .targetType(ReactionTargetTypeEnumVO.COMMENT)
+                .targetType("comment")
                 .targetId(201L)
-                .counterType(ObjectCounterType.LIKE)
+                .metric(ObjectCounterType.LIKE.getCode())
+                .slot(1)
                 .actorUserId(2L)
                 .delta(1L)
                 .tsMs(1000L)
@@ -77,9 +78,10 @@ class KnowpostCounterSideEffectListenerTest {
 
         listener.onCounterChanged(CounterEvent.builder()
                 .requestId("rid-3")
-                .targetType(ReactionTargetTypeEnumVO.POST)
+                .targetType("post")
                 .targetId(101L)
-                .counterType(ObjectCounterType.LIKE)
+                .metric(ObjectCounterType.LIKE.getCode())
+                .slot(1)
                 .actorUserId(2L)
                 .delta(0L)
                 .tsMs(1000L)

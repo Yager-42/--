@@ -15,7 +15,6 @@ import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.List;
 import java.util.Map;
@@ -53,12 +52,11 @@ class FeedCardAssembleServiceTest {
                 .thenReturn(Map.of(101L, base));
         when(userBaseRepository.listByUserIds(List.of(201L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(201L).nickname("author").avatarUrl("a.png").build()));
-        when(objectCounterService.isLiked(eq(ReactionTargetTypeEnumVO.POST), eq(101L), eq(1L))).thenReturn(false);
+        when(objectCounterService.isPostLiked(eq(101L), eq(1L))).thenReturn(false);
         when(relationQueryService.batchFollowing(eq(1L), eq(List.of(201L)))).thenReturn(Set.of());
         when(feedFollowSeenRepository.batchSeen(eq(1L), eq(List.of(101L)))).thenReturn(Set.of());
 
-        when(objectCounterService.getCountsBatch(
-                eq(ReactionTargetTypeEnumVO.POST),
+        when(objectCounterService.getPostCountsBatch(
                 eq(List.of(101L)),
                 eq(List.of(ObjectCounterType.LIKE))
         )).thenReturn(Map.of(101L, Map.of("like", 8L)));
@@ -72,8 +70,7 @@ class FeedCardAssembleServiceTest {
 
         assertEquals(1, items.size());
         assertEquals(8L, items.get(0).getLikeCount());
-        verify(objectCounterService).getCountsBatch(
-                eq(ReactionTargetTypeEnumVO.POST),
+        verify(objectCounterService).getPostCountsBatch(
                 eq(List.of(101L)),
                 eq(List.of(ObjectCounterType.LIKE)));
     }

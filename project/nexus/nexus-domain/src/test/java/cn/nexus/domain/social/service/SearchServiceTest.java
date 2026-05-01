@@ -9,7 +9,6 @@ import static org.mockito.Mockito.when;
 
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.adapter.port.ISearchEnginePort;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.SearchDocumentVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineQueryVO;
 import cn.nexus.domain.social.model.valobj.SearchEngineResultVO;
@@ -52,7 +51,7 @@ class SearchServiceTest {
                 .hasMore(true)
                 .nextAfter("after-1")
                 .build());
-        when(objectCounterService.isLiked(Mockito.eq(ReactionTargetTypeEnumVO.POST), Mockito.eq(101L), Mockito.eq(9L))).thenReturn(true);
+        when(objectCounterService.isPostLiked(Mockito.eq(101L), Mockito.eq(9L))).thenReturn(true);
 
         SearchResultVO result = searchService.search(9L, "  hello   world  ", 5, "a, b,a", "cursor");
 
@@ -81,7 +80,7 @@ class SearchServiceTest {
         SearchResultVO result = searchService.search(null, "keyword", null, null, null);
 
         assertEquals(false, result.getItems().get(0).getLiked());
-        verify(objectCounterService, never()).isLiked(any(), any(), any());
+        verify(objectCounterService, never()).isPostLiked(any(), any());
     }
 
     @Test

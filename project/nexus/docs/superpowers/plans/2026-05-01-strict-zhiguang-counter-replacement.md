@@ -23,6 +23,22 @@ Binding interpretation:
 - Reserved SDS slots are schema compatibility only; they must not become product behavior.
 - No generic reaction/counter platform is allowed as the replacement abstraction.
 
+## Locked Implementation Decisions
+
+These decisions remove freedom that would otherwise cause divergent implementations:
+
+- **Object action result:** Create one domain result model, `PostActionResultVO`, with `changed`, `liked`, `faved`, `likeCount`, and `favoriteCount`. Every action response must populate both `liked` and `faved` from bitmap truth. Counts in this result are display snapshots and are allowed to lag bitmap truth.
+- **Object service boundary:** `IObjectCounterService` exposes post-only concrete methods: `likePost`, `unlikePost`, `favPost`, `unfavPost`, `isPostLiked`, `isPostFaved`, `getPostCounts`, and `getPostCountsBatch`. It must not accept `ReactionTargetTypeEnumVO` at its public boundary after this replacement.
+- **Post action domain boundary:** Create `IPostActionService` and `PostActionService`. Delete `IReactionLikeService` and `ReactionLikeService` in Task 6 after the new action callers compile. Do not keep a renamed wrapper that still accepts generic reaction target/type input.
+- **Counter events:** `CounterDeltaEvent` and local `CounterEvent` use string target type `post`, `targetId`, `metric`, `slot`, `actorUserId`, `delta`, and event timestamp fields. They must not import or expose `ReactionTargetTypeEnumVO`.
+- **Unsupported counter API input:** Unsupported action target types and unsupported counter metrics return `ResponseCode.ILLEGAL_PARAMETER`. Do not silently ignore unsupported metrics.
+- **Bitmap shard discovery:** Rebuild discovers bitmap shards by Redis `SCAN` over `bm:{metric}:post:{postId}:*`. Do not maintain `bm:*:idx` shard-index sets.
+- **Public user counter names:** `UserCounterType` enum identifiers and codes must align to `FOLLOWINGS("followings")`, `FOLLOWERS("followers")`, `POSTS("posts")`, `LIKES_RECEIVED("likesReceived")`, and `FAVS_RECEIVED("favsReceived")`. Remove old public concepts `FOLLOWING`, `FOLLOWER`, `POST`, `LIKE_RECEIVED`, `FAVORITE_RECEIVED`, and `likedPosts` from the counter boundary.
+- **Notification cleanup:** `COMMENT_LIKED` is deleted as a business notification type. `LIKE_ADDED` remains only for post likes and must derive `POST_LIKED` only. Favoriting creates no notification in this replacement.
+- **Comment storage cleanup:** Public comment APIs and repository models remove `likeCount`, `replyCount`, and `liked`. Final schemas and migrations drop `interaction_comment.like_count` and `interaction_comment.reply_count`.
+- **Reaction event-log cleanup:** `interaction_reaction_event_log` and Java/MQ components named around `ReactionEventLog` are deleted from active counter implementation. Reliable MQ replay infrastructure remains only for non-counter MQ reliability and must not replay counter deltas.
+- **Search current-user state:** Search continues to expose `liked/faved` current-user state by reading bitmap truth at query time, but it must not store or update count fields in search documents or mappings.
+
 ## File Responsibility Map
 
 Counter contracts:
@@ -30,8 +46,13 @@ Counter contracts:
 - Modify `nexus-domain/src/main/java/cn/nexus/domain/counter/adapter/service/IObjectCounterService.java` to expose concrete post `like/unlike/fav/unfav/isLiked/isFaved/getCounts/getCountsBatch` behavior.
 - Modify `nexus-domain/src/main/java/cn/nexus/domain/counter/adapter/service/IUserCounterService.java` to expose `incrementFavsReceived` and public five-slot read behavior.
 - Modify `nexus-domain/src/main/java/cn/nexus/domain/counter/model/valobj/ObjectCounterType.java` to contain active metrics `LIKE("like")` and `FAV("fav")`.
-- Modify `nexus-domain/src/main/java/cn/nexus/domain/counter/model/valobj/UserCounterType.java` so public boundary names are zhiguang-aligned. Internal enum names may remain Java-style, but codes must map to the final public names without adding synonyms.
-- Modify `nexus-domain/src/main/java/cn/nexus/domain/counter/model/event/CounterDeltaEvent.java` and `CounterEvent.java` only as needed for post `like/fav`; do not add target-generic reaction semantics.
+- Modify `nexus-domain/src/main/java/cn/nexus/domain/counter/model/valobj/UserCounterType.java` to use the five locked enum identifiers and public codes from Locked Implementation Decisions.
+- Modify `nexus-domain/src/main/java/cn/nexus/domain/counter/model/event/CounterDeltaEvent.java` and `CounterEvent.java` to remove `ReactionTargetTypeEnumVO` imports and carry only post `like/fav` deltas.
+- Create `nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/PostActionResultVO.java`.
+- Create `nexus-domain/src/main/java/cn/nexus/domain/social/service/IPostActionService.java`.
+- Create `nexus-domain/src/main/java/cn/nexus/domain/social/service/PostActionService.java`.
+- Delete `nexus-domain/src/main/java/cn/nexus/domain/social/service/IReactionLikeService.java`.
+- Delete `nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`.
 
 Redis counter infrastructure:
 
@@ -53,7 +74,7 @@ HTTP/API:
 - Create `nexus-api/src/main/java/cn/nexus/api/social/counter/dto/PostCounterResponseDTO.java`.
 - Create `nexus-trigger/src/main/java/cn/nexus/trigger/http/social/ActionController.java`.
 - Create `nexus-trigger/src/main/java/cn/nexus/trigger/http/social/CounterController.java`.
-- Modify or delete reaction DTO/API types only if they remain solely for the removed counter endpoint.
+- Delete reaction DTO/API types that remain solely for the removed counter endpoint after Task 5 route removal.
 - Modify `nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java` to remove `/api/v1/interact/reaction` and `/api/v1/interact/reaction/state`; keep comment and notification APIs.
 
 Post display:
@@ -85,6 +106,7 @@ Delete from active counter system:
 - Delete `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/PostCounterProjectionRepository.java`.
 - Delete `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/dao/social/po/PostCounterProjectionPO.java`.
 - Delete `nexus-infrastructure/src/main/resources/mapper/social/PostCounterProjectionMapper.xml`.
+- Delete active `ReactionEventLog` models, ports, repositories, mapper XML, MQ config, and recovery runner files discovered by the boundary test.
 - Delete `docs/migrations/20260428_01_add_post_counter_projection.sql` after adding a replacement drop migration.
 - Delete `docs/migrations/20260410_01_user_counter_repair_outbox.sql` after adding a replacement drop migration.
 
@@ -112,6 +134,9 @@ These invariants are not optional and must be encoded in tests before implementa
 - No counter code builds aggregation keys shaped like `agg:v1:post:{postId}:{shard}`.
 - No counter code writes `cnt:v1:comment:*` or `bm:*:comment:*`.
 - No counter code consults MySQL reaction rows/logs to rebuild post object counters.
+- No counter code references `interaction_reaction_event_log`, `ReactionEventLog`, `bm:like:post:*:idx`, or `likeBitmapShardIndex`.
+- No active notification code derives or stores `COMMENT_LIKED`.
+- No public comment DTO/model/mapper exposes `like_count`, `reply_count`, `likeCount`, `replyCount`, or `liked`.
 - No search upsert or search document assembly receives count deltas from the counter system.
 - No build, Docker, or runtime config loads `count-redis-module`.
 
@@ -147,10 +172,17 @@ The test must fail on these forbidden patterns:
 - `IReactionCommentLikeChangedMqPort`
 - `ReactionCommentLikeChangedMqPort`
 - `count-redis-module`
+- `interaction_reaction_event_log`
+- `ReactionEventLog`
+- `likeBitmapShardIndex`
+- `bm:like:post:[^\\s\"']+:idx`
 - `agg:v1:post:[^\\s\"']+:[0-9]+` in active code
 - `cnt:v1:comment`
 - `bm:like:comment`
 - `bm:fav:comment`
+- `COMMENT_LIKED`
+- `like_count`
+- `reply_count`
 - `ReactionTargetTypeEnumVO.COMMENT` when the line also contains `counter`, `Counter`, `like`, `Like`, `fav`, `Fav`, `aggregation`, or `Aggregation`
 
 Allowed files:
@@ -199,8 +231,9 @@ Required assertions:
 - object ordered fields are exactly `read`, `like`, `fav`, `comment`, `repost`
 - object active slots are `LIKE -> 1` and `FAV -> 2`
 - object reserved slots `0`, `3`, and `4` have field names but no active business enum
-- `CountRedisSchema.forObject(COMMENT)` returns `null` or otherwise cannot be used for counter reads/writes
+- `CountRedisSchema.forObject(COMMENT)` returns `null`
 - user logical indexes are `FOLLOWINGS -> 1`, `FOLLOWERS -> 2`, `POSTS -> 3`, `LIKES_RECEIVED -> 4`, `FAVS_RECEIVED -> 5`
+- user public codes are exactly `followings`, `followers`, `posts`, `likesReceived`, `favsReceived`
 - user key is `ucnt:{userId}`
 - object snapshot key is `cnt:v1:post:{postId}`
 - object aggregation key is exactly `agg:v1:post:{postId}`
@@ -222,10 +255,11 @@ Expected: FAIL because current code has only `LIKE`, still exposes comment objec
 Rules:
 
 - `ObjectCounterType` contains only `LIKE("like")` and `FAV("fav")`.
-- `UserCounterType` codes map to final public names. If enum identifiers are changed, all call sites must be changed in the same task.
+- `UserCounterType` identifiers and codes use exactly the locked names. All call sites must be changed in this task.
 - `CountRedisSchema.forObject` must not provide active comment counter schema.
 - `CountRedisKeys.objectAggregationBucket(POST, postId)` returns `agg:v1:post:{postId}` and there is no public overload that accepts a shard.
 - `CountRedisKeys.bitmapShard(metric, POST, postId, chunk)` is the general helper for `LIKE` and `FAV`; do not keep like-only helpers as the only path.
+- Remove `likeBitmapShardIndex`; rebuild must use `SCAN` and must not maintain bitmap shard-index sets.
 - Relation cache helpers remain `uf:flws:{userId}` and `uf:fans:{userId}`.
 
 - [ ] **Step 4: Run schema tests until they pass**
@@ -251,6 +285,7 @@ git commit -m "refactor: align counter schema with strict zhiguang slots"
 
 **Files:**
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/counter/adapter/service/IObjectCounterService.java`
+- Create: `nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/PostActionResultVO.java`
 - Modify: `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/counter/service/ObjectCounterService.java`
 - Modify: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/service/ObjectCounterServiceTest.java`
 - Modify: `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/counter/kafka/CounterEventProducer.java`
@@ -265,6 +300,8 @@ Required test cases:
 - `unlike` clears the same bitmap and emits `delta=-1` only when state changes.
 - `fav` and `unfav` mirror like behavior using `bm:fav:post:{postId}:{chunk}` and slot `2`.
 - `isLiked` and `isFaved` read only bitmap state.
+- service methods are named `likePost/unlikePost/favPost/unfavPost/isPostLiked/isPostFaved/getPostCounts/getPostCountsBatch`.
+- public object counter service methods do not accept `ReactionTargetTypeEnumVO`.
 - null IDs or target type other than `POST` fail before touching Redis or emitting events.
 - single-object `getCounts(POST, postId, [LIKE,FAV])` rebuilds malformed/missing SDS from bitmap shards.
 - batch `getCountsBatch` returns zero for malformed/missing SDS and does not rebuild.
@@ -284,9 +321,10 @@ Expected: FAIL because fav is missing, comment is still accepted, and aggregatio
 
 Rules:
 
-- Public methods return a result that lets controllers expose `changed` and current user state. If changing the interface from boolean is necessary, do it once here and update all callers in this task.
+- Toggle methods return `PostActionResultVO`; read methods return post metric maps keyed only by `like` and `fav`.
 - The only accepted object target is `POST`.
-- Changed bitmap transitions emit Kafka `CounterDeltaEvent` and local Spring `CounterEvent`.
+- Changed bitmap transitions emit Kafka `CounterDeltaEvent` and local Spring `CounterEvent` with target type string `post`, metric `like/fav`, and slot `1/2`.
+- Counter event classes must not import `ReactionTargetTypeEnumVO`.
 - No-op transitions emit neither Kafka nor local events.
 - Object rebuild scans `bm:{metric}:post:{postId}:*` with `SCAN` semantics, not `KEYS` and not a MySQL/log source.
 - Rebuild guard/backoff semantics remain: failed/contended rebuild returns zero rather than failing feed APIs.
@@ -346,6 +384,7 @@ Rules:
 - Remove `AGG_SHARDS` and user-id shard selection.
 - Active index stores exact bucket names `agg:v1:post:{postId}`.
 - Event validation allows only `entityType=POST`, `metric=LIKE/FAV`, `idx=1/2`, and nonzero delta.
+- Event validation uses the new string target type field and accepts only `post`.
 - Flush validates field names against active object slots only.
 - No RabbitMQ object aggregation path may remain as a fallback.
 
@@ -377,7 +416,7 @@ git commit -m "refactor: use single zhiguang object aggregation key"
 - Create: `nexus-trigger/src/main/java/cn/nexus/trigger/http/social/ActionController.java`
 - Create: `nexus-trigger/src/main/java/cn/nexus/trigger/http/social/CounterController.java`
 - Modify: `nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
-- Modify or delete: `nexus-api/src/main/java/cn/nexus/api/social/IInteractionApi.java`
+- Modify: `nexus-api/src/main/java/cn/nexus/api/social/IInteractionApi.java`
 - Modify: `nexus-trigger/src/test/java/cn/nexus/trigger/http/social/InteractionControllerTest.java`
 - Create: `nexus-trigger/src/test/java/cn/nexus/trigger/http/social/ActionControllerTest.java`
 - Create: `nexus-trigger/src/test/java/cn/nexus/trigger/http/social/CounterControllerTest.java`
@@ -393,6 +432,7 @@ Required cases:
 - duplicate action returns `changed=false` and success.
 - unsupported target type returns parameter error before service call.
 - `GET /api/v1/counter/post/{postId}?metrics=like,fav` returns only requested active metrics.
+- unsupported metric on `GET /api/v1/counter/post/{postId}` returns `ResponseCode.ILLEGAL_PARAMETER`.
 - `/api/v1/interact/reaction` and `/api/v1/interact/reaction/state` have no controller mappings.
 
 - [ ] **Step 2: Run API tests and confirm failure**
@@ -412,8 +452,10 @@ Rules:
 - Request target type is a string and only `post` is accepted.
 - Do not expose `ReactionTypeEnumVO` or generic reaction model in new DTOs.
 - Controller maps action verbs directly to service methods.
-- Response exposes `changed`, `liked`, and/or `faved` as relevant to the operation.
-- Counter read endpoint accepts `like` and `fav`; unsupported metrics are rejected with a parameter error unless the implementation chooses a documented ignore policy. Pick one policy here and test it.
+- `ActionRequestDTO` fields are exactly `targetType`, `targetId`, and optional `requestId`.
+- `ActionResponseDTO` fields are exactly `changed`, `liked`, `faved`, `likeCount`, and `favoriteCount`.
+- `PostCounterResponseDTO` contains `postId` plus a `counts` map whose keys can only be `like` and `fav`.
+- Counter read endpoint accepts only `like` and `fav`; unsupported metrics return `ResponseCode.ILLEGAL_PARAMETER`.
 
 - [ ] **Step 4: Remove old reaction counter routes**
 
@@ -421,7 +463,7 @@ Rules:
 
 - Delete the route methods from `InteractionController`.
 - Remove `IInteractionApi` method declarations if they only describe the deleted routes.
-- Reaction DTOs may be deleted if no remaining code needs them. If they remain for unrelated docs/tests, they must not be wired to active routes.
+- Delete `ReactionRequestDTO`, `ReactionResponseDTO`, `ReactionStateRequestDTO`, and `ReactionStateResponseDTO` when their only callers are removed. If compilation reveals a non-counter caller, move that caller to the new action DTOs in this task.
 
 - [ ] **Step 5: Run API tests until they pass**
 
@@ -445,10 +487,13 @@ git commit -m "feat: add zhiguang action and post counter APIs"
 ## Task 6: Replace ReactionLikeService With Post Action Domain Path
 
 **Files:**
-- Modify or delete: `nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
-- Modify or delete: `nexus-domain/src/main/java/cn/nexus/domain/social/service/IReactionLikeService.java`
+- Delete: `nexus-domain/src/main/java/cn/nexus/domain/social/service/ReactionLikeService.java`
+- Delete: `nexus-domain/src/main/java/cn/nexus/domain/social/service/IReactionLikeService.java`
+- Create: `nexus-domain/src/main/java/cn/nexus/domain/social/service/PostActionService.java`
+- Create: `nexus-domain/src/main/java/cn/nexus/domain/social/service/IPostActionService.java`
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/InteractionService.java`
-- Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/ReactionLikeServiceTest.java`
+- Delete: `nexus-domain/src/test/java/cn/nexus/domain/social/service/ReactionLikeServiceTest.java`
+- Create: `nexus-domain/src/test/java/cn/nexus/domain/social/service/PostActionServiceTest.java`
 - Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/InteractionServiceTest.java`
 
 - [ ] **Step 1: Write domain tests for removed generic reaction behavior**
@@ -460,14 +505,14 @@ Required cases:
 - post fav/unfav delegates to `IObjectCounterService` only.
 - no comment-like MQ port is called.
 - no `COMMENT_LIKED` notification event is produced.
-- post like notification and recommend unlike side effects remain only if they are business behavior outside the counter system.
+- post like notification and recommend unlike side effects remain only for post `LIKE`, not for `FAV`.
 
 - [ ] **Step 2: Run domain tests and confirm failure**
 
 Run:
 
 ```bash
-mvn -pl nexus-domain -Dtest=ReactionLikeServiceTest,InteractionServiceTest test
+mvn -pl nexus-domain -Dtest=PostActionServiceTest,InteractionServiceTest test
 ```
 
 Expected: FAIL because current service accepts comment likes and has comment-like side effects.
@@ -476,9 +521,10 @@ Expected: FAIL because current service accepts comment likes and has comment-lik
 
 Rules:
 
-- Prefer a narrowly named post action service if the existing `ReactionLikeService` name becomes misleading.
+- Create `PostActionService`; do not keep `ReactionLikeService`.
 - New domain boundary must know only `like/unlike/fav/unfav` for posts.
 - Delete dependencies on `ICommentRepository` and `IReactionCommentLikeChangedMqPort` from the action path.
+- Remove `COMMENT_LIKED` title/content mapping and `InteractionNotifyConsumer` derivation.
 - Do not keep a disabled branch for comment likes.
 - Keep comment creation/listing/mention/reply notifications in `InteractionService`; they are not counter behavior.
 
@@ -487,7 +533,7 @@ Rules:
 Run:
 
 ```bash
-mvn -pl nexus-domain -Dtest=ReactionLikeServiceTest,InteractionServiceTest test
+mvn -pl nexus-domain -Dtest=PostActionServiceTest,InteractionServiceTest test
 ```
 
 Expected: PASS.
@@ -514,7 +560,7 @@ git commit -m "refactor: remove generic reaction counter domain path"
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/SearchService.java` only for `faved` state lookup if search results keep current-user state.
 - Modify: `nexus-trigger/src/test/java/cn/nexus/trigger/http/social/support/ContentDetailQueryServiceTest.java`
 - Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedCardAssembleServiceTest.java`
-- Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/SearchServiceTest.java` only if `SearchService` changes.
+- Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/SearchServiceTest.java`.
 
 - [ ] **Step 1: Write display tests**
 
@@ -524,6 +570,7 @@ Required cases:
 - feed cards include the same fields where post interaction state is currently assembled.
 - counters are read with metrics `[LIKE,FAV]`, not two independent single-metric calls when a batch is already available.
 - current-user states use bitmap methods `isLiked/isFaved`.
+- search result `liked/faved` state is read from bitmap truth at query time and never from indexed document fields.
 - unauthenticated or missing current-user context returns `liked=false` and `faved=false` without failing public reads.
 
 - [ ] **Step 2: Run display tests and confirm failure**
@@ -583,6 +630,8 @@ Required cases:
 - normal increments update exactly slots `1..5`.
 - `incrementFavsReceived` exists and updates slot `5`.
 - public counter response exposes `likesReceived` and `favsReceived`.
+- `UserRelationCounterVO` has no `likedPosts` field.
+- `RelationCounterResponseDTO` has no `likedPosts` field.
 - malformed `ucnt` rebuilds all five values.
 - rebuild recomputes `likesReceived` by summing owned published posts' `LIKE` object counts.
 - rebuild recomputes `favsReceived` by summing owned published posts' `FAV` object counts.
@@ -604,6 +653,7 @@ Expected: FAIL because favorite received is currently zeroed and like received c
 Rules:
 
 - Public names are `followings`, `followers`, `posts`, `likesReceived`, `favsReceived`.
+- Remove `likedPosts` from VO/DTO/controller mappings.
 - The rebuild method writes all five slots in one SDS payload.
 - Rebuild uses relation repository for follow slots, content repository for published posts, and object counter service for post `LIKE/FAV`.
 - Do not use `user_counter_repair_outbox` or any replacement repair-outbox table.
@@ -664,7 +714,7 @@ Expected: FAIL because fav side effects are missing.
 Rules:
 
 - `KnowpostCounterSideEffectListener` branches on `ObjectCounterType.LIKE` and `ObjectCounterType.FAV` only.
-- Feed counter cache side effects may update like/fav display caches but remain non-authoritative.
+- Feed counter cache side effects update like/fav display caches when existing cache surfaces need them, and remain non-authoritative.
 - Do not reintroduce search index updates here.
 
 - [ ] **Step 4: Run side-effect tests until they pass**
@@ -708,6 +758,7 @@ Required cases:
 - comment repository insert/update paths do not update `like_count` or `reply_count`.
 - `COMMENT_LIKED` notification is absent.
 - comment creation, reply notification, mention notification, listing, and deletion still work.
+- final schema no longer creates `interaction_comment.like_count` or `interaction_comment.reply_count`.
 
 - [ ] **Step 2: Run comment tests and confirm failure**
 
@@ -727,12 +778,13 @@ Rules:
 
 - Remove the consumer, MQ port, and domain dependency entirely.
 - Remove comment counter DTO fields from public API responses touched by this replacement.
+- Remove comment counter fields from `CommentPO`, `CommentViewVO`, `RootCommentViewVO`, `CommentBriefVO`, and corresponding DTOs/mappers.
 - Do not remove comment business capabilities unrelated to counters.
 - Do not create replacement comment counter fields backed by zero constants.
 
 - [ ] **Step 4: Run focused comment tests until they pass**
 
-Run the focused unit tests from Step 2. Real integration may be deferred only with a recorded environment blocker.
+Run the focused unit tests from Step 2. Real integration is deferred only when the exact missing middleware dependency is recorded in the implementation notes.
 
 - [ ] **Step 5: Commit**
 
@@ -752,6 +804,7 @@ git commit -m "refactor: remove comment counter capabilities"
 - Delete: `nexus-infrastructure/src/main/resources/mapper/social/PostCounterProjectionMapper.xml`
 - Delete or replace: `docs/migrations/20260428_01_add_post_counter_projection.sql`
 - Delete or replace: `docs/migrations/20260410_01_user_counter_repair_outbox.sql`
+- Delete: active `ReactionEventLog` counter replay files discovered by the boundary test.
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/ContentService.java`
 - Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/ContentServiceTest.java`
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/RelationCounterProjectionProcessor.java`
@@ -776,6 +829,7 @@ Required cases:
 - effective unfollow decrements exactly once.
 - relation code updates user counters through `IUserCounterService`.
 - no relation code writes to `user_counter_repair_outbox`.
+- no active code writes or reads `interaction_reaction_event_log`.
 
 - [ ] **Step 3: Run tests and confirm failure**
 
@@ -802,6 +856,8 @@ Rules:
 
 - Create a new migration with explicit `DROP TABLE IF EXISTS post_counter_projection`.
 - Include `DROP TABLE IF EXISTS user_counter_repair_outbox`.
+- Include `DROP TABLE IF EXISTS interaction_reaction_event_log`.
+- Include `ALTER TABLE interaction_comment DROP COLUMN like_count` and `DROP COLUMN reply_count` if those columns exist.
 - Remove both tables from final schema docs.
 - Do not leave old creation migrations active as the final setup path.
 
@@ -890,7 +946,7 @@ git commit -m "refactor: remove search counter propagation"
 - Modify: `Dockerfile`
 - Modify: `nexus-app/src/main/resources/application.yml`
 - Modify: `nexus-app/src/main/resources/application-docker.yml`
-- Modify: root-level Docker or Maven files only if Step 1 reports an active runtime/build reference.
+- Modify: root-level Docker or Maven files reported by Step 1 as active runtime/build references.
 
 - [ ] **Step 1: Run reference search before deletion**
 
@@ -934,8 +990,11 @@ git commit -m "refactor: remove count redis module runtime"
 ## Task 14: Remove Remaining Old Counter Code, Tests, And Docs Drift
 
 **Files:**
-- Modify or delete: old reaction DTOs under `nexus-api/src/main/java/cn/nexus/api/social/interaction/dto`
-- Modify or delete: old reaction tests such as `nexus-app/src/test/java/cn/nexus/integration/interaction/ReactionHttpRealIntegrationTest.java`
+- Delete: `nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionRequestDTO.java`
+- Delete: `nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionResponseDTO.java`
+- Delete: `nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateRequestDTO.java`
+- Delete: `nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateResponseDTO.java`
+- Rewrite old reaction tests such as `nexus-app/src/test/java/cn/nexus/integration/interaction/ReactionHttpRealIntegrationTest.java` around `/api/v1/action/*`, or delete tests whose only purpose was removed behavior.
 - Modify: `docs/frontend-api.md`
 - Modify: active source/config/schema files reported by `StrictZhiguangCounterBoundaryTest`. Do not edit unrelated historical/reference docs to satisfy this task.
 
@@ -944,10 +1003,10 @@ git commit -m "refactor: remove count redis module runtime"
 Run:
 
 ```bash
-rg -n "post_counter_projection|user_counter_repair_outbox|/interact/reaction|CommentLikeChangedConsumer|IReactionCommentLikeChangedMqPort|ReactionCommentLikeChangedMqPort|count-redis-module|cnt:v1:comment|bm:like:comment|bm:fav:comment|COMMENT_LIKED" nexus-api nexus-domain nexus-infrastructure nexus-trigger nexus-app Dockerfile pom.xml docs/frontend-api.md docs/nexus_final_mysql_schema.sql docs/social_schema.sql --glob '!**/target/**'
+rg -n "post_counter_projection|user_counter_repair_outbox|interaction_reaction_event_log|ReactionEventLog|/interact/reaction|CommentLikeChangedConsumer|IReactionCommentLikeChangedMqPort|ReactionCommentLikeChangedMqPort|count-redis-module|cnt:v1:comment|bm:like:comment|bm:fav:comment|bm:like:post:[^[:space:]\"']+:idx|likeBitmapShardIndex|COMMENT_LIKED|like_count|reply_count|likedPosts" nexus-api/src/main/java nexus-domain/src/main/java nexus-infrastructure/src/main/java nexus-infrastructure/src/main/resources/mapper nexus-trigger/src/main/java nexus-app/src/main/java nexus-app/src/main/resources Dockerfile pom.xml docs/frontend-api.md docs/nexus_final_mysql_schema.sql docs/social_schema.sql --glob '!**/target/**'
 ```
 
-Expected: initial run lists active cleanup targets; final run after this task has no active-source, final-schema, frontend API, build, or runtime-config hits.
+Expected: initial run lists active cleanup targets; final run after this task has no main-source, mapper, final-schema, frontend API, build, or runtime-config hits. Test files are verified by `StrictZhiguangCounterBoundaryTest`, not by this raw grep.
 
 - [ ] **Step 2: Remove or rewrite stale tests**
 
@@ -1039,14 +1098,14 @@ git commit -m "test: cover strict zhiguang counter integration flows"
 ## Task 16: Final Verification
 
 **Files:**
-- No planned source changes unless verification exposes gaps.
+- Modify only concrete files required to fix verification failures.
 
 - [ ] **Step 1: Run focused module suites**
 
 Run:
 
 ```bash
-mvn -pl nexus-domain -Dtest=ReactionLikeServiceTest,InteractionServiceTest,ContentServiceTest,RelationCounterProjectionProcessorTest,KnowpostCounterSideEffectListenerTest test
+mvn -pl nexus-domain -Dtest=PostActionServiceTest,InteractionServiceTest,ContentServiceTest,RelationCounterProjectionProcessorTest,KnowpostCounterSideEffectListenerTest test
 mvn -pl nexus-infrastructure -Dtest=CountRedisSchemaSupportTest,CountRedisOperationsTest,ObjectCounterServiceTest,UserCounterServiceTest,CounterEventProducerTest,FeedCounterSideEffectPortTest test
 mvn -pl nexus-trigger -Dtest=CounterAggregationConsumerTest,ActionControllerTest,CounterControllerTest,InteractionControllerTest,ContentDetailQueryServiceTest test
 mvn -pl nexus-app -Dtest=StrictZhiguangCounterBoundaryTest test
@@ -1059,10 +1118,10 @@ Expected: PASS.
 Run:
 
 ```bash
-rg -n "post_counter_projection|user_counter_repair_outbox|/interact/reaction|CommentLikeChangedConsumer|IReactionCommentLikeChangedMqPort|ReactionCommentLikeChangedMqPort|count-redis-module|cnt:v1:comment|bm:like:comment|bm:fav:comment|COMMENT_LIKED|agg:v1:post:[^[:space:]\"']+:[0-9]+" nexus-api nexus-domain nexus-infrastructure nexus-trigger nexus-app Dockerfile pom.xml docs/frontend-api.md docs/nexus_final_mysql_schema.sql docs/social_schema.sql --glob '!**/target/**'
+rg -n "post_counter_projection|user_counter_repair_outbox|interaction_reaction_event_log|ReactionEventLog|/interact/reaction|CommentLikeChangedConsumer|IReactionCommentLikeChangedMqPort|ReactionCommentLikeChangedMqPort|count-redis-module|cnt:v1:comment|bm:like:comment|bm:fav:comment|bm:like:post:[^[:space:]\"']+:idx|likeBitmapShardIndex|COMMENT_LIKED|like_count|reply_count|likedPosts|agg:v1:post:[^[:space:]\"']+:[0-9]+" nexus-api/src/main/java nexus-domain/src/main/java nexus-infrastructure/src/main/java nexus-infrastructure/src/main/resources/mapper nexus-trigger/src/main/java nexus-app/src/main/java nexus-app/src/main/resources Dockerfile pom.xml docs/frontend-api.md docs/nexus_final_mysql_schema.sql docs/social_schema.sql --glob '!**/target/**'
 ```
 
-Expected: no active-code hits. Drop migrations may mention removed table names.
+Expected: no main-source, mapper, final-schema, frontend API, build, or runtime-config hits. Drop migrations are the only allowed hits for removed table names, and they are intentionally outside this raw grep scope.
 
 - [ ] **Step 3: Run compile or broader tests**
 
@@ -1127,6 +1186,6 @@ Ambiguity removals:
 
 Residual risks to watch during execution:
 
-- Some existing tests may use reaction DTOs for non-counter assumptions; rewrite them around action APIs instead of preserving the old route.
-- Real integration tests may require Redis/Kafka/Cassandra/MySQL availability. If unavailable, record the exact missing service and still complete all unit/static contract verification.
+- Existing tests that use reaction DTOs for non-counter assumptions are rewritten around action APIs instead of preserving the old route.
+- Real integration tests depend on Redis/Kafka/Cassandra/MySQL availability. If unavailable, record the exact missing service and still complete all unit/static contract verification.
 - DTO renames from `likedPosts` to `likesReceived` can affect frontend docs and profile response tests; keep the public zhiguang names.

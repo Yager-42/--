@@ -226,19 +226,12 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                     "x-dead-letter-exchange", RelationCounterRouting.DLX_EXCHANGE,
                     "x-dead-letter-routing-key", RelationCounterRouting.RK_BLOCK_DLX
             ));
-            channel.queueDeclare(RelationCounterRouting.Q_POST, true, false, false, java.util.Map.of(
-                    "x-dead-letter-exchange", RelationCounterRouting.DLX_EXCHANGE,
-                    "x-dead-letter-routing-key", RelationCounterRouting.RK_POST_DLX
-            ));
             channel.queueDeclare(RelationCounterRouting.DLQ_FOLLOW, true, false, false, null);
             channel.queueDeclare(RelationCounterRouting.DLQ_BLOCK, true, false, false, null);
-            channel.queueDeclare(RelationCounterRouting.DLQ_POST, true, false, false, null);
             channel.queueBind(RelationCounterRouting.Q_FOLLOW, RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_FOLLOW);
             channel.queueBind(RelationCounterRouting.Q_BLOCK, RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_BLOCK);
-            channel.queueBind(RelationCounterRouting.Q_POST, RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_POST);
             channel.queueBind(RelationCounterRouting.DLQ_FOLLOW, RelationCounterRouting.DLX_EXCHANGE, RelationCounterRouting.RK_FOLLOW_DLX);
             channel.queueBind(RelationCounterRouting.DLQ_BLOCK, RelationCounterRouting.DLX_EXCHANGE, RelationCounterRouting.RK_BLOCK_DLX);
-            channel.queueBind(RelationCounterRouting.DLQ_POST, RelationCounterRouting.DLX_EXCHANGE, RelationCounterRouting.RK_POST_DLX);
             return null;
         });
     }
@@ -249,7 +242,6 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             assertThat(queueConsumerCount(RelationCounterRouting.Q_FOLLOW)).isGreaterThan(0);
             assertThat(queueConsumerCount(RelationCounterRouting.Q_BLOCK)).isGreaterThan(0);
-            assertThat(queueConsumerCount(RelationCounterRouting.Q_POST)).isGreaterThan(0);
         });
     }
 

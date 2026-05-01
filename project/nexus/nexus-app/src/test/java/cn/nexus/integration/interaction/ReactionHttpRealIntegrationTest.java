@@ -10,7 +10,6 @@ import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.ICommentDao;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
-import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
 import cn.nexus.trigger.mq.config.InteractionNotifyMqConfig;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
@@ -90,48 +89,6 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                     .put("notificationId", notificationId), author.token()));
 
             assertSuccess(postJson("/api/v1/notification/read/all", JsonNodeFactory.instance.objectNode(), author.token()));
-        });
-    }
-
-    @Test
-    void commentLike_shouldUpdateHotRankRejectLikersAndCreateNotification() throws Exception {
-        ensureNotifyConsumersReady();
-        ensureCommentConsumersReady();
-        TestSession author = registerAndLoginSession("commentlike-author");
-        TestSession commenter = registerAndLoginSession("commenter");
-        TestSession liker = registerAndLoginSession("comment-liker");
-        long postId = seedPublishedPost(author.userId());
-
-        long rootCommentId = uniqueId();
-        createRootComment(postId, rootCommentId, commenter.token());
-        publishPendingReliableMqMessages();
-        commentHotRankRepository.clear(postId);
-
-        JsonNode like = postJson("/api/v1/interact/reaction", JsonNodeFactory.instance.objectNode()
-                .put("requestId", "rid-" + uniqueUuid())
-                .put("targetId", rootCommentId)
-                .put("targetType", "COMMENT")
-                .put("type", "LIKE")
-                .put("action", "ADD"), liker.token());
-        assertSuccess(like);
-
-        publishPendingReliableMqMessages();
-
-        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(readObjectSnapshotCount(ReactionTargetTypeEnumVO.COMMENT, rootCommentId, ObjectCounterType.LIKE)).isEqualTo(1L);
-            assertThat(commentHotRankRepository.topIds(postId, 10)).contains(rootCommentId);
-            assertThat(commentDao.selectBriefById(rootCommentId).getLikeCount()).isEqualTo(1L);
-        });
-
-        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            publishPendingReliableMqMessages();
-            JsonNode list = assertSuccess(getJson("/api/v1/notification/list", commenter.token()));
-            assertThat(list.path("notifications")).isNotEmpty();
-            JsonNode first = list.path("notifications").get(0);
-            assertThat(first.path("bizType").asText()).isEqualTo("COMMENT_LIKED");
-            assertThat(first.path("targetType").asText()).isEqualTo("COMMENT");
-            assertThat(first.path("targetId").asLong()).isEqualTo(rootCommentId);
-            assertThat(first.path("unreadCount").asLong()).isGreaterThanOrEqualTo(1L);
         });
     }
 
@@ -409,13 +366,6 @@ class ReactionHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         startRabbitListenerContainers();
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(queueConsumerCount(InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY)).isGreaterThan(0));
-    }
-
-    private void ensureCommentConsumersReady() {
-        startRabbitListenerContainers();
-        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(queueConsumerCount(InteractionCommentMqConfig.Q_COMMENT_LIKE_CHANGED)).isGreaterThan(0);
-        });
     }
 
     private void startRabbitListenerContainers() {

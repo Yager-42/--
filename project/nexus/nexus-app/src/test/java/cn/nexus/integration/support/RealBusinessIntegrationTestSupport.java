@@ -174,7 +174,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         purgeQueueQuietly(FeedRecommendFeedbackMqConfig.QUEUE);
         purgeQueueQuietly(FeedRecommendFeedbackMqConfig.DLQ_RECOMMEND_FEEDBACK);
         purgeQueueQuietly(InteractionCommentMqConfig.Q_COMMENT_CREATED);
-        purgeQueueQuietly(InteractionCommentMqConfig.Q_COMMENT_LIKE_CHANGED);
         purgeQueueQuietly(InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY);
         purgeQueueQuietly(InteractionNotifyMqConfig.DLQ_INTERACTION_NOTIFY);
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.Q_FEED_RECOMMEND_FEEDBACK_A);

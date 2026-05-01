@@ -34,7 +34,8 @@ class RelationControllerTest {
                         .followings(1L)
                         .followers(2L)
                         .posts(3L)
-                        .likedPosts(4L)
+                        .likesReceived(4L)
+                        .favsReceived(5L)
                         .build());
 
         Response<RelationCounterResponseDTO> response = controller.counter();
@@ -44,7 +45,8 @@ class RelationControllerTest {
         assertEquals(1L, response.getData().getFollowings());
         assertEquals(2L, response.getData().getFollowers());
         assertEquals(3L, response.getData().getPosts());
-        assertEquals(4L, response.getData().getLikedPosts());
+        assertEquals(4L, response.getData().getLikesReceived());
+        assertEquals(5L, response.getData().getFavsReceived());
         verify(userCounterService).readRelationCountersWithVerification(7L);
     }
 }

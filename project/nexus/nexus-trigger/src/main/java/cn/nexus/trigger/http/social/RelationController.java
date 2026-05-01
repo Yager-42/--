@@ -250,7 +250,8 @@ public class RelationController implements IRelationApi {
                 .followings(vo.getFollowings())
                 .followers(vo.getFollowers())
                 .posts(vo.getPosts())
-                .likedPosts(vo.getLikedPosts())
+                .likesReceived(vo.getLikesReceived())
+                .favsReceived(vo.getFavsReceived())
                 .build();
     }
 

@@ -65,6 +65,11 @@ public class UserCounterService implements IUserCounterService {
     }
 
     @Override
+    public long incrementFavsReceived(Long userId, long delta) {
+        return increment(userId, UserCounterType.FAVS_RECEIVED, delta);
+    }
+
+    @Override
     public void setCount(Long userId, UserCounterType counterType, long count) {
         if (userId == null || counterType == null) {
             return;
@@ -198,10 +203,10 @@ public class UserCounterService implements IUserCounterService {
     }
 
     private Map<String, Long> rebuildUserSnapshot(Long userId) {
-        return rebuildClass2Slots(userId, Map.of());
+        return rebuildClass2Slots(userId);
     }
 
-    private Map<String, Long> rebuildClass2Slots(Long userId, Map<String, Long> previousSnapshot) {
+    private Map<String, Long> rebuildClass2Slots(Long userId) {
         Map<String, Long> rebuilt = CountRedisSchema.userSnapshotDefaults();
         rebuilt.put(UserCounterType.FOLLOWINGS.getCode(),
                 Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1)));
@@ -209,27 +214,22 @@ public class UserCounterService implements IUserCounterService {
                 Math.max(0L, relationRepository.countFollowerIds(userId)));
         rebuilt.put(UserCounterType.POSTS.getCode(),
                 Math.max(0L, contentRepository.countPublishedPostsByUser(userId)));
-        long preservedLikeReceived = 0L;
-        if (previousSnapshot != null) {
-            Long prev = previousSnapshot.get(UserCounterType.LIKES_RECEIVED.getCode());
-            if (prev != null) {
-                preservedLikeReceived = Math.max(0L, prev);
-            }
-        }
-        rebuilt.put(UserCounterType.LIKES_RECEIVED.getCode(), preservedLikeReceived);
-        rebuilt.put(UserCounterType.FAVS_RECEIVED.getCode(), 0L);
+        Map<String, Long> received = sumReceivedCountersBestEffort(userId);
+        rebuilt.put(UserCounterType.LIKES_RECEIVED.getCode(), value(received, ObjectCounterType.LIKE.getCode()));
+        rebuilt.put(UserCounterType.FAVS_RECEIVED.getCode(), value(received, ObjectCounterType.FAV.getCode()));
         return rebuilt;
     }
 
-    private long sumLikeReceivedBestEffort(Long userId) {
+    private Map<String, Long> sumReceivedCountersBestEffort(Long userId) {
         if (userId == null) {
-            return 0L;
+            return Map.of(ObjectCounterType.LIKE.getCode(), 0L, ObjectCounterType.FAV.getCode(), 0L);
         }
         List<ContentPostEntity> posts = contentRepository.listPublishedPostIdsByUser(userId);
         if (posts == null || posts.isEmpty()) {
-            return 0L;
+            return Map.of(ObjectCounterType.LIKE.getCode(), 0L, ObjectCounterType.FAV.getCode(), 0L);
         }
-        long sum = 0L;
+        long likeSum = 0L;
+        long favSum = 0L;
         for (ContentPostEntity post : posts) {
             if (post == null || post.getPostId() == null) {
                 continue;
@@ -237,16 +237,15 @@ public class UserCounterService implements IUserCounterService {
             try {
                 Map<String, Long> values = objectCounterService.getPostCounts(
                         post.getPostId(),
-                        List.of(ObjectCounterType.LIKE));
-                Long like = values == null ? null : values.get(ObjectCounterType.LIKE.getCode());
-                if (like != null && like > 0) {
-                    sum += like;
-                }
+                        List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
+                likeSum += value(values, ObjectCounterType.LIKE.getCode());
+                favSum += value(values, ObjectCounterType.FAV.getCode());
             } catch (Exception ignored) {
                 // best-effort aggregation for class-1 display counter
             }
         }
-        return Math.max(0L, sum);
+        return Map.of(ObjectCounterType.LIKE.getCode(), Math.max(0L, likeSum),
+                ObjectCounterType.FAV.getCode(), Math.max(0L, favSum));
     }
 
     private void writeSnapshotValue(Long userId, UserCounterType counterType, long count) {
@@ -333,7 +332,8 @@ public class UserCounterService implements IUserCounterService {
                 .followings(valueOf(snapshot, UserCounterType.FOLLOWINGS))
                 .followers(valueOf(snapshot, UserCounterType.FOLLOWERS))
                 .posts(valueOf(snapshot, UserCounterType.POSTS))
-                .likedPosts(valueOf(snapshot, UserCounterType.LIKES_RECEIVED))
+                .likesReceived(valueOf(snapshot, UserCounterType.LIKES_RECEIVED))
+                .favsReceived(valueOf(snapshot, UserCounterType.FAVS_RECEIVED))
                 .build();
     }
 
@@ -350,8 +350,14 @@ public class UserCounterService implements IUserCounterService {
                 .followings(0L)
                 .followers(0L)
                 .posts(0L)
-                .likedPosts(0L)
+                .likesReceived(0L)
+                .favsReceived(0L)
                 .build();
+    }
+
+    private long value(Map<String, Long> values, String code) {
+        Long value = values == null ? null : values.get(code);
+        return value == null ? 0L : Math.max(0L, value);
     }
 
     private record SnapshotState(boolean valid, Map<String, Long> snapshot) {

@@ -85,7 +85,8 @@ class UserProfilePageQueryServiceTest {
                         .followings(11L)
                         .followers(22L)
                         .posts(33L)
-                        .likedPosts(44L)
+                        .likesReceived(44L)
+                        .favsReceived(55L)
                         .build()
         );
         when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().id(10L).status(1).build());
@@ -103,7 +104,8 @@ class UserProfilePageQueryServiceTest {
         assertEquals(11L, res.getRelation().getFollowings());
         assertEquals(22L, res.getRelation().getFollowers());
         assertEquals(33L, res.getRelation().getPosts());
-        assertEquals(44L, res.getRelation().getLikedPosts());
+        assertEquals(44L, res.getRelation().getLikesReceived());
+        assertEquals(55L, res.getRelation().getFavsReceived());
         assertEquals(true, res.getRelation().isFollow());
         assertNotNull(res.getRisk());
         assertEquals("NORMAL", res.getRisk().getStatus());
@@ -140,7 +142,8 @@ class UserProfilePageQueryServiceTest {
                         .followings(2L)
                         .followers(3L)
                         .posts(4L)
-                        .likedPosts(5L)
+                        .likesReceived(5L)
+                        .favsReceived(6L)
                         .build()
         );
         when(riskService.userStatus(1L)).thenReturn(UserRiskStatusVO.builder().status("NORMAL").build());
@@ -185,7 +188,8 @@ class UserProfilePageQueryServiceTest {
                         .followings(11L)
                         .followers(22L)
                         .posts(0L)
-                        .likedPosts(0L)
+                        .likesReceived(0L)
+                        .favsReceived(0L)
                         .build()
         );
         when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().id(10L).status(1).build());

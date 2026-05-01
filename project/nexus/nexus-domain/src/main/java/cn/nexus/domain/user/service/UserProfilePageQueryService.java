@@ -115,12 +115,14 @@ public class UserProfilePageQueryService {
         long followings = relationCounters == null ? 0L : relationCounters.getFollowings();
         long followers = relationCounters == null ? 0L : relationCounters.getFollowers();
         long posts = relationCounters == null ? 0L : relationCounters.getPosts();
-        long likedPosts = relationCounters == null ? 0L : relationCounters.getLikedPosts();
+        long likesReceived = relationCounters == null ? 0L : relationCounters.getLikesReceived();
+        long favsReceived = relationCounters == null ? 0L : relationCounters.getFavsReceived();
         UserRelationStatsVO relation = UserRelationStatsVO.builder()
                 .followings(followings)
                 .followers(followers)
                 .posts(posts)
-                .likedPosts(likedPosts)
+                .likesReceived(likesReceived)
+                .favsReceived(favsReceived)
                 .isFollow(isFollow)
                 .build();
         return UserProfilePageVO.builder()

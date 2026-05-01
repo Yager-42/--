@@ -16,5 +16,6 @@ public class UserRelationCounterVO {
     private long followings;
     private long followers;
     private long posts;
-    private long likedPosts;
+    private long likesReceived;
+    private long favsReceived;
 }

@@ -89,7 +89,8 @@ public class UserProfilePageController implements IUserProfilePageApi {
                 .followings(relation.getFollowings())
                 .followers(relation.getFollowers())
                 .posts(relation.getPosts())
-                .likedPosts(relation.getLikedPosts())
+                .likesReceived(relation.getLikesReceived())
+                .favsReceived(relation.getFavsReceived())
                 .isFollow(relation.isFollow())
                 .build();
 
@@ -105,4 +106,3 @@ public class UserProfilePageController implements IUserProfilePageApi {
                 .build();
     }
 }
-

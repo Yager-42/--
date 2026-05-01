@@ -117,17 +117,17 @@ class CounterReplacementContractTest {
     @Test
     void publicReadContracts_shouldExposeOnlyApprovedCountFields() throws Exception {
         assertThat(Files.readString(ROOT.resolve("nexus-api/src/main/java/cn/nexus/api/user/dto/UserRelationStatsDTO.java")))
-                .contains("followings", "followers", "posts", "likedPosts")
-                .doesNotContain("likeReceived", "favoriteReceived", "like_received", "favorite_received");
+                .contains("followings", "followers", "posts", "likesReceived", "favsReceived")
+                .doesNotContain("likedPosts", "likeReceived", "favoriteReceived", "like_received", "favorite_received");
         assertThat(Files.readString(ROOT.resolve("nexus-api/src/main/java/cn/nexus/api/social/relation/dto/RelationCounterResponseDTO.java")))
-                .contains("followings", "followers", "posts", "likedPosts")
-                .doesNotContain("likeReceived", "favoriteReceived", "like_received", "favorite_received", "replyCount");
+                .contains("followings", "followers", "posts", "likesReceived", "favsReceived")
+                .doesNotContain("likedPosts", "likeReceived", "favoriteReceived", "like_received", "favorite_received", "replyCount");
         assertThat(Files.readString(ROOT.resolve("nexus-api/src/main/java/cn/nexus/api/social/feed/dto/FeedItemDTO.java")))
-                .contains("likeCount", "liked")
-                .doesNotContain("replyCount", "favoriteReceived", "likeReceived", "favoriteCount");
+                .contains("likeCount", "favoriteCount", "liked", "faved")
+                .doesNotContain("replyCount", "favoriteReceived", "likeReceived");
         assertThat(Files.readString(ROOT.resolve("nexus-api/src/main/java/cn/nexus/api/social/content/dto/ContentDetailResponseDTO.java")))
-                .contains("likeCount")
-                .doesNotContain("replyCount", "favoriteReceived", "likeReceived", "favoriteCount");
+                .contains("likeCount", "favoriteCount", "liked", "faved")
+                .doesNotContain("replyCount", "favoriteReceived", "likeReceived");
         assertThat(Files.readString(ROOT.resolve("nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/CommentViewDTO.java")))
                 .contains("likeCount")
                 .doesNotContain("replyCount", "favoriteReceived", "likeReceived", "favoriteCount");
@@ -136,14 +136,15 @@ class CounterReplacementContractTest {
     }
 
     @Test
-    void favoriteReceived_shouldRemainReservedWithoutPublicWriteCapability() throws Exception {
+    void favsReceived_shouldBePublicFiveSlotCounter() throws Exception {
         assertThat(Files.readString(ROOT.resolve("nexus-domain/src/main/java/cn/nexus/domain/counter/model/valobj/UserCounterType.java")))
-                .contains("FAVORITE_RECEIVED", "favorite_received");
+                .contains("FAVS_RECEIVED", "favsReceived")
+                .doesNotContain("FAVORITE_RECEIVED", "favorite_received");
         assertThat(Files.readString(ROOT.resolve("nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/counter/support/CountRedisSchema.java")))
                 .contains("UserCounterType.FAVS_RECEIVED, 5");
         assertThat(Files.readString(ROOT.resolve("nexus-domain/src/main/java/cn/nexus/domain/counter/adapter/service/IUserCounterService.java")))
-                .doesNotContain("incrementFavsReceived");
+                .contains("incrementFavsReceived");
         assertThat(Files.readString(ROOT.resolve("nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/counter/service/UserCounterService.java")))
-                .doesNotContain("incrementFavsReceived");
+                .contains("incrementFavsReceived");
     }
 }

@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class CounterAggregationConsumer {
 
-    private static final int AGG_SHARDS = 64;
+    private static final String POST = "post";
     private static final DefaultRedisScript<List> DRAIN_FIELD_SCRIPT = new DefaultRedisScript<>(
             "local v = redis.call('HGET', KEYS[1], ARGV[1]); "
                     + "if not v then return {'0','0'} end; "
@@ -44,14 +44,11 @@ public class CounterAggregationConsumer {
     )
     public void onMessage(String raw) {
         CounterDeltaEvent event = parse(raw);
-        if (!isActiveObjectLikeEvent(event)) {
+        if (!isActivePostCounterEvent(event)) {
             return;
         }
-        String bucket = CountRedisKeys.objectAggregationBucket(
-                event.getEntityType(),
-                event.getEntityId(),
-                aggregationShard(event));
-        redisTemplate.opsForHash().increment(bucket, String.valueOf(event.getIdx()), event.getDelta());
+        String bucket = CountRedisKeys.objectAggregationBucket(ReactionTargetTypeEnumVO.POST, event.getTargetId());
+        redisTemplate.opsForHash().increment(bucket, String.valueOf(event.getSlot()), event.getDelta());
         redisTemplate.opsForSet().add(CountRedisKeys.objectAggregationActiveIndex(), bucket);
     }
 
@@ -80,40 +77,39 @@ public class CounterAggregationConsumer {
         if (entries == null || entries.isEmpty()) {
             return false;
         }
-        boolean hasRemainder = false;
+        boolean retry = false;
         for (Object rawField : entries.keySet()) {
             String field = String.valueOf(rawField);
             long delta = drainField(bucket, field);
             if (delta == 0L) {
-                hasRemainder = true;
+                retry = true;
                 continue;
             }
-            applySnapshotDelta(meta.targetType(), meta.targetId(), field, delta);
+            if (!applySnapshotDelta(meta.targetId(), field, delta)) {
+                retry = true;
+            }
         }
         Long remaining = redisTemplate.opsForHash().size(bucket);
-        return hasRemainder || remaining == null || remaining > 0L;
+        return retry || remaining == null || remaining > 0L;
     }
 
     private long drainField(String bucket, String field) {
         List<?> result = redisTemplate.execute(DRAIN_FIELD_SCRIPT, List.of(bucket), field);
-        if (result == null || result.size() < 2) {
-            return 0L;
-        }
-        Object drained = result.get(0);
-        if (!"1".equals(String.valueOf(drained))) {
+        if (result == null || result.size() < 2 || !"1".equals(String.valueOf(result.get(0)))) {
             return 0L;
         }
         return parseLong(result.get(1));
     }
 
-    private void applySnapshotDelta(ReactionTargetTypeEnumVO targetType, Long targetId, String field, long delta) {
-        CountRedisSchema schema = CountRedisSchema.forObject(targetType);
+    private boolean applySnapshotDelta(Long postId, String field, long delta) {
+        CountRedisSchema schema = CountRedisSchema.forObject(ReactionTargetTypeEnumVO.POST);
         int slot = parseSlot(field);
         if (schema == null || slot < 0 || slot >= schema.slotCount()) {
-            return;
+            return true;
         }
-        new CountRedisOperations(redisTemplate)
-                .incrementSnapshotSlot(CountRedisKeys.objectSnapshot(targetType, targetId), slot, delta, schema);
+        long updated = new CountRedisOperations(redisTemplate)
+                .incrementSnapshotSlot(CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.POST, postId), slot, delta, schema);
+        return updated > 0L || delta < 0L;
     }
 
     private CounterDeltaEvent parse(String raw) {
@@ -128,20 +124,21 @@ public class CounterAggregationConsumer {
         }
     }
 
-    private boolean isActiveObjectLikeEvent(CounterDeltaEvent event) {
-        return event != null
-                && event.getEntityType() != null
-                && event.getEntityId() != null
-                && event.getMetric() == ObjectCounterType.LIKE
-                && event.getIdx() != null
-                && event.getDelta() != null
-                && (event.getEntityType() == ReactionTargetTypeEnumVO.POST
-                || event.getEntityType() == ReactionTargetTypeEnumVO.COMMENT);
-    }
-
-    private long aggregationShard(CounterDeltaEvent event) {
-        long user = event.getUserId() == null ? 0L : event.getUserId();
-        return Math.floorMod(user, AGG_SHARDS);
+    private boolean isActivePostCounterEvent(CounterDeltaEvent event) {
+        if (event == null || event.getTargetId() == null || event.getMetric() == null
+                || event.getSlot() == null || event.getDelta() == null || event.getDelta() == 0L) {
+            return false;
+        }
+        if (!POST.equals(event.getTargetType())) {
+            return false;
+        }
+        if (ObjectCounterType.LIKE.getCode().equals(event.getMetric())) {
+            return event.getSlot() == 1;
+        }
+        if (ObjectCounterType.FAV.getCode().equals(event.getMetric())) {
+            return event.getSlot() == 2;
+        }
+        return false;
     }
 
     private int parseSlot(String field) {
@@ -163,22 +160,20 @@ public class CounterAggregationConsumer {
         }
     }
 
-    private record BucketMeta(ReactionTargetTypeEnumVO targetType, Long targetId) {
+    private record BucketMeta(Long targetId) {
 
         private static BucketMeta parse(String bucket) {
             if (bucket == null || bucket.isBlank()) {
                 return null;
             }
             String[] parts = bucket.split(":");
-            if (parts.length != 5 || !"agg".equals(parts[0]) || !CountRedisSchema.SCHEMA_ID.equals(parts[1])) {
+            if (parts.length != 4 || !"agg".equals(parts[0])
+                    || !CountRedisSchema.SCHEMA_ID.equals(parts[1])
+                    || !POST.equals(parts[2])) {
                 return null;
             }
-            ReactionTargetTypeEnumVO type = ReactionTargetTypeEnumVO.from(parts[2]);
             Long id = parseId(parts[3]);
-            if (type == null || id == null) {
-                return null;
-            }
-            return new BucketMeta(type, id);
+            return id == null ? null : new BucketMeta(id);
         }
 
         private static Long parseId(String raw) {

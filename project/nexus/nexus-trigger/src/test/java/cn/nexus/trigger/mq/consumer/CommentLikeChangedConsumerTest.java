@@ -6,15 +6,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IInteractionCommentInboxPort;
 import cn.nexus.domain.social.adapter.repository.ICommentHotRankRepository;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
-import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -39,8 +35,6 @@ class CommentLikeChangedConsumerTest {
         event.setDelta(1L);
 
         when(inboxPort.save("evt-like-1", "COMMENT_LIKE_CHANGED", null)).thenReturn(true);
-        when(objectCounterService.getCounts(ReactionTargetTypeEnumVO.COMMENT, 101L, List.of(ObjectCounterType.LIKE)))
-                .thenReturn(Map.of("like", 6L));
         when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder()
                 .commentId(101L)
                 .postId(88L)
@@ -50,8 +44,8 @@ class CommentLikeChangedConsumerTest {
 
         consumer.onMessage(event);
 
-        verify(objectCounterService).getCounts(ReactionTargetTypeEnumVO.COMMENT, 101L, List.of(ObjectCounterType.LIKE));
-        verify(hotRankRepository).upsert(88L, 101L, 60D);
+        verify(objectCounterService, never()).getPostCounts(Mockito.anyLong(), any());
+        verify(hotRankRepository).upsert(88L, 101L, 50D);
     }
 
     @Test
@@ -76,7 +70,7 @@ class CommentLikeChangedConsumerTest {
 
         consumer.onMessage(event);
 
-        verify(objectCounterService, never()).getCounts(any(), Mockito.anyLong(), any());
+        verify(objectCounterService, never()).getPostCounts(Mockito.anyLong(), any());
         verify(hotRankRepository, never()).upsert(Mockito.anyLong(), Mockito.anyLong(), Mockito.anyDouble());
     }
 
@@ -99,8 +93,6 @@ class CommentLikeChangedConsumerTest {
         event.setDelta(1L);
 
         when(inboxPort.save("evt-like-idem", "COMMENT_LIKE_CHANGED", null)).thenReturn(true, false);
-        when(objectCounterService.getCounts(ReactionTargetTypeEnumVO.COMMENT, 101L, List.of(ObjectCounterType.LIKE)))
-                .thenReturn(Map.of("like", 6L));
         when(commentRepository.getBrief(101L)).thenReturn(CommentBriefVO.builder()
                 .commentId(101L)
                 .postId(88L)
@@ -111,8 +103,7 @@ class CommentLikeChangedConsumerTest {
         consumer.onMessage(event);
         consumer.onMessage(event);
 
-        verify(objectCounterService, Mockito.times(1))
-                .getCounts(ReactionTargetTypeEnumVO.COMMENT, 101L, List.of(ObjectCounterType.LIKE));
-        verify(hotRankRepository, Mockito.times(1)).upsert(88L, 101L, 60D);
+        verify(objectCounterService, never()).getPostCounts(Mockito.anyLong(), any());
+        verify(hotRankRepository, Mockito.times(1)).upsert(88L, 101L, 50D);
     }
 }

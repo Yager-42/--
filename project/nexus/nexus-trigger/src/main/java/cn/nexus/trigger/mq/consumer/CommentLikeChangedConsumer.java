@@ -1,15 +1,12 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IInteractionCommentInboxPort;
 import cn.nexus.domain.social.adapter.repository.ICommentHotRankRepository;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
 import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
-import java.util.List;
-import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -96,16 +93,7 @@ public class CommentLikeChangedConsumer {
     }
 
     private long readCommentLikeCount(Long commentId, CommentBriefVO root) {
-        try {
-            Map<String, Long> counts = objectCounterService.getCounts(
-                    cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO.COMMENT,
-                    commentId,
-                    List.of(ObjectCounterType.LIKE));
-            Long like = counts == null ? null : counts.get(ObjectCounterType.LIKE.getCode());
-            return like == null ? safe(root.getLikeCount()) : safe(like);
-        } catch (Exception e) {
-            return safe(root.getLikeCount());
-        }
+        return safe(root.getLikeCount());
     }
 
     private long safe(Long v) {

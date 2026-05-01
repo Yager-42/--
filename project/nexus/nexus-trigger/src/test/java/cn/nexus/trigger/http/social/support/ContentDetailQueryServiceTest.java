@@ -12,7 +12,6 @@ import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -44,7 +43,7 @@ class ContentDetailQueryServiceTest {
                 .build());
         when(userBaseRepository.listByUserIds(List.of(11L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(11L).nickname("u").avatarUrl("a").build()));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(101L), eq(List.of(ObjectCounterType.LIKE))))
+        when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE))))
                 .thenReturn(java.util.Map.of("like", 9L));
 
         ContentDetailResponseDTO first = service.query(101L);
@@ -78,7 +77,7 @@ class ContentDetailQueryServiceTest {
                 .status(2)
                 .build());
         when(userBaseRepository.listByUserIds(List.of(11L))).thenThrow(new RuntimeException("boom"));
-        when(objectCounterService.getCounts(eq(ReactionTargetTypeEnumVO.POST), eq(101L), eq(List.of(ObjectCounterType.LIKE))))
+        when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE))))
                 .thenReturn(java.util.Map.of("like", 9L));
 
         ContentDetailResponseDTO response = service.query(101L);

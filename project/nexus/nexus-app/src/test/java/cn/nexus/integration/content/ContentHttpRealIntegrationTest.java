@@ -81,6 +81,10 @@ class ContentHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
             assertThat(detail.path("status").asInt()).isEqualTo(ContentPostStatusEnumVO.PUBLISHED.getCode());
             assertThat(detail.path("visibility").asInt()).isEqualTo(ContentPostVisibilityEnumVO.PUBLIC.getCode());
             assertThat(detail.path("versionNum").asInt()).isEqualTo(1);
+            assertThat(detail.path("likeCount").asLong()).isZero();
+            assertThat(detail.path("favoriteCount").asLong()).isZero();
+            assertThat(detail.path("liked").asBoolean()).isFalse();
+            assertThat(detail.path("faved").asBoolean()).isFalse();
         });
 
         // 内容发布事件走 content_event_outbox，测试环境手动触发一次发布，避免依赖定时重试任务。

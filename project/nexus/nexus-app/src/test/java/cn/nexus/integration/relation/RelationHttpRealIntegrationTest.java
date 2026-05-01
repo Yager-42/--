@@ -77,7 +77,7 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                 .anySatisfy(raw -> assertThat(raw).contains("\"userId\":" + follower.userId()));
         JsonNode followerCounter = assertSuccess(getJson("/api/v1/relation/counter", follower.token()));
         assertThat(followerCounter.fieldNames()).toIterable()
-                .containsExactlyInAnyOrder("followings", "followers", "posts", "likedPosts");
+                .containsExactlyInAnyOrder("followings", "followers", "posts", "likesReceived", "favsReceived");
         assertThat(followerCounter.path("followings").asLong()).isGreaterThanOrEqualTo(1L);
         JsonNode followeeCounter = assertSuccess(getJson("/api/v1/relation/counter", followee.token()));
         assertThat(followeeCounter.path("followers").asLong()).isGreaterThanOrEqualTo(1L);
@@ -176,7 +176,8 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertThat(sampled.path("followings").asLong()).isEqualTo(truthFollowings);
         assertThat(sampled.path("followers").asLong()).isEqualTo(truthFollowers);
         assertThat(sampled.path("posts").asLong()).isEqualTo(123L);
-        assertThat(sampled.path("likedPosts").asLong()).isEqualTo(456L);
+        assertThat(sampled.path("likesReceived").asLong()).isEqualTo(456L);
+        assertThat(sampled.path("favsReceived").asLong()).isZero();
         assertThat(stringRedisTemplate.getExpire("ucnt:chk:" + user.userId(), TimeUnit.SECONDS))
                 .isBetween(1L, 300L);
     }

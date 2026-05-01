@@ -205,13 +205,12 @@ class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         });
 
         String likeRequestId = "rid-like-" + uniqueUuid().substring(0, 8);
-        JsonNode like = assertSuccess(postJson("/api/v1/interact/reaction", JsonNodeFactory.instance.objectNode()
+        JsonNode like = assertSuccess(postJson("/api/v1/action/like", JsonNodeFactory.instance.objectNode()
                 .put("requestId", likeRequestId)
                 .put("targetId", postId)
-                .put("targetType", "POST")
-                .put("type", "LIKE")
-                .put("action", "ADD"), actor.token()));
-        assertThat(like.path("success").asBoolean()).isTrue();
+                .put("targetType", "post"), actor.token()));
+        assertThat(like.path("changed").asBoolean()).isTrue();
+        assertThat(like.path("liked").asBoolean()).isTrue();
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             publishPendingReliableMqMessages();
             assertThat(reliableConsumerStatusByPayload("FeedRecommendFeedbackAConsumer", "\"requestId\":\"" + likeRequestId + "\"")).isEqualTo("DONE");
@@ -243,13 +242,12 @@ class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         });
 
         String unlikeRequestId = "rid-unlike-" + uniqueUuid().substring(0, 8);
-        JsonNode unlike = assertSuccess(postJson("/api/v1/interact/reaction", JsonNodeFactory.instance.objectNode()
+        JsonNode unlike = assertSuccess(postJson("/api/v1/action/unlike", JsonNodeFactory.instance.objectNode()
                 .put("requestId", unlikeRequestId)
                 .put("targetId", postId)
-                .put("targetType", "POST")
-                .put("type", "LIKE")
-                .put("action", "REMOVE"), actor.token()));
-        assertThat(unlike.path("success").asBoolean()).isTrue();
+                .put("targetType", "post"), actor.token()));
+        assertThat(unlike.path("changed").asBoolean()).isTrue();
+        assertThat(unlike.path("liked").asBoolean()).isFalse();
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             publishPendingReliableMqMessages();

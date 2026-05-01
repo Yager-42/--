@@ -3,10 +3,9 @@ package cn.nexus.integration.consistency;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
+import cn.nexus.trigger.counter.CounterAggregationConsumer;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -29,6 +28,9 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
     @Autowired
     private RabbitListenerEndpointRegistry rabbitListenerEndpointRegistry;
 
+    @Autowired
+    private CounterAggregationConsumer counterAggregationConsumer;
+
     @Test
     void postLike_highConcurrencyAudit_shouldAlignRedisSnapshotAndApiState() throws Exception {
         ensureAllConsumersStarted();
@@ -44,32 +46,24 @@ class HighConcurrencyConsistencyAuditIntegrationTest extends RealHttpIntegration
         AtomicInteger rr = new AtomicInteger(0);
         ConcurrentRunResult result = runConcurrentRequests(likers.size(), 20, 60, () -> {
             TestSession liker = likers.get(Math.floorMod(rr.getAndIncrement(), likers.size()));
-            JsonNode data = assertSuccess(postJson("/api/v1/interact/reaction", JsonNodeFactory.instance.objectNode()
+            JsonNode data = assertSuccess(postJson("/api/v1/action/like", JsonNodeFactory.instance.objectNode()
                     .put("requestId", "audit-like-" + uniqueUuid())
                     .put("targetId", postId)
-                    .put("targetType", "POST")
-                    .put("type", "LIKE")
-                    .put("action", "ADD"), liker.token()));
-            assertThat(data.path("success").asBoolean()).isTrue();
+                    .put("targetType", "post"), liker.token()));
+            assertThat(data.path("changed").asBoolean()).isTrue();
         });
         assertThat(result.failure()).isEqualTo(0);
 
-        publishPendingReliableMqMessages();
-
         int expected = likers.size();
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-            publishPendingReliableMqMessages();
-            assertThat(readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE)).isEqualTo(expected);
+            counterAggregationConsumer.flushActiveBuckets();
+            JsonNode counter = assertSuccess(getJson("/api/v1/counter/post/" + postId + "?metrics=like", likers.get(0).token()));
+            assertThat(counter.path("counts").path("like").asLong()).isEqualTo(expected);
         });
 
-        long redisCount = readObjectSnapshotCount(ReactionTargetTypeEnumVO.POST, postId, ObjectCounterType.LIKE);
-
-        assertThat(redisCount).isEqualTo(expected);
-
-        JsonNode state = assertSuccess(getJson(
-                "/api/v1/interact/reaction/state?targetId=" + postId + "&targetType=POST&type=LIKE", likers.get(0).token()));
-        assertThat(state.path("state").asBoolean()).isTrue();
-        assertThat(state.path("currentCount").asLong()).isEqualTo(expected);
+        JsonNode detail = assertSuccess(getJson("/api/v1/content/" + postId, likers.get(0).token()));
+        assertThat(detail.path("liked").asBoolean()).isTrue();
+        assertThat(detail.path("likeCount").asLong()).isEqualTo(expected);
     }
 
     @Test

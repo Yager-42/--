@@ -1,6 +1,7 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IFeedCounterSideEffectPort;
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardStatRepository;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -38,8 +39,12 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
-    public void applyPostLikeDelta(Long postId, long delta) {
-        if (postId == null || delta == 0) {
+    public void applyPostCounterDelta(Long postId, ObjectCounterType metric, long delta) {
+        if (postId == null || metric == null || delta == 0) {
+            return;
+        }
+        String counterField = counterField(metric);
+        if (counterField == null) {
             return;
         }
         Set<String> indexKeys = findIndexKeys(postId);
@@ -58,7 +63,7 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
                         stringRedisTemplate.opsForSet().remove(indexKey, pageKey);
                         continue;
                     }
-                    updatePageJson(pageKey, postId, delta);
+                    updatePageJson(pageKey, postId, counterField, delta);
                 }
                 if (ttlSeconds != null && ttlSeconds > 0) {
                     stringRedisTemplate.expire(indexKey, ttlSeconds, TimeUnit.SECONDS);
@@ -76,7 +81,7 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
         deleteQuietly(FEED_CARD_STAT_KEY_PREFIX + postId);
     }
 
-    private void updatePageJson(String pageKey, Long postId, long delta) {
+    private void updatePageJson(String pageKey, Long postId, String counterField, long delta) {
         if (pageKey == null || pageKey.isBlank() || postId == null) {
             return;
         }
@@ -87,7 +92,7 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
                 return;
             }
             JsonNode root = objectMapper.readTree(raw);
-            boolean changed = applyLikeDelta(root, postId, delta);
+            boolean changed = applyCounterDelta(root, postId, counterField, delta);
             if (!changed) {
                 return;
             }
@@ -97,18 +102,19 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
                 stringRedisTemplate.opsForValue().set(pageKey, objectMapper.writeValueAsString(root));
             }
         } catch (Exception e) {
-            log.warn("update feed page json like count failed, pageKey={}, postId={}, delta={}", pageKey, postId, delta, e);
+            log.warn("update feed page json counter failed, pageKey={}, postId={}, field={}, delta={}",
+                    pageKey, postId, counterField, delta, e);
         }
     }
 
-    private boolean applyLikeDelta(JsonNode node, Long postId, long delta) {
+    private boolean applyCounterDelta(JsonNode node, Long postId, String counterField, long delta) {
         if (node == null || node.isNull()) {
             return false;
         }
         if (node.isArray()) {
             boolean changed = false;
             for (JsonNode item : node) {
-                changed |= applyLikeDelta(item, postId, delta);
+                changed |= applyCounterDelta(item, postId, counterField, delta);
             }
             return changed;
         }
@@ -117,19 +123,29 @@ public class FeedCounterSideEffectPort implements IFeedCounterSideEffectPort {
         }
         ObjectNode object = (ObjectNode) node;
         boolean changed = false;
-        if (matchesPost(object, postId) && object.has("likeCount")) {
-            long next = Math.max(0L, object.path("likeCount").asLong(0L) + delta);
-            object.put("likeCount", next);
+        if (matchesPost(object, postId) && object.has(counterField)) {
+            long next = Math.max(0L, object.path(counterField).asLong(0L) + delta);
+            object.put(counterField, next);
             changed = true;
         }
         Iterator<JsonNode> children = object.elements();
         while (children.hasNext()) {
             JsonNode child = children.next();
             if (child instanceof ArrayNode || child instanceof ObjectNode) {
-                changed |= applyLikeDelta(child, postId, delta);
+                changed |= applyCounterDelta(child, postId, counterField, delta);
             }
         }
         return changed;
+    }
+
+    private String counterField(ObjectCounterType metric) {
+        if (metric == ObjectCounterType.LIKE) {
+            return "likeCount";
+        }
+        if (metric == ObjectCounterType.FAV) {
+            return "favoriteCount";
+        }
+        return null;
     }
 
     private boolean matchesPost(ObjectNode object, Long postId) {

@@ -27,7 +27,7 @@ public class KnowpostCounterSideEffectListener {
      */
     @EventListener
     public void onCounterChanged(CounterEvent event) {
-        if (!isEffectivePostLikeEvent(event)) {
+        if (!isEffectivePostCounterEvent(event)) {
             return;
         }
         Long postId = event.getTargetId();
@@ -35,38 +35,45 @@ public class KnowpostCounterSideEffectListener {
         if (postId == null || delta == 0) {
             return;
         }
-        incrementLikeReceivedBestEffort(event.getRequestId(), postId, delta);
-        applyFeedSideEffectsBestEffort(postId, delta);
+        ObjectCounterType metric = ObjectCounterType.fromCode(event.getMetric());
+        incrementReceivedBestEffort(event.getRequestId(), postId, metric, delta);
+        applyFeedSideEffectsBestEffort(postId, metric, delta);
     }
 
-    private boolean isEffectivePostLikeEvent(CounterEvent event) {
+    private boolean isEffectivePostCounterEvent(CounterEvent event) {
         return event != null
-                && ObjectCounterType.LIKE.getCode().equals(event.getMetric())
+                && (ObjectCounterType.LIKE.getCode().equals(event.getMetric())
+                || ObjectCounterType.FAV.getCode().equals(event.getMetric()))
                 && "post".equals(event.getTargetType())
                 && event.getTargetId() != null
                 && event.getDelta() != 0;
     }
 
-    private void incrementLikeReceivedBestEffort(String requestId, Long postId, long delta) {
+    private void incrementReceivedBestEffort(String requestId, Long postId, ObjectCounterType metric, long delta) {
         try {
             Long ownerUserId = postAuthorPort.getPostAuthorId(postId);
             if (ownerUserId == null) {
                 return;
             }
-            userCounterService.incrementLikesReceived(ownerUserId, delta);
+            if (metric == ObjectCounterType.LIKE) {
+                userCounterService.incrementLikesReceived(ownerUserId, delta);
+            } else if (metric == ObjectCounterType.FAV) {
+                userCounterService.incrementFavsReceived(ownerUserId, delta);
+            }
         } catch (Exception e) {
             if (log.isDebugEnabled()) {
-                log.debug("increment like_received failed, requestId={}, postId={}, delta={}", requestId, postId, delta, e);
+                log.debug("increment received counter failed, requestId={}, postId={}, metric={}, delta={}",
+                        requestId, postId, metric, delta, e);
             }
         }
     }
 
-    private void applyFeedSideEffectsBestEffort(Long postId, long delta) {
+    private void applyFeedSideEffectsBestEffort(Long postId, ObjectCounterType metric, long delta) {
         try {
-            feedCounterSideEffectPort.applyPostLikeDelta(postId, delta);
+            feedCounterSideEffectPort.applyPostCounterDelta(postId, metric, delta);
         } catch (Exception e) {
             if (log.isDebugEnabled()) {
-                log.debug("apply feed side effects failed, postId={}, delta={}", postId, delta, e);
+                log.debug("apply feed side effects failed, postId={}, metric={}, delta={}", postId, metric, delta, e);
             }
         }
     }

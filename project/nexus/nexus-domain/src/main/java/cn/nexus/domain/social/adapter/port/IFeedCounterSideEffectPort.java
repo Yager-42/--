@@ -1,5 +1,7 @@
 package cn.nexus.domain.social.adapter.port;
 
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
+
 /**
  * Feed local cache side effects for counter changes.
  */
@@ -11,6 +13,5 @@ public interface IFeedCounterSideEffectPort {
      * @param postId target post id
      * @param delta like delta, non-zero means effective toggle
      */
-    void applyPostLikeDelta(Long postId, long delta);
+    void applyPostCounterDelta(Long postId, ObjectCounterType metric, long delta);
 }
-

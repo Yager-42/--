@@ -65,9 +65,6 @@ public class RelationEventPort implements IRelationEventPort {
         if ("BLOCK".equals(normalizedType)) {
             return RelationCounterRouting.RK_BLOCK;
         }
-        if ("POST".equals(normalizedType)) {
-            return RelationCounterRouting.RK_POST;
-        }
         return null;
     }
 

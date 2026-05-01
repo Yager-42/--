@@ -3,7 +3,6 @@ package cn.nexus.domain.social.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -13,6 +12,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.social.adapter.port.IContentCacheEvictPort;
 import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
@@ -22,7 +22,6 @@ import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.service.IContentService;
 import cn.nexus.domain.social.adapter.repository.IContentPublishAttemptRepository;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
-import cn.nexus.domain.social.adapter.repository.IRelationEventOutboxRepository;
 import cn.nexus.domain.social.model.entity.ContentDraftEntity;
 import cn.nexus.domain.social.model.entity.ContentHistoryEntity;
 import cn.nexus.domain.social.model.entity.ContentPublishAttemptEntity;
@@ -37,7 +36,6 @@ import cn.nexus.types.exception.AppException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -99,8 +97,8 @@ class ContentServiceTest {
         }
 
         @Bean
-        IRelationEventOutboxRepository relationEventOutboxRepository() {
-            return Mockito.mock(IRelationEventOutboxRepository.class);
+        IUserCounterService userCounterService() {
+            return Mockito.mock(IUserCounterService.class);
         }
 
         @Bean
@@ -126,7 +124,7 @@ class ContentServiceTest {
                                       IMediaStoragePort mediaStoragePort,
                                       IMediaTranscodePort mediaTranscodePort,
                                       IContentEventOutboxPort contentEventOutboxPort,
-                                      IRelationEventOutboxRepository relationEventOutboxRepository,
+                                      IUserCounterService userCounterService,
                                       IContentCacheEvictPort contentCacheEvictPort,
                                       IRiskService riskService,
                                       RedissonClient redissonClient) {
@@ -138,7 +136,7 @@ class ContentServiceTest {
                     mediaStoragePort,
                     mediaTranscodePort,
                     contentEventOutboxPort,
-                    relationEventOutboxRepository,
+                    userCounterService,
                     contentCacheEvictPort,
                     riskService,
                     redissonClient
@@ -180,7 +178,7 @@ class ContentServiceTest {
     @org.springframework.beans.factory.annotation.Autowired
     private IContentEventOutboxPort contentEventOutboxPort;
     @org.springframework.beans.factory.annotation.Autowired
-    private IRelationEventOutboxRepository relationEventOutboxRepository;
+    private IUserCounterService userCounterService;
     @org.springframework.beans.factory.annotation.Autowired
     private IContentCacheEvictPort contentCacheEvictPort;
     @org.springframework.beans.factory.annotation.Autowired
@@ -195,7 +193,7 @@ class ContentServiceTest {
                 contentPublishAttemptRepository,
                 mediaStoragePort,
                 contentEventOutboxPort,
-                relationEventOutboxRepository,
+                userCounterService,
                 contentCacheEvictPort,
                 redissonClient
         );
@@ -254,11 +252,11 @@ class ContentServiceTest {
 
         assertEquals(77L, result.getAttemptId());
         verify(contentPublishAttemptRepository, never()).create(any());
-        verify(relationEventOutboxRepository, never()).save(anyLong(), anyString(), anyString());
+        verify(userCounterService, never()).incrementPosts(any(), anyLong());
     }
 
     @Test
-    void publish_newPublishedPost_shouldWritePostCounterOutboxOnce() {
+    void publish_newPublishedPost_shouldIncrementPostCounterOnce() {
         RLock lock = Mockito.mock(RLock.class);
         when(redissonClient.getLock(anyString())).thenReturn(lock);
         when(socialIdPort.nextId()).thenReturn(500L, 501L, 502L);
@@ -279,12 +277,7 @@ class ContentServiceTest {
                 contentService.publish(101L, 11L, "title", "body", null, null, "PUBLIC", null);
 
         assertEquals("PUBLISHED", result.getStatus());
-        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-        verify(relationEventOutboxRepository).save(anyLong(), eq("POST"), payloadCaptor.capture());
-        String payload = payloadCaptor.getValue();
-        assertTrue(payload.contains("\"sourceId\":11"));
-        assertTrue(payload.contains("\"targetId\":101"));
-        assertTrue(payload.contains("\"status\":\"PUBLISHED\""));
+        verify(userCounterService).incrementPosts(11L, 1L);
     }
 
     @Test
@@ -324,7 +317,7 @@ class ContentServiceTest {
 
         contentService.publish(101L, 11L, "title", "body", null, null, "PUBLIC", null);
 
-        verify(relationEventOutboxRepository, never()).save(anyLong(), eq("POST"), anyString());
+        verify(userCounterService, never()).incrementPosts(any(), anyLong());
     }
 
     @Test
@@ -355,11 +348,11 @@ class ContentServiceTest {
         verify(contentEventOutboxPort).savePostUpdated(eq(101L), eq(11L), eq(3), eq(1000L));
         verify(contentCacheEvictPort).evictPost(101L);
         verify(contentEventOutboxPort, never()).savePostSummaryGenerate(anyLong(), anyLong(), anyInt(), anyLong());
-        verify(relationEventOutboxRepository, never()).save(anyLong(), eq("POST"), anyString());
+        verify(userCounterService, never()).incrementPosts(any(), anyLong());
     }
 
     @Test
-    void applyRiskReviewResult_pass_shouldWritePostCounterOutbox() {
+    void applyRiskReviewResult_pass_shouldIncrementPostCounter() {
         ContentPublishAttemptEntity attempt = ContentPublishAttemptEntity.builder()
                 .attemptId(1L)
                 .postId(101L)
@@ -372,7 +365,6 @@ class ContentServiceTest {
 
         when(contentPublishAttemptRepository.findByAttemptId(1L)).thenReturn(attempt);
         when(socialIdPort.now()).thenReturn(1000L);
-        when(socialIdPort.nextId()).thenReturn(800L);
         when(contentRepository.updatePostStatusAndPublishTimeIfMatchVersion(101L, 2, 1, 3, 1000L))
                 .thenReturn(true);
         when(contentPublishAttemptRepository.updateAttemptStatus(
@@ -385,12 +377,7 @@ class ContentServiceTest {
 
         contentService.applyRiskReviewResult(1L, "PASS", null);
 
-        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-        verify(relationEventOutboxRepository).save(eq(800L), eq("POST"), payloadCaptor.capture());
-        String payload = payloadCaptor.getValue();
-        assertTrue(payload.contains("\"sourceId\":11"));
-        assertTrue(payload.contains("\"targetId\":101"));
-        assertTrue(payload.contains("\"status\":\"PUBLISHED\""));
+        verify(userCounterService).incrementPosts(11L, 1L);
     }
 
     @Test
@@ -484,11 +471,11 @@ class ContentServiceTest {
         verify(postContentKvPort).delete("uuid-1");
         verify(contentEventOutboxPort).savePostDeleted(101L, 11L, 3, 1000L);
         verify(contentCacheEvictPort).evictPost(101L);
-        verify(relationEventOutboxRepository, never()).save(anyLong(), eq("POST"), anyString());
+        verify(userCounterService, never()).incrementPosts(any(), anyLong());
     }
 
     @Test
-    void delete_publishedPost_shouldWritePostCounterDecrementOutbox() {
+    void delete_publishedPost_shouldDecrementPostCounter() {
         RLock lock = Mockito.mock(RLock.class);
         when(redissonClient.getLock(anyString())).thenReturn(lock);
         when(contentRepository.findPostForUpdate(101L)).thenReturn(ContentPostEntity.builder()
@@ -499,18 +486,12 @@ class ContentServiceTest {
                 .contentUuid("uuid-1")
                 .build());
         when(socialIdPort.now()).thenReturn(1000L);
-        when(socialIdPort.nextId()).thenReturn(700L);
         when(contentRepository.softDeleteIfMatchStatusAndVersion(101L, 2, 3, 1000L)).thenReturn(true);
 
         cn.nexus.domain.social.model.valobj.OperationResultVO result = contentService.delete(11L, 101L);
 
         assertEquals("DELETED", result.getStatus());
-        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-        verify(relationEventOutboxRepository).save(eq(700L), eq("POST"), payloadCaptor.capture());
-        String payload = payloadCaptor.getValue();
-        assertTrue(payload.contains("\"sourceId\":11"));
-        assertTrue(payload.contains("\"targetId\":101"));
-        assertTrue(payload.contains("\"status\":\"UNPUBLISHED\""));
+        verify(userCounterService).incrementPosts(11L, -1L);
     }
 
     @Test

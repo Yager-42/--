@@ -37,11 +37,6 @@ public class RelationCounterProjectConsumer {
         consume(event, message, channel);
     }
 
-    @RabbitListener(queues = RelationMqConfig.Q_POST, containerFactory = "relationManualAckListenerContainerFactory")
-    public void onPost(RelationCounterProjectEvent event, Message message, Channel channel) throws Exception {
-        consume(event, message, channel);
-    }
-
     private void consume(RelationCounterProjectEvent event, Message message, Channel channel) throws Exception {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
         String eventId = eventIdOf(event);

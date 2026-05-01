@@ -8,7 +8,6 @@ import static org.mockito.Mockito.when;
 
 import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
-import cn.nexus.domain.social.adapter.repository.IPostCounterProjectionRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
 import cn.nexus.types.event.relation.RelationCounterProjectEvent;
@@ -21,7 +20,6 @@ class RelationCounterProjectionProcessorTest {
     private IRelationRepository relationRepository;
     private IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private IUserCounterService userCounterService;
-    private IPostCounterProjectionRepository postCounterProjectionRepository;
     private RelationCounterProjectionProcessor processor;
 
     @BeforeEach
@@ -29,12 +27,10 @@ class RelationCounterProjectionProcessorTest {
         relationRepository = Mockito.mock(IRelationRepository.class);
         relationAdjacencyCachePort = Mockito.mock(IRelationAdjacencyCachePort.class);
         userCounterService = Mockito.mock(IUserCounterService.class);
-        postCounterProjectionRepository = Mockito.mock(IPostCounterProjectionRepository.class);
         processor = new RelationCounterProjectionProcessor(
                 relationRepository,
                 relationAdjacencyCachePort,
-                userCounterService,
-                postCounterProjectionRepository
+                userCounterService
         );
     }
 
@@ -99,74 +95,13 @@ class RelationCounterProjectionProcessorTest {
     }
 
     @Test
-    void post_unpublishedToPublished_shouldIncrementPostCounter() {
+    void postEvents_shouldBeIgnoredBecauseContentServiceOwnsPostCounterEdges() {
         RelationCounterProjectEvent event = postEvent(200L, 1L, 100L, "PUBLISHED");
-        when(postCounterProjectionRepository.compareAndWrite(100L, 1L, true, 200L))
-                .thenReturn(IPostCounterProjectionRepository.EdgeResult.EDGE_TRANSITION);
-
-        processor.process(event);
-
-        verify(userCounterService).incrementPosts(1L, 1L);
-        verify(userCounterService, never()).rebuildAllCounters(any());
-    }
-
-    @Test
-    void post_publishedToUnpublished_shouldDecrementPostCounter() {
-        RelationCounterProjectEvent event = postEvent(201L, 1L, 100L, "UNPUBLISHED");
-        when(postCounterProjectionRepository.compareAndWrite(100L, 1L, false, 201L))
-                .thenReturn(IPostCounterProjectionRepository.EdgeResult.EDGE_TRANSITION);
-
-        processor.process(event);
-
-        verify(userCounterService).incrementPosts(1L, -1L);
-        verify(userCounterService, never()).rebuildAllCounters(any());
-    }
-
-    @Test
-    void post_publishedToDeleted_shouldDecrementPostCounter() {
-        RelationCounterProjectEvent event = postEvent(204L, 1L, 100L, "DELETED");
-        when(postCounterProjectionRepository.compareAndWrite(100L, 1L, false, 204L))
-                .thenReturn(IPostCounterProjectionRepository.EdgeResult.EDGE_TRANSITION);
-
-        processor.process(event);
-
-        verify(userCounterService).incrementPosts(1L, -1L);
-        verify(userCounterService, never()).rebuildAllCounters(any());
-    }
-
-    @Test
-    void post_sameState_shouldNotModifyPostCounter() {
-        RelationCounterProjectEvent event = postEvent(202L, 1L, 100L, "PUBLISHED");
-        when(postCounterProjectionRepository.compareAndWrite(100L, 1L, true, 202L))
-                .thenReturn(IPostCounterProjectionRepository.EdgeResult.SAME_STATE);
 
         processor.process(event);
 
         verify(userCounterService, never()).incrementPosts(any(), any(Long.class));
         verify(userCounterService, never()).rebuildAllCounters(any());
-    }
-
-    @Test
-    void post_staleEvent_shouldRejectAndNotModifyCounter() {
-        RelationCounterProjectEvent event = postEvent(199L, 1L, 100L, "PUBLISHED");
-        when(postCounterProjectionRepository.compareAndWrite(100L, 1L, true, 199L))
-                .thenReturn(IPostCounterProjectionRepository.EdgeResult.STALE_EVENT);
-
-        processor.process(event);
-
-        verify(userCounterService, never()).incrementPosts(any(), any(Long.class));
-        verify(userCounterService, never()).rebuildAllCounters(any());
-    }
-
-    @Test
-    void post_unpublishedToPublished_authorIdNull_shouldNotIncrement() {
-        RelationCounterProjectEvent event = postEvent(203L, null, 100L, "PUBLISHED");
-        when(postCounterProjectionRepository.compareAndWrite(100L, null, true, 203L))
-                .thenReturn(IPostCounterProjectionRepository.EdgeResult.EDGE_TRANSITION);
-
-        processor.process(event);
-
-        verify(userCounterService, never()).incrementPosts(any(), any(Long.class));
     }
 
     @Test

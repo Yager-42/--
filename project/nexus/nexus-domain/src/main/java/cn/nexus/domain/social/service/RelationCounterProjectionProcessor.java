@@ -2,8 +2,6 @@ package cn.nexus.domain.social.service;
 
 import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
-import cn.nexus.domain.social.adapter.repository.IPostCounterProjectionRepository;
-import cn.nexus.domain.social.adapter.repository.IPostCounterProjectionRepository.EdgeResult;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.types.event.relation.RelationCounterProjectEvent;
 import lombok.RequiredArgsConstructor;
@@ -23,7 +21,6 @@ public class RelationCounterProjectionProcessor {
     private final IRelationRepository relationRepository;
     private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IUserCounterService userCounterService;
-    private final IPostCounterProjectionRepository postCounterProjectionRepository;
 
     @Transactional(rollbackFor = Exception.class)
     public void process(RelationCounterProjectEvent event) {
@@ -32,7 +29,6 @@ public class RelationCounterProjectionProcessor {
         }
         String type = normalize(event.getEventType());
         if ("POST".equals(type)) {
-            applyPostProjection(event);
             return;
         }
         if (event.getSourceId() == null || event.getTargetId() == null) {
@@ -92,30 +88,6 @@ public class RelationCounterProjectionProcessor {
         boolean reverseChanged = relationRepository.deleteFollowerIfPresent(sourceId, targetId);
         if (reverseChanged) {
             relationAdjacencyCachePort.removeFollowWithTtl(targetId, sourceId, ADJACENCY_CACHE_TTL_SECONDS);
-        }
-    }
-
-    private void applyPostProjection(RelationCounterProjectEvent event) {
-        Long authorId = event.getSourceId();
-        Long postId = event.getTargetId();
-        // Behavioral change from legacy: null postId returns early instead of triggering
-        // a full rebuild. Null postId events are not expected in normal operation.
-        if (authorId == null || postId == null) {
-            return;
-        }
-        String status = normalize(event.getStatus());
-        boolean targetPublished = "PUBLISHED".equals(status);
-        // UNPUBLISHED and DELETED both mean not-published
-        Long relationEventId = event.getRelationEventId();
-        if (relationEventId == null) {
-            relationEventId = 0L;
-        }
-
-        EdgeResult result = postCounterProjectionRepository.compareAndWrite(
-                postId, authorId, targetPublished, relationEventId);
-
-        if (result == EdgeResult.EDGE_TRANSITION) {
-            userCounterService.incrementPosts(authorId, targetPublished ? 1L : -1L);
         }
     }
 

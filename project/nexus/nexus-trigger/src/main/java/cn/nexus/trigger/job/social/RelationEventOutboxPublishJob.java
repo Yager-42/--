@@ -87,13 +87,6 @@ public class RelationEventOutboxPublishJob {
             }
             return;
         }
-        if ("POST".equals(item.getEventType())) {
-            RelationOutboxPayload event = objectMapper.readValue(item.getPayload(), RelationOutboxPayload.class);
-            if (!relationEventPort.publishCounterProjection(event.eventId, "POST", event.sourceId, event.targetId, event.status)) {
-                throw new IllegalStateException("publish post counter projection failed");
-            }
-            return;
-        }
         throw new IllegalArgumentException("unsupported eventType=" + item.getEventType());
     }
 

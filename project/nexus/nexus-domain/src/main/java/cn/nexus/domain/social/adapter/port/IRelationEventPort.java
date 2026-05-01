@@ -11,8 +11,4 @@ public interface IRelationEventPort {
     default boolean onBlock(Long eventId, Long sourceId, Long targetId) {
         return publishCounterProjection(eventId, "BLOCK", sourceId, targetId, null);
     }
-
-    default boolean onPost(Long eventId, Long authorId, Long postId, String status) {
-        return publishCounterProjection(eventId, "POST", authorId, postId, status);
-    }
 }

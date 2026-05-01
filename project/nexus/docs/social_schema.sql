@@ -113,42 +113,7 @@ CREATE TABLE IF NOT EXISTS `relation_event_inbox` (
   KEY `idx_event_type` (`event_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='关系事件收件箱';
 
-
--- 互动-态势事件流水表：Redis 在线真相的恢复来源
-CREATE TABLE IF NOT EXISTS `interaction_reaction_event_log` (
-  `seq` BIGINT NOT NULL AUTO_INCREMENT,
-  `event_id` VARCHAR(128) NOT NULL,
-  `target_type` VARCHAR(32) NOT NULL,
-  `target_id` BIGINT NOT NULL,
-  `reaction_type` VARCHAR(16) NOT NULL,
-  `user_id` BIGINT NOT NULL,
-  `desired_state` TINYINT NOT NULL,
-  `delta` TINYINT NOT NULL,
-  `event_time` BIGINT NOT NULL,
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`seq`),
-  UNIQUE KEY `uk_interaction_reaction_event_log_event_id` (`event_id`),
-  KEY `idx_reaction_event_log_target_seq` (`target_type`, `target_id`, `reaction_type`, `seq`),
-  KEY `idx_reaction_event_log_user_seq` (`user_id`, `seq`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='互动态势事件流水表';
-
 -- 互动-通知（聚合收件箱）：按用户+目标聚合 unread_count，列表按 update_time 倒序
-CREATE TABLE IF NOT EXISTS `user_counter_repair_outbox` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT,
-  `source_user_id` BIGINT NOT NULL,
-  `target_user_id` BIGINT NOT NULL,
-  `operation` VARCHAR(16) NOT NULL,
-  `reason` VARCHAR(64) NOT NULL,
-  `correlation_id` VARCHAR(128) NULL,
-  `status` VARCHAR(16) NOT NULL DEFAULT 'NEW',
-  `retry_count` INT NOT NULL DEFAULT 0,
-  `next_retry_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_user_counter_repair_status_retry` (`status`, `next_retry_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='user counter repair outbox';
-
 CREATE TABLE IF NOT EXISTS `interaction_notification` (
   `notification_id` BIGINT NOT NULL,
   `to_user_id` BIGINT NOT NULL,
@@ -179,7 +144,7 @@ CREATE TABLE IF NOT EXISTS `interaction_notify_inbox` (
   KEY `idx_status_time` (`status`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通知事件收件箱（幂等去重）';
 
--- 评论事件收件箱（MQ 幂等去重）：用于 comment.like.changed / comment.reply_count.changed 等计数派生链路
+-- 评论事件收件箱（MQ 幂等去重）：用于评论创建等非计数派生链路
 CREATE TABLE IF NOT EXISTS `interaction_comment_inbox` (
   `event_id` VARCHAR(128) NOT NULL,
   `event_type` VARCHAR(32) NOT NULL,
@@ -198,8 +163,6 @@ CREATE TABLE IF NOT EXISTS `interaction_comment` (
   `reply_to_id` BIGINT NULL COMMENT '显示“回复@谁”的目标评论ID（用于展示）',
   `content_id` CHAR(36) NOT NULL COMMENT '评论正文UUID（KV键）',
   `status` TINYINT NOT NULL COMMENT '0待审核；1正常；2删除（软删）',
-  `like_count` BIGINT NOT NULL DEFAULT 0 COMMENT '一级评论点赞数（最终一致）',
-  `reply_count` BIGINT NOT NULL DEFAULT 0 COMMENT '一级评论回复数（最终一致）',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`comment_id`),

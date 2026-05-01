@@ -35,7 +35,6 @@ public class RelationMqConfig {
      * RK_BLOCK 字段。
      */
     public static final String RK_BLOCK = RelationCounterRouting.RK_BLOCK;
-    public static final String RK_POST = RelationCounterRouting.RK_POST;
 
     /**
      * Q_FOLLOW 字段。
@@ -45,15 +44,12 @@ public class RelationMqConfig {
      * Q_BLOCK 字段。
      */
     public static final String Q_BLOCK = RelationCounterRouting.Q_BLOCK;
-    public static final String Q_POST = RelationCounterRouting.Q_POST;
 
     public static final String DLX_EXCHANGE = RelationCounterRouting.DLX_EXCHANGE;
     public static final String DLQ_FOLLOW = RelationCounterRouting.DLQ_FOLLOW;
     public static final String DLQ_BLOCK = RelationCounterRouting.DLQ_BLOCK;
-    public static final String DLQ_POST = RelationCounterRouting.DLQ_POST;
     public static final String RK_FOLLOW_DLX = RelationCounterRouting.RK_FOLLOW_DLX;
     public static final String RK_BLOCK_DLX = RelationCounterRouting.RK_BLOCK_DLX;
-    public static final String RK_POST_DLX = RelationCounterRouting.RK_POST_DLX;
 
     /**
      * 执行 relationExchange 逻辑。
@@ -97,14 +93,6 @@ public class RelationMqConfig {
     }
 
     @Bean
-    public Queue relationPostQueue() {
-        Map<String, Object> args = new HashMap<>();
-        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
-        args.put("x-dead-letter-routing-key", RK_POST_DLX);
-        return new Queue(Q_POST, true, false, false, args);
-    }
-
-    @Bean
     public Queue relationFollowDlqQueue() {
         return new Queue(DLQ_FOLLOW, true);
     }
@@ -112,11 +100,6 @@ public class RelationMqConfig {
     @Bean
     public Queue relationBlockDlqQueue() {
         return new Queue(DLQ_BLOCK, true);
-    }
-
-    @Bean
-    public Queue relationPostDlqQueue() {
-        return new Queue(DLQ_POST, true);
     }
 
     /**
@@ -142,12 +125,6 @@ public class RelationMqConfig {
     }
 
     @Bean
-    public Binding relationPostBinding(@Qualifier("relationPostQueue") Queue relationPostQueue,
-                                       @Qualifier("relationExchange") DirectExchange relationExchange) {
-        return BindingBuilder.bind(relationPostQueue).to(relationExchange).with(RK_POST);
-    }
-
-    @Bean
     public Binding relationFollowDlqBinding(@Qualifier("relationFollowDlqQueue") Queue relationFollowDlqQueue,
                                             @Qualifier("relationDlxExchange") DirectExchange relationDlxExchange) {
         return BindingBuilder.bind(relationFollowDlqQueue).to(relationDlxExchange).with(RK_FOLLOW_DLX);
@@ -159,9 +136,4 @@ public class RelationMqConfig {
         return BindingBuilder.bind(relationBlockDlqQueue).to(relationDlxExchange).with(RK_BLOCK_DLX);
     }
 
-    @Bean
-    public Binding relationPostDlqBinding(@Qualifier("relationPostDlqQueue") Queue relationPostDlqQueue,
-                                          @Qualifier("relationDlxExchange") DirectExchange relationDlxExchange) {
-        return BindingBuilder.bind(relationPostDlqQueue).to(relationDlxExchange).with(RK_POST_DLX);
-    }
 }

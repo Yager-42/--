@@ -3,8 +3,8 @@ package cn.nexus.trigger.http.social;
 import cn.nexus.api.response.Response;
 import cn.nexus.api.social.action.dto.ActionRequestDTO;
 import cn.nexus.api.social.action.dto.ActionResponseDTO;
-import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.model.valobj.PostActionResultVO;
+import cn.nexus.domain.social.service.IPostActionService;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
 import cn.nexus.trigger.http.support.UserContext;
@@ -25,7 +25,7 @@ public class ActionController {
     private static final String TARGET_POST = "post";
 
     @Resource
-    private IObjectCounterService objectCounterService;
+    private IPostActionService postActionService;
 
     @PostMapping("/action/like")
     public Response<ActionResponseDTO> like(@RequestBody ActionRequestDTO requestDTO) {
@@ -54,10 +54,10 @@ public class ActionController {
         try {
             Long userId = UserContext.requireUserId();
             PostActionResultVO result = switch (verb) {
-                case LIKE -> objectCounterService.likePost(requestDTO.getTargetId(), userId);
-                case UNLIKE -> objectCounterService.unlikePost(requestDTO.getTargetId(), userId);
-                case FAV -> objectCounterService.favPost(requestDTO.getTargetId(), userId);
-                case UNFAV -> objectCounterService.unfavPost(requestDTO.getTargetId(), userId);
+                case LIKE -> postActionService.likePost(requestDTO.getTargetId(), userId, requestDTO.getRequestId());
+                case UNLIKE -> postActionService.unlikePost(requestDTO.getTargetId(), userId, requestDTO.getRequestId());
+                case FAV -> postActionService.favPost(requestDTO.getTargetId(), userId, requestDTO.getRequestId());
+                case UNFAV -> postActionService.unfavPost(requestDTO.getTargetId(), userId, requestDTO.getRequestId());
             };
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), toResponse(result));
         } catch (AppException e) {

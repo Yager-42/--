@@ -8,8 +8,8 @@ import static org.mockito.Mockito.when;
 import cn.nexus.api.response.Response;
 import cn.nexus.api.social.action.dto.ActionRequestDTO;
 import cn.nexus.api.social.action.dto.ActionResponseDTO;
-import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.model.valobj.PostActionResultVO;
+import cn.nexus.domain.social.service.IPostActionService;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.trigger.http.support.UserContext;
 import org.junit.jupiter.api.AfterEach;
@@ -27,9 +27,9 @@ class ActionControllerTest {
     @Test
     void likeShouldAcceptOnlyPostTargetAndReturnFullActionState() {
         ActionController controller = controller();
-        IObjectCounterService service = service(controller);
+        IPostActionService service = service(controller);
         UserContext.setUserId(7L);
-        when(service.likePost(42L, 7L)).thenReturn(result(true, true, false, 5L, 2L));
+        when(service.likePost(42L, 7L, "r1")).thenReturn(result(true, true, false, 5L, 2L));
 
         Response<ActionResponseDTO> response = controller.like(ActionRequestDTO.builder()
                 .targetType("post")
@@ -43,13 +43,13 @@ class ActionControllerTest {
         assertEquals(false, response.getData().isFaved());
         assertEquals(5L, response.getData().getLikeCount());
         assertEquals(2L, response.getData().getFavoriteCount());
-        verify(service).likePost(42L, 7L);
+        verify(service).likePost(42L, 7L, "r1");
     }
 
     @Test
     void unsupportedTargetShouldReturnIllegalParameterBeforeServiceCall() {
         ActionController controller = controller();
-        IObjectCounterService service = service(controller);
+        IPostActionService service = service(controller);
         UserContext.setUserId(7L);
 
         Response<ActionResponseDTO> response = controller.like(ActionRequestDTO.builder()
@@ -58,36 +58,36 @@ class ActionControllerTest {
                 .build());
 
         assertEquals(ResponseCode.ILLEGAL_PARAMETER.getCode(), response.getCode());
-        verify(service, never()).likePost(Mockito.anyLong(), Mockito.anyLong());
+        verify(service, never()).likePost(Mockito.anyLong(), Mockito.anyLong(), Mockito.any());
     }
 
     @Test
     void unlikeFavAndUnfavShouldDelegateToConcretePostMethods() {
         ActionController controller = controller();
-        IObjectCounterService service = service(controller);
+        IPostActionService service = service(controller);
         UserContext.setUserId(7L);
-        when(service.unlikePost(42L, 7L)).thenReturn(result(true, false, false, 4L, 1L));
-        when(service.favPost(42L, 7L)).thenReturn(result(false, false, true, 4L, 1L));
-        when(service.unfavPost(42L, 7L)).thenReturn(result(true, false, false, 4L, 0L));
+        when(service.unlikePost(42L, 7L, null)).thenReturn(result(true, false, false, 4L, 1L));
+        when(service.favPost(42L, 7L, null)).thenReturn(result(false, false, true, 4L, 1L));
+        when(service.unfavPost(42L, 7L, null)).thenReturn(result(true, false, false, 4L, 0L));
         ActionRequestDTO request = ActionRequestDTO.builder().targetType("post").targetId(42L).build();
 
         assertEquals(false, controller.unlike(request).getData().isLiked());
         assertEquals(true, controller.fav(request).getData().isFaved());
         assertEquals(false, controller.unfav(request).getData().isFaved());
 
-        verify(service).unlikePost(42L, 7L);
-        verify(service).favPost(42L, 7L);
-        verify(service).unfavPost(42L, 7L);
+        verify(service).unlikePost(42L, 7L, null);
+        verify(service).favPost(42L, 7L, null);
+        verify(service).unfavPost(42L, 7L, null);
     }
 
     private static ActionController controller() {
         ActionController controller = new ActionController();
-        ReflectionTestUtils.setField(controller, "objectCounterService", Mockito.mock(IObjectCounterService.class));
+        ReflectionTestUtils.setField(controller, "postActionService", Mockito.mock(IPostActionService.class));
         return controller;
     }
 
-    private static IObjectCounterService service(ActionController controller) {
-        return (IObjectCounterService) ReflectionTestUtils.getField(controller, "objectCounterService");
+    private static IPostActionService service(ActionController controller) {
+        return (IPostActionService) ReflectionTestUtils.getField(controller, "postActionService");
     }
 
     private static PostActionResultVO result(boolean changed, boolean liked, boolean faved,

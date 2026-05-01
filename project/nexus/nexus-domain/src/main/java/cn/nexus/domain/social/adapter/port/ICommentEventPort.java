@@ -1,7 +1,6 @@
 package cn.nexus.domain.social.adapter.port;
 
 import cn.nexus.types.event.interaction.CommentCreatedEvent;
-import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
 
 /**
  * 评论事件发布端口：domain 只调用端口，不依赖 RabbitTemplate。
@@ -11,6 +10,4 @@ import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
  */
 public interface ICommentEventPort {
     void publish(CommentCreatedEvent event);
-
-    void publish(CommentLikeChangedEvent event);
 }

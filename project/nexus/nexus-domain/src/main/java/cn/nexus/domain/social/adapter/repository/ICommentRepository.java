@@ -93,7 +93,7 @@ public interface ICommentRepository {
      *
      * @param postId 帖子 ID
      * @param limit  扫描上限（建议 5000）
-     * @return 一级评论简要信息列表（包含 like_count）
+     * @return 一级评论简要信息列表
      */
     List<CommentBriefVO> listRecentRootBriefs(Long postId, int limit);
 }

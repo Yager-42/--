@@ -20,7 +20,7 @@ public class NotificationVO {
     /** 通知行 ID：用于稳定分页与标记已读 */
     private Long notificationId;
 
-    /** 业务类型：POST_LIKED / COMMENT_LIKED / POST_COMMENTED / COMMENT_REPLIED / COMMENT_MENTIONED */
+    /** 业务类型：POST_LIKED / POST_COMMENTED / COMMENT_REPLIED / COMMENT_MENTIONED */
     private String bizType;
 
     /** 目标类型：POST / COMMENT */

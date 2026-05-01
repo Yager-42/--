@@ -22,7 +22,6 @@ public class CommentPO {
      */
     private String contentId;
     private Integer status;
-    private Long likeCount;
     private Date createTime;
     private Date updateTime;
 }

@@ -23,5 +23,4 @@ public class CommentBriefVO {
     private Long userId;
     private Long rootId;
     private Integer status;
-    private Long likeCount;
 }

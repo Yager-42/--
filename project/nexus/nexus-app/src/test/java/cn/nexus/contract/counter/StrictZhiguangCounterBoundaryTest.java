@@ -50,6 +50,11 @@ class StrictZhiguangCounterBoundaryTest {
             ForbiddenPattern.literal("like_count"),
             ForbiddenPattern.literal("reply_count"));
 
+    private static final List<ForbiddenPattern> COMMENT_FIELD_PATTERNS = List.of(
+            ForbiddenPattern.regex("\\bprivate\\s+\\w+\\s+likeCount\\b"),
+            ForbiddenPattern.regex("\\bprivate\\s+\\w+\\s+replyCount\\b"),
+            ForbiddenPattern.regex("\\bprivate\\s+\\w+\\s+liked\\b"));
+
     private static final Pattern COMMENT_TARGET_COUNTER_CONTEXT = Pattern.compile(
             "counter|Counter|like|Like|fav|Fav|aggregation|Aggregation");
 
@@ -123,6 +128,13 @@ class StrictZhiguangCounterBoundaryTest {
                         file,
                         lineNumber,
                         "ReactionTargetTypeEnumVO.COMMENT in counter-like context"));
+            }
+            if (file.getFileName().toString().contains("Comment")) {
+                for (ForbiddenPattern forbiddenPattern : COMMENT_FIELD_PATTERNS) {
+                    if (forbiddenPattern.matches(line)) {
+                        violations.add(formatViolation(file, lineNumber, forbiddenPattern.label()));
+                    }
+                }
             }
         }
     }

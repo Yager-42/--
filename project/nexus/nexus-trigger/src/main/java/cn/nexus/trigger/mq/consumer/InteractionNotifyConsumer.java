@@ -177,7 +177,7 @@ public class InteractionNotifyConsumer {
             return null;
         }
         if (eventType == EventType.LIKE_ADDED) {
-            return "POST".equals(targetType) ? "POST_LIKED" : ("COMMENT".equals(targetType) ? "COMMENT_LIKED" : null);
+            return "POST".equals(targetType) ? "POST_LIKED" : null;
         }
         if (eventType == EventType.COMMENT_CREATED) {
             return "POST".equals(targetType) ? "POST_COMMENTED" : ("COMMENT".equals(targetType) ? "COMMENT_REPLIED" : null);

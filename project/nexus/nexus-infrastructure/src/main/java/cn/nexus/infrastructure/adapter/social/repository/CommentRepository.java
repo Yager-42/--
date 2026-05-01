@@ -3,7 +3,6 @@ package cn.nexus.infrastructure.adapter.social.repository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
@@ -53,7 +52,6 @@ public class CommentRepository implements ICommentRepository {
     private final ICommentContentKvPort commentContentKvPort;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
-    private final IObjectCounterService objectCounterService;
 
     private final Cache<Long, CommentViewVO> commentViewCache = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(2))
@@ -80,7 +78,7 @@ public class CommentRepository implements ICommentRepository {
         if (po == null) {
             return null;
         }
-        return toBrief(po, loadCounterSnapshots(List.of(po)));
+        return toBrief(po);
     }
 
     /**
@@ -161,7 +159,6 @@ public class CommentRepository implements ICommentRepository {
         po.setReplyToId(replyToId);
         po.setContentId(contentId);
         po.setStatus(status == null ? 1 : status);
-        po.setLikeCount(0L);
         po.setCreateTime(now);
         po.setUpdateTime(now);
         commentDao.insert(po);
@@ -491,12 +488,11 @@ public class CommentRepository implements ICommentRepository {
         }
 
         List<CommentPO> list = commentDao.selectByIds(unresolved);
-        Map<Long, CounterSnapshot> counterByCommentId = loadCounterSnapshots(list);
         Map<Long, CommentViewVO> found = new HashMap<>();
         List<ContentKey> contentKeys = new ArrayList<>();
         if (list != null) {
             for (CommentPO po : list) {
-                CommentViewVO view = toView(po, counterByCommentId);
+                CommentViewVO view = toView(po);
                 if (view == null || view.getCommentId() == null) {
                     continue;
                 }
@@ -640,10 +636,6 @@ public class CommentRepository implements ICommentRepository {
     }
 
     private CommentViewVO toView(CommentPO po) {
-        return toView(po, Map.of());
-    }
-
-    private CommentViewVO toView(CommentPO po, Map<Long, CounterSnapshot> counterByCommentId) {
         if (po == null) {
             return null;
         }
@@ -657,7 +649,6 @@ public class CommentRepository implements ICommentRepository {
                 .replyToId(po.getReplyToId())
                 .content(null)
                 .status(po.getStatus())
-                .likeCount(counterSnapshotOf(po, counterByCommentId).likeCount())
                 .createTime(ct == null ? null : ct.getTime())
                 .build();
     }
@@ -772,7 +763,6 @@ public class CommentRepository implements ICommentRepository {
                 .replyToId(v.getReplyToId())
                 .content(v.getContent())
                 .status(v.getStatus())
-                .likeCount(v.getLikeCount())
                 .createTime(v.getCreateTime())
                 .build();
     }
@@ -896,18 +886,17 @@ public class CommentRepository implements ICommentRepository {
         if (list == null || list.isEmpty()) {
             return List.of();
         }
-        Map<Long, CounterSnapshot> counterByCommentId = loadCounterSnapshots(list);
         List<CommentBriefVO> res = new ArrayList<>(list.size());
         for (CommentPO po : list) {
             if (po == null) {
                 continue;
             }
-            res.add(toBrief(po, counterByCommentId));
+            res.add(toBrief(po));
         }
         return res;
     }
 
-    private CommentBriefVO toBrief(CommentPO po, Map<Long, CounterSnapshot> counterByCommentId) {
+    private CommentBriefVO toBrief(CommentPO po) {
         if (po == null) {
             return null;
         }
@@ -917,47 +906,7 @@ public class CommentRepository implements ICommentRepository {
                 .userId(po.getUserId())
                 .rootId(po.getRootId())
                 .status(po.getStatus())
-                .likeCount(counterSnapshotOf(po, counterByCommentId).likeCount())
                 .build();
-    }
-
-    private Map<Long, CounterSnapshot> loadCounterSnapshots(List<CommentPO> comments) {
-        if (comments == null || comments.isEmpty()) {
-            return Map.of();
-        }
-        List<Long> commentIds = new ArrayList<>(comments.size());
-        Map<Long, CounterSnapshot> fallback = new HashMap<>(comments.size() * 2);
-        for (CommentPO po : comments) {
-            if (po == null || po.getCommentId() == null) {
-                continue;
-            }
-            Long commentId = po.getCommentId();
-            fallback.put(commentId, new CounterSnapshot(safeLong(po.getLikeCount())));
-            commentIds.add(commentId);
-        }
-        if (commentIds.isEmpty()) {
-            return Map.of();
-        }
-        return fallback;
-    }
-
-    private CounterSnapshot counterSnapshotOf(CommentPO po, Map<Long, CounterSnapshot> counterByCommentId) {
-        if (po == null || po.getCommentId() == null) {
-            return CounterSnapshot.ZERO;
-        }
-        CounterSnapshot counter = counterByCommentId == null ? null : counterByCommentId.get(po.getCommentId());
-        if (counter != null) {
-            return counter;
-        }
-        return new CounterSnapshot(safeLong(po.getLikeCount()));
-    }
-
-    private long safeLong(Long value) {
-        return value == null ? 0L : Math.max(0L, value);
-    }
-
-    private record CounterSnapshot(Long likeCount) {
-        private static final CounterSnapshot ZERO = new CounterSnapshot(0L);
     }
 
     private static final class Cursor {

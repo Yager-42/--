@@ -175,7 +175,7 @@ class InteractionServiceTest {
                 repository,
                 Mockito.mock(IUserBaseRepository.class));
         when(repository.pageByUser(1L, null, 20)).thenReturn(List.of(
-                NotificationVO.builder().notificationId(99L).bizType("COMMENT_LIKED").unreadCount(2L).createTime(1000L).build()
+                NotificationVO.builder().notificationId(99L).bizType("LEGACY_REMOVED_TYPE").unreadCount(2L).createTime(1000L).build()
         ));
 
         NotificationListVO result = service.notifications(1L, null);

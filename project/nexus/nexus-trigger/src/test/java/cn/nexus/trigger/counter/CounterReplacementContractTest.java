@@ -129,8 +129,7 @@ class CounterReplacementContractTest {
                 .contains("likeCount", "favoriteCount", "liked", "faved")
                 .doesNotContain("replyCount", "favoriteReceived", "likeReceived");
         assertThat(Files.readString(ROOT.resolve("nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/CommentViewDTO.java")))
-                .contains("likeCount")
-                .doesNotContain("replyCount", "favoriteReceived", "likeReceived", "favoriteCount");
+                .doesNotContain("likeCount", "replyCount", "liked", "favoriteReceived", "likeReceived", "favoriteCount");
         assertThat(Files.readString(ROOT.resolve("nexus-api/src/main/java/cn/nexus/api/social/search/dto/SearchItemDTO.java")))
                 .doesNotContain("likeCount", "replyCount", "favoriteCount", "commentCount", "likeReceived", "favoriteReceived");
     }

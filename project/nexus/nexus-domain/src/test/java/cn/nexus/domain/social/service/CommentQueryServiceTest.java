@@ -16,17 +16,27 @@ import cn.nexus.domain.social.adapter.repository.ICommentHotRankRepository;
 import cn.nexus.domain.social.adapter.repository.ICommentPinRepository;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
+import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.CommentViewVO;
 import cn.nexus.domain.social.model.valobj.RootCommentPageVO;
 import cn.nexus.domain.social.model.valobj.RootCommentViewVO;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 class CommentQueryServiceTest {
+
+    @Test
+    void commentReadModelsShouldNotExposeCounterFields() {
+        assertNoFields(CommentViewVO.class, "likeCount", "replyCount", "liked");
+        assertNoFields(CommentBriefVO.class, "likeCount", "replyCount", "liked");
+        assertNoFields(RootCommentViewVO.class, "likeCount", "replyCount", "liked");
+    }
 
     @Test
     void listRootComments_shouldBatchLoadRepliesPreviewAndFilterVisibility() {
@@ -104,5 +114,13 @@ class CommentQueryServiceTest {
         verify(commentRepository, times(1)).batchListReplyPreviewIds(anyList(), eq(3), eq(viewerId));
         verify(commentRepository, never()).pageReplyCommentIds(anyLong(), any(), anyInt(), any());
     }
-}
 
+    private static void assertNoFields(Class<?> type, String... forbiddenNames) {
+        Set<String> forbidden = Set.of(forbiddenNames);
+        List<String> present = Arrays.stream(type.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName)
+                .filter(forbidden::contains)
+                .toList();
+        assertEquals(List.of(), present, type.getName() + " must not expose comment counter state");
+    }
+}

@@ -70,6 +70,17 @@ public class ContentDetailQueryService {
      * @return 详情响应，类型： {@link ContentDetailResponseDTO}
      */
     public ContentDetailResponseDTO query(Long postId) {
+        return query(postId, null);
+    }
+
+    /**
+     * 查询内容详情。
+     *
+     * @param postId 帖子 ID，类型： {@link Long}
+     * @param viewerUserId 当前用户 ID，匿名场景可为空，类型： {@link Long}
+     * @return 详情响应，类型： {@link ContentDetailResponseDTO}
+     */
+    public ContentDetailResponseDTO query(Long postId, Long viewerUserId) {
         if (postId == null) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "postId is required");
         }
@@ -77,7 +88,7 @@ public class ContentDetailQueryService {
         // 本地缓存只存稳定字段；命中后仍会在 `buildResponse` 阶段现查动态展示数据。
         StableSnapshot local = localCache.getIfPresent(postId);
         if (local != null) {
-            return buildResponse(local);
+            return buildResponse(local, viewerUserId);
         }
 
         // `SingleFlight` 收口并发 miss，避免同一篇帖子被瞬时并发打爆主仓储。
@@ -109,7 +120,7 @@ public class ContentDetailQueryService {
                     .build();
         });
         localCache.put(postId, snapshot);
-        return buildResponse(snapshot);
+        return buildResponse(snapshot, viewerUserId);
     }
 
     /**
@@ -140,19 +151,20 @@ public class ContentDetailQueryService {
         }
     }
 
-    private Long loadLikeCount(Long postId) {
+    private java.util.Map<String, Long> loadPostCounts(Long postId) {
         if (postId == null) {
-            return 0L;
+            return java.util.Map.of("like", 0L, "fav", 0L);
         }
         try {
             java.util.Map<String, Long> counts = objectCounterService.getPostCounts(
                     postId,
-                    java.util.List.of(ObjectCounterType.LIKE));
-            Long likeCount = counts == null ? null : counts.get("like");
-            return likeCount == null ? 0L : Math.max(0L, likeCount);
+                    java.util.List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
+            long like = counterValue(counts, ObjectCounterType.LIKE.getCode());
+            long fav = counterValue(counts, ObjectCounterType.FAV.getCode());
+            return java.util.Map.of(ObjectCounterType.LIKE.getCode(), like, ObjectCounterType.FAV.getCode(), fav);
         } catch (Exception e) {
-            log.warn("load like count failed, postId={}", postId, e);
-            return 0L;
+            log.warn("load post counters failed, postId={}", postId, e);
+            return java.util.Map.of("like", 0L, "fav", 0L);
         }
     }
 
@@ -160,7 +172,7 @@ public class ContentDetailQueryService {
         return "detailQuery:" + postId;
     }
 
-    private ContentDetailResponseDTO buildResponse(StableSnapshot snapshot) {
+    private ContentDetailResponseDTO buildResponse(StableSnapshot snapshot, Long viewerUserId) {
         if (snapshot == null) {
             throw new AppException(ResponseCode.NOT_FOUND.getCode(), ResponseCode.NOT_FOUND.getInfo());
         }
@@ -168,12 +180,18 @@ public class ContentDetailQueryService {
         CompletableFuture<UserBriefVO> authorFuture = CompletableFuture.supplyAsync(
                 () -> loadAuthor(snapshot.getAuthorId()),
                 aggregationExecutor);
-        CompletableFuture<Long> likeCountFuture = CompletableFuture.supplyAsync(
-                () -> loadLikeCount(snapshot.getPostId()),
+        CompletableFuture<java.util.Map<String, Long>> countsFuture = CompletableFuture.supplyAsync(
+                () -> loadPostCounts(snapshot.getPostId()),
+                aggregationExecutor);
+        CompletableFuture<Boolean> likedFuture = CompletableFuture.supplyAsync(
+                () -> viewerUserId != null && objectCounterService.isPostLiked(snapshot.getPostId(), viewerUserId),
+                aggregationExecutor);
+        CompletableFuture<Boolean> favedFuture = CompletableFuture.supplyAsync(
+                () -> viewerUserId != null && objectCounterService.isPostFaved(snapshot.getPostId(), viewerUserId),
                 aggregationExecutor);
 
         UserBriefVO author = authorFuture.join();
-        Long likeCount = likeCountFuture.join();
+        java.util.Map<String, Long> counts = countsFuture.join();
         return ContentDetailResponseDTO.builder()
                 .postId(snapshot.getPostId())
                 .authorId(snapshot.getAuthorId())
@@ -191,8 +209,16 @@ public class ContentDetailQueryService {
                 .versionNum(snapshot.getVersionNum())
                 .edited(snapshot.getEdited())
                 .createTime(snapshot.getCreateTime())
-                .likeCount(likeCount == null ? 0L : Math.max(0L, likeCount))
+                .likeCount(counterValue(counts, ObjectCounterType.LIKE.getCode()))
+                .favoriteCount(counterValue(counts, ObjectCounterType.FAV.getCode()))
+                .liked(Boolean.TRUE.equals(likedFuture.join()))
+                .faved(Boolean.TRUE.equals(favedFuture.join()))
                 .build();
+    }
+
+    private long counterValue(java.util.Map<String, Long> counts, String code) {
+        Long value = counts == null ? null : counts.get(code);
+        return value == null ? 0L : Math.max(0L, value);
     }
 
     private String safe(String a, String fallback) {

@@ -44,14 +44,22 @@ class ContentDetailQueryServiceTest {
         when(userBaseRepository.listByUserIds(List.of(11L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(11L).nickname("u").avatarUrl("a").build()));
         when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(java.util.Map.of("like", 9L));
+                .thenReturn(java.util.Map.of("like", 9L, "fav", 4L));
+        when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV))))
+                .thenReturn(java.util.Map.of("like", 9L, "fav", 4L));
+        when(objectCounterService.isPostLiked(101L, 7L)).thenReturn(true);
+        when(objectCounterService.isPostFaved(101L, 7L)).thenReturn(true);
 
-        ContentDetailResponseDTO first = service.query(101L);
-        ContentDetailResponseDTO second = service.query(101L);
+        ContentDetailResponseDTO first = service.query(101L, 7L);
+        ContentDetailResponseDTO second = service.query(101L, 7L);
 
         assertEquals("body", first.getContent());
         assertEquals(9L, first.getLikeCount());
+        assertEquals(4L, first.getFavoriteCount());
+        assertEquals(true, first.getLiked());
+        assertEquals(true, first.getFaved());
         assertEquals("body", second.getContent());
+        verify(objectCounterService, times(2)).getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV)));
         verify(contentRepository, times(1)).findPost(101L);
     }
 
@@ -77,13 +85,16 @@ class ContentDetailQueryServiceTest {
                 .status(2)
                 .build());
         when(userBaseRepository.listByUserIds(List.of(11L))).thenThrow(new RuntimeException("boom"));
-        when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE))))
-                .thenReturn(java.util.Map.of("like", 9L));
+        when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV))))
+                .thenReturn(java.util.Map.of("like", 9L, "fav", 3L));
 
-        ContentDetailResponseDTO response = service.query(101L);
+        ContentDetailResponseDTO response = service.query(101L, null);
 
         assertEquals("body", response.getContent());
         assertEquals(9L, response.getLikeCount());
+        assertEquals(3L, response.getFavoriteCount());
+        assertEquals(false, response.getLiked());
+        assertEquals(false, response.getFaved());
         assertEquals("", response.getAuthorNickname());
     }
 }

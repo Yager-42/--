@@ -66,8 +66,10 @@ public class SearchService implements ISearchService {
 
         // 第三步按登录态补齐用户行为态（liked/faved），不在搜索文档中携带计数字段。
         Set<Long> likedSet = Set.of();
+        Set<Long> favedSet = Set.of();
         if (userId != null && !contentIds.isEmpty()) {
             likedSet = loadLikedSet(userId, contentIds);
+            favedSet = loadFavedSet(userId, contentIds);
         }
 
         List<SearchResultVO.SearchItemVO> items = new ArrayList<>(hits.size());
@@ -87,7 +89,7 @@ public class SearchService implements ISearchService {
                     .authorNickname(doc.getAuthorNickname())
                     .tagJson(null)
                     .liked(userId != null && likedSet.contains(doc.getContentId()))
-                    .faved(false)
+                    .faved(userId != null && favedSet.contains(doc.getContentId()))
                     .isTop(null)
                     .build());
         }
@@ -157,6 +159,22 @@ public class SearchService implements ISearchService {
             }
         }
         return likedSet;
+    }
+
+    private Set<Long> loadFavedSet(Long userId, List<Long> contentIds) {
+        if (userId == null || contentIds == null || contentIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> favedSet = new LinkedHashSet<>();
+        for (Long contentId : contentIds) {
+            if (contentId == null) {
+                continue;
+            }
+            if (objectCounterService.isPostFaved(contentId, userId)) {
+                favedSet.add(contentId);
+            }
+        }
+        return favedSet;
     }
 
     private List<String> parseTags(String tags) {

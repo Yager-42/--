@@ -25,7 +25,7 @@ import org.mockito.Mockito;
 class FeedCardAssembleServiceTest {
 
     @Test
-    void assemble_shouldLoadLikeCountFromReactionCacheBatch() {
+    void assemble_shouldLoadLikeAndFavoriteCountFromPostCounterBatch() {
         IFeedCardRepository feedCardRepository = Mockito.mock(IFeedCardRepository.class);
         IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
@@ -53,13 +53,14 @@ class FeedCardAssembleServiceTest {
         when(userBaseRepository.listByUserIds(List.of(201L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(201L).nickname("author").avatarUrl("a.png").build()));
         when(objectCounterService.isPostLiked(eq(101L), eq(1L))).thenReturn(false);
+        when(objectCounterService.isPostFaved(eq(101L), eq(1L))).thenReturn(true);
         when(relationQueryService.batchFollowing(eq(1L), eq(List.of(201L)))).thenReturn(Set.of());
         when(feedFollowSeenRepository.batchSeen(eq(1L), eq(List.of(101L)))).thenReturn(Set.of());
 
         when(objectCounterService.getPostCountsBatch(
                 eq(List.of(101L)),
-                eq(List.of(ObjectCounterType.LIKE))
-        )).thenReturn(Map.of(101L, Map.of("like", 8L)));
+                eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV))
+        )).thenReturn(Map.of(101L, Map.of("like", 8L, "fav", 3L)));
 
         List<FeedItemVO> items = service.assemble(
                 1L,
@@ -70,8 +71,10 @@ class FeedCardAssembleServiceTest {
 
         assertEquals(1, items.size());
         assertEquals(8L, items.get(0).getLikeCount());
+        assertEquals(3L, items.get(0).getFavoriteCount());
+        assertEquals(true, items.get(0).getFaved());
         verify(objectCounterService).getPostCountsBatch(
                 eq(List.of(101L)),
-                eq(List.of(ObjectCounterType.LIKE)));
+                eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV)));
     }
 }

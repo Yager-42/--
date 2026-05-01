@@ -35,7 +35,7 @@ class SearchServiceTest {
     }
 
     @Test
-    void search_shouldNormalizeQueryAndLikedState() {
+    void search_shouldNormalizeQueryAndLoadLikedFavedStateFromBitmapTruth() {
         SearchDocumentVO doc = SearchDocumentVO.builder()
                 .contentId(101L)
                 .authorId(77L)
@@ -52,6 +52,7 @@ class SearchServiceTest {
                 .nextAfter("after-1")
                 .build());
         when(objectCounterService.isPostLiked(Mockito.eq(101L), Mockito.eq(9L))).thenReturn(true);
+        when(objectCounterService.isPostFaved(Mockito.eq(101L), Mockito.eq(9L))).thenReturn(true);
 
         SearchResultVO result = searchService.search(9L, "  hello   world  ", 5, "a, b,a", "cursor");
 
@@ -62,6 +63,7 @@ class SearchServiceTest {
         assertEquals(1, result.getItems().size());
         assertEquals("77", result.getItems().get(0).getAuthorId());
         assertEquals(true, result.getItems().get(0).getLiked());
+        assertEquals(true, result.getItems().get(0).getFaved());
         assertEquals("after-1", result.getNextAfter());
         assertEquals(true, result.isHasMore());
     }
@@ -80,7 +82,9 @@ class SearchServiceTest {
         SearchResultVO result = searchService.search(null, "keyword", null, null, null);
 
         assertEquals(false, result.getItems().get(0).getLiked());
+        assertEquals(false, result.getItems().get(0).getFaved());
         verify(objectCounterService, never()).isPostLiked(any(), any());
+        verify(objectCounterService, never()).isPostFaved(any(), any());
     }
 
     @Test

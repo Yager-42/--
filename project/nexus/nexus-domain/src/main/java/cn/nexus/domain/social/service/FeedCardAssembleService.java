@@ -64,15 +64,17 @@ public class FeedCardAssembleService {
 
         // 先批量拿稳定字段，避免对每个候选帖子重复查仓储。
         Map<Long, FeedCardBaseVO> baseMap = loadBaseCards(candidateIds);
-        Map<Long, Long> likeCountMap = loadLikeCounts(candidateIds);
+        Map<Long, Map<String, Long>> counterMap = loadCounters(candidateIds);
         Map<Long, UserBriefVO> authorMap = loadAuthorBriefs(baseMap.values());
 
         Set<Long> likedSet = Set.of();
+        Set<Long> favedSet = Set.of();
         Set<Long> followedSet = Set.of();
         Set<Long> seenSet = Set.of();
         if (userId != null) {
             // 个性化状态只在登录用户场景计算；匿名流量直接跳过。
             likedSet = loadLikedSet(userId, candidateIds);
+            favedSet = loadFavedSet(userId, candidateIds);
             followedSet = relationQueryService.batchFollowing(userId, new ArrayList<>(authorMap.keySet()));
             seenSet = feedFollowSeenRepository.batchSeen(userId, candidateIds);
         }
@@ -83,7 +85,9 @@ public class FeedCardAssembleService {
             if (base == null) {
                 continue;
             }
-            Long likeCount = likeCountMap.get(postId);
+            Map<String, Long> counters = counterMap.get(postId);
+            Long likeCount = counters == null ? null : counters.get(ObjectCounterType.LIKE.getCode());
+            Long favoriteCount = counters == null ? null : counters.get(ObjectCounterType.FAV.getCode());
             UserBriefVO author = authorMap.get(base.getAuthorId());
             boolean seen = userId != null && seenSet.contains(postId);
             items.add(FeedItemVO.builder()
@@ -98,7 +102,9 @@ public class FeedCardAssembleService {
                     .publishTime(base.getPublishTime())
                     .source(source)
                     .likeCount(likeCount == null ? 0L : likeCount)
+                    .favoriteCount(favoriteCount == null ? 0L : favoriteCount)
                     .liked(userId != null && likedSet.contains(postId))
+                    .faved(userId != null && favedSet.contains(postId))
                     .followed(userId != null && followedSet.contains(base.getAuthorId()))
                     .seen(seen)
                     .build());
@@ -144,20 +150,21 @@ public class FeedCardAssembleService {
         return rebuilt;
     }
 
-    private Map<Long, Long> loadLikeCounts(List<Long> candidateIds) {
+    private Map<Long, Map<String, Long>> loadCounters(List<Long> candidateIds) {
         if (candidateIds == null || candidateIds.isEmpty()) {
             return Map.of();
         }
-        Map<Long, Long> likeCountMap = new HashMap<>(candidateIds.size());
         Map<Long, Map<String, Long>> countById = objectCounterService.getPostCountsBatch(
                 candidateIds,
-                List.of(ObjectCounterType.LIKE));
+                List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
+        Map<Long, Map<String, Long>> result = new HashMap<>(candidateIds.size());
         for (Long postId : candidateIds) {
             Map<String, Long> values = countById.get(postId);
-            Long count = values == null ? 0L : values.get("like");
-            likeCountMap.put(postId, count == null ? 0L : count);
+            long like = value(values, ObjectCounterType.LIKE.getCode());
+            long fav = value(values, ObjectCounterType.FAV.getCode());
+            result.put(postId, Map.of(ObjectCounterType.LIKE.getCode(), like, ObjectCounterType.FAV.getCode(), fav));
         }
-        return likeCountMap;
+        return result;
     }
 
     private Map<Long, UserBriefVO> loadAuthorBriefs(Collection<FeedCardBaseVO> cards) {
@@ -195,6 +202,27 @@ public class FeedCardAssembleService {
             }
         }
         return likedSet;
+    }
+
+    private Set<Long> loadFavedSet(Long userId, List<Long> candidateIds) {
+        if (userId == null || candidateIds == null || candidateIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> favedSet = new LinkedHashSet<>();
+        for (Long postId : candidateIds) {
+            if (postId == null) {
+                continue;
+            }
+            if (objectCounterService.isPostFaved(postId, userId)) {
+                favedSet.add(postId);
+            }
+        }
+        return favedSet;
+    }
+
+    private long value(Map<String, Long> values, String code) {
+        Long value = values == null ? null : values.get(code);
+        return value == null ? 0L : Math.max(0L, value);
     }
 
 }

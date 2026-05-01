@@ -24,7 +24,9 @@ public class FeedItemVO {
     private Long publishTime;
     private String source;
     private Long likeCount;
+    private Long favoriteCount;
     private Boolean liked;
+    private Boolean faved;
     private Boolean followed;
     private Boolean seen;
 }

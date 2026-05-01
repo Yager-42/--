@@ -3,7 +3,6 @@ package cn.nexus.integration.support;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
 import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
@@ -15,6 +14,7 @@ import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisSchema;
+import cn.nexus.infrastructure.adapter.id.LeafSnowflakeIdGenerator;
 import cn.nexus.infrastructure.adapter.social.repository.CommentHotRankRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedGlobalLatestRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedOutboxRepository;
@@ -23,7 +23,6 @@ import cn.nexus.infrastructure.adapter.social.repository.RelationRepository;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.infrastructure.dao.auth.IAuthAccountDao;
 import cn.nexus.infrastructure.dao.auth.IAuthRoleDao;
-import cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao;
 import cn.nexus.infrastructure.dao.auth.IAuthUserRoleDao;
 import cn.nexus.infrastructure.dao.auth.po.AuthRolePO;
 import cn.nexus.infrastructure.dao.auth.po.AuthUserRolePO;
@@ -34,17 +33,14 @@ import cn.nexus.infrastructure.dao.social.IUserPrivacyDao;
 import cn.nexus.infrastructure.dao.user.IUserEventOutboxDao;
 import cn.nexus.infrastructure.dao.user.IUserStatusDao;
 import cn.nexus.trigger.mq.config.FeedFanoutConfig;
-import cn.nexus.trigger.mq.config.CountPostLike2SearchIndexMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendFeedbackMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendItemMqConfig;
 import cn.nexus.trigger.mq.config.FeedRecommendFeedbackAMqConfig;
 import cn.nexus.trigger.mq.config.InteractionNotifyMqConfig;
 import cn.nexus.trigger.mq.config.InteractionCommentMqConfig;
-import cn.nexus.trigger.mq.config.LikeUnlikeMqConfig;
-import cn.nexus.trigger.mq.config.ReactionEventLogMqConfig;
-import cn.nexus.trigger.mq.config.RelationMqConfig;
 import cn.nexus.trigger.mq.config.RiskMqConfig;
 import cn.nexus.trigger.mq.config.SearchIndexMqConfig;
+import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -79,6 +75,9 @@ public abstract class RealBusinessIntegrationTestSupport {
     protected ISocialIdPort socialIdPort;
 
     @Autowired
+    protected LeafSnowflakeIdGenerator leafSnowflakeIdGenerator;
+
+    @Autowired
     protected IUserBaseDao userBaseDao;
 
     @Autowired
@@ -94,9 +93,6 @@ public abstract class RealBusinessIntegrationTestSupport {
     protected IAuthAccountDao authAccountDao;
 
     @Autowired
-    protected IAuthSmsCodeDao authSmsCodeDao;
-
-    @Autowired
     protected IAuthRoleDao authRoleDao;
 
     @Autowired
@@ -107,9 +103,6 @@ public abstract class RealBusinessIntegrationTestSupport {
 
     @Autowired
     protected IContentPostTypeDao contentPostTypeDao;
-
-    @Autowired
-    protected IObjectCounterPort objectCounterPort;
 
     @Autowired
     protected IPostContentKvPort postContentKvPort;
@@ -181,20 +174,14 @@ public abstract class RealBusinessIntegrationTestSupport {
         purgeQueueQuietly(FeedRecommendFeedbackMqConfig.QUEUE);
         purgeQueueQuietly(FeedRecommendFeedbackMqConfig.DLQ_RECOMMEND_FEEDBACK);
         purgeQueueQuietly(InteractionCommentMqConfig.Q_COMMENT_CREATED);
-        purgeQueueQuietly(InteractionCommentMqConfig.Q_COMMENT_LIKE_CHANGED);
-        purgeQueueQuietly(InteractionCommentMqConfig.Q_REPLY_COUNT_CHANGED);
         purgeQueueQuietly(InteractionNotifyMqConfig.Q_INTERACTION_NOTIFY);
         purgeQueueQuietly(InteractionNotifyMqConfig.DLQ_INTERACTION_NOTIFY);
-        purgeQueueQuietly(ReactionEventLogMqConfig.QUEUE);
-        purgeQueueQuietly(ReactionEventLogMqConfig.DLQ);
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.Q_FEED_RECOMMEND_FEEDBACK_A);
         purgeQueueQuietly(FeedRecommendFeedbackAMqConfig.DLQ_FEED_RECOMMEND_FEEDBACK_A);
-        purgeQueueQuietly(LikeUnlikeMqConfig.QUEUE_COUNT);
-        purgeQueueQuietly(LikeUnlikeMqConfig.DLQ_COUNT);
-        purgeQueueQuietly(CountPostLike2SearchIndexMqConfig.QUEUE);
-        purgeQueueQuietly(CountPostLike2SearchIndexMqConfig.DLQ);
-        purgeQueueQuietly(RelationMqConfig.Q_FOLLOW);
-        purgeQueueQuietly(RelationMqConfig.Q_BLOCK);
+        purgeQueueQuietly(RelationCounterRouting.Q_FOLLOW);
+        purgeQueueQuietly(RelationCounterRouting.Q_BLOCK);
+        purgeQueueQuietly(RelationCounterRouting.DLQ_FOLLOW);
+        purgeQueueQuietly(RelationCounterRouting.DLQ_BLOCK);
         purgeQueueQuietly(RiskMqConfig.Q_LLM_SCAN);
         purgeQueueQuietly(RiskMqConfig.DLQ_LLM_SCAN);
         purgeQueueQuietly(RiskMqConfig.Q_IMAGE_SCAN);
@@ -210,8 +197,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         // 测试环境允许清空：避免历史遗留 outbox 积压导致“新事件被 scan limit 饥饿”。
         execUpdate("DELETE FROM content_event_outbox");
         execUpdate("DELETE FROM relation_event_outbox");
-        execUpdate("DELETE FROM relation_event_inbox");
-        execUpdate("DELETE FROM interaction_reaction_event_log");
         execUpdate("DELETE FROM reliable_mq_outbox");
         execUpdate("DELETE FROM reliable_mq_consumer_record");
         execUpdate("DELETE FROM reliable_mq_replay_record");
@@ -305,7 +290,12 @@ public abstract class RealBusinessIntegrationTestSupport {
             return 0L;
         }
         try {
-            String raw = stringRedisTemplate.opsForValue().get(key);
+            byte[] raw = stringRedisTemplate.execute((org.springframework.data.redis.core.RedisCallback<byte[]>) connection -> {
+                if (connection == null || connection.stringCommands() == null) {
+                    return null;
+                }
+                return connection.stringCommands().get(key.getBytes(StandardCharsets.UTF_8));
+            });
             byte[] bytes = CountRedisCodec.fromRedisValue(raw);
             long[] values = CountRedisCodec.decodeSlots(bytes, schema.slotCount());
             if (slot >= values.length) {
@@ -317,25 +307,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         }
     }
 
-    protected long queryReactionEventLogCount(String targetType, long targetId, String reactionType) {
-        String sql = "SELECT COUNT(1) FROM interaction_reaction_event_log WHERE target_type = ? AND target_id = ? AND reaction_type = ?";
-        try (java.sql.Connection conn = dataSource.getConnection();
-             java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, targetType);
-            ps.setLong(2, targetId);
-            ps.setString(3, reactionType);
-            try (java.sql.ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    return 0L;
-                }
-                return rs.getLong(1);
-            }
-        } catch (Exception e) {
-            throw new IllegalStateException("query interaction_reaction_event_log count failed, targetType=" + targetType
-                    + ", targetId=" + targetId + ", reactionType=" + reactionType, e);
-        }
-    }
-
     protected void clearFeedKeys(long authorId, long... inboxUserIds) {
         deleteRedisKey("feed:outbox:" + authorId);
         for (long userId : inboxUserIds) {
@@ -344,15 +315,8 @@ public abstract class RealBusinessIntegrationTestSupport {
     }
 
     protected void clearAuthThrottleKeys(String phone) {
-        deleteRedisKey("auth:sms:send:phone:" + phone + ":1m");
-        deleteRedisKey("auth:sms:send:phone:" + phone + ":1h");
-        deleteRedisKey("auth:sms:send:phone:" + phone + ":1d");
-        deleteRedisKey("auth:sms:send:ip:127.0.0.1:1m");
-        deleteRedisKey("auth:sms:send:ip:127.0.0.1:1d");
         deleteRedisKey("auth:login:fail:password:" + phone);
         deleteRedisKey("auth:login:lock:password:" + phone);
-        deleteRedisKey("auth:login:fail:sms:" + phone);
-        deleteRedisKey("auth:login:lock:sms:" + phone);
     }
 
     protected void grantRole(long userId, String roleCode) {
@@ -518,9 +482,6 @@ public abstract class RealBusinessIntegrationTestSupport {
         properties.putObject("author_nickname").put("type", "keyword");
         properties.putObject("author_tag_json").put("type", "keyword");
         properties.putObject("publish_time").put("type", "date").put("format", "epoch_millis");
-        properties.putObject("like_count").put("type", "integer");
-        properties.putObject("favorite_count").put("type", "integer");
-        properties.putObject("view_count").put("type", "integer");
         properties.putObject("status").put("type", "keyword");
         properties.putObject("img_urls").put("type", "keyword");
         properties.putObject("is_top").put("type", "keyword");

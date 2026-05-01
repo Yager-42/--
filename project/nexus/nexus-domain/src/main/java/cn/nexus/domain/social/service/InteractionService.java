@@ -20,7 +20,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -39,7 +38,7 @@ import java.util.Set;
 public class InteractionService implements IInteractionService {
 
     private final ISocialIdPort socialIdPort;
-    private final IReactionLikeService reactionLikeService;
+    private final IPostActionService postActionService;
     private final ICommentRepository commentRepository;
     private final ICommentPinRepository commentPinRepository;
     private final ICommentHotRankRepository commentHotRankRepository;
@@ -52,44 +51,6 @@ public class InteractionService implements IInteractionService {
 
     private static final int COMMENT_STATUS_PENDING_REVIEW = 0;
     private static final int COMMENT_STATUS_NORMAL = 1;
-
-    /**
-     * 统一点赞/取消点赞入口。
-     *
-     * @param userId 操作人 ID，类型：{@link Long}
-     * @param targetId 目标 ID，类型：{@link Long}
-     * @param targetType 目标类型，类型：{@link String}
-     * @param type 互动类型，类型：{@link String}
-     * @param action 动作类型，类型：{@link String}
-     * @param requestId 请求幂等号，类型：{@link String}
-     * @return 点赞执行结果，类型：{@link ReactionResultVO}
-     */
-    @Override
-    public ReactionResultVO react(Long userId, Long targetId, String targetType, String type, String action, String requestId) {
-        ReactionTargetVO target = parseTarget(targetId, targetType, type);
-        ReactionActionEnumVO actionEnum = ReactionActionEnumVO.from(action);
-        if (actionEnum == null) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
-        }
-        return reactionLikeService.applyReaction(userId, target, actionEnum, requestId);
-
-        // 评论点赞的计数不是同步写回主表，而是发事件让聚合链路最终一致收敛。
-    }
-
-    /**
-     * 查询当前用户的点赞状态。
-     *
-     * @param userId 当前用户 ID，类型：{@link Long}
-     * @param targetId 目标 ID，类型：{@link Long}
-     * @param targetType 目标类型，类型：{@link String}
-     * @param type 互动类型，类型：{@link String}
-     * @return 点赞状态结果，类型：{@link ReactionStateVO}
-     */
-    @Override
-    public ReactionStateVO reactionState(Long userId, Long targetId, String targetType, String type) {
-        ReactionTargetVO target = parseTarget(targetId, targetType, type);
-        return reactionLikeService.queryState(userId, target);
-    }
 
     /**
      * 创建评论或楼内回复。
@@ -156,10 +117,6 @@ public class InteractionService implements IInteractionService {
         publishCreated(cid, postId, rootId, userId, nowMs);
         publishNotifyCommentCreated(cid, postId, rootId, parentIdToSave, userId, nowMs);
         publishNotifyCommentMentioned(cid, postId, rootId, parentIdToSave, userId, nowMs, content);
-        if (rootId != null) {
-            publishReplyCountChanged(rootId, postId, +1L, nowMs);
-        }
-
         // `@username` 提及走旁路事件；即使发布失败，也不能反向拖垮评论主流程。
         return CommentResultVO.builder().commentId(cid).createTime(nowMs).status("OK").build();
     }
@@ -196,9 +153,6 @@ public class InteractionService implements IInteractionService {
             publishCreated(commentId, c.getPostId(), c.getRootId(), c.getUserId(), nowMs);
             publishNotifyCommentCreated(commentId, c.getPostId(), c.getRootId(), c.getParentId(), c.getUserId(), nowMs);
             publishNotifyCommentMentioned(commentId, c.getPostId(), c.getRootId(), c.getParentId(), c.getUserId(), nowMs, c.getContent());
-            if (c.getRootId() != null) {
-                publishReplyCountChanged(c.getRootId(), c.getPostId(), +1L, nowMs);
-            }
             return ok(commentId, "APPROVED", "已通过");
         }
 
@@ -273,12 +227,9 @@ public class InteractionService implements IInteractionService {
             return fail(commentId, "NO_PERMISSION", "无权限");
         }
 
-        // 回复删除只影响本楼的 reply_count，不需要清热榜和置顶。
+        // 回复删除只影响楼内回复业务列表，不再维护持久化 reply 计数。
         if (c.getRootId() != null) {
-            boolean deleted = commentRepository.softDelete(commentId, nowMs);
-            if (deleted) {
-                publishReplyCountChanged(c.getRootId(), c.getPostId(), -1L, nowMs);
-            }
+            commentRepository.softDelete(commentId, nowMs);
             return ok(commentId, "DELETED", "已删除");
         }
 
@@ -359,87 +310,6 @@ public class InteractionService implements IInteractionService {
         requireNonNull(userId, "userId");
         interactionNotificationRepository.markReadAll(userId);
         return ok(userId, "READ_ALL", "已全部已读");
-    }
-
-    /**
-     * 模拟打赏。
-     *
-     * @param toUserId 收款人 ID，类型：{@link Long}
-     * @param amount 金额，类型：{@link BigDecimal}
-     * @param currency 币种，类型：{@link String}
-     * @param postId 关联帖子 ID，类型：{@link Long}
-     * @return 打赏结果，类型：{@link TipResultVO}
-     */
-    @Override
-    public TipResultVO tip(Long toUserId, BigDecimal amount, String currency, Long postId) {
-        return TipResultVO.builder()
-                .txId("tx-" + socialIdPort.nextId())
-                .effectUrl("https://effect/mock")
-                .build();
-    }
-
-    /**
-     * 创建投票。
-     *
-     * @param question 问题文本，类型：{@link String}
-     * @param options 选项列表，类型：{@link List}&lt;{@link String}&gt;
-     * @param allowMulti 是否允许多选，类型：{@link Boolean}
-     * @param expireSeconds 过期秒数，类型：{@link Integer}
-     * @return 投票创建结果，类型：{@link PollCreateResultVO}
-     */
-    @Override
-    public PollCreateResultVO createPoll(String question, List<String> options, Boolean allowMulti, Integer expireSeconds) {
-        return PollCreateResultVO.builder().pollId(socialIdPort.nextId()).build();
-    }
-
-    /**
-     * 提交投票。
-     *
-     * @param pollId 投票 ID，类型：{@link Long}
-     * @param optionIds 选项 ID 列表，类型：{@link List}&lt;{@link Long}&gt;
-     * @return 投票结果，类型：{@link PollVoteResultVO}
-     */
-    @Override
-    public PollVoteResultVO vote(Long pollId, List<Long> optionIds) {
-        return PollVoteResultVO.builder().updatedStats("VOTED").build();
-    }
-
-    /**
-     * 查询钱包余额。
-     *
-     * @param currencyType 币种，类型：{@link String}
-     * @return 钱包余额结果，类型：{@link WalletBalanceVO}
-     */
-    @Override
-    public WalletBalanceVO balance(String currencyType) {
-        return WalletBalanceVO.builder()
-                .currencyType(currencyType)
-                .amount("100.00")
-                .frozenAmount("0.00")
-                .build();
-    }
-
-    private ReactionTargetVO parseTarget(Long targetId, String targetType, String type) {
-        ReactionTargetTypeEnumVO targetTypeEnum = ReactionTargetTypeEnumVO.from(targetType);
-        ReactionTypeEnumVO reactionTypeEnum = ReactionTypeEnumVO.from(type);
-        if (targetId == null || targetTypeEnum == null || reactionTypeEnum == null) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo());
-        }
-        // 楼内回复不开放点赞，避免把评论树的互动模型越做越复杂。
-        if (targetTypeEnum == ReactionTargetTypeEnumVO.COMMENT) {
-            CommentBriefVO c = commentRepository.getBrief(targetId);
-            if (c == null || c.getStatus() == null || c.getStatus() != 1) {
-                throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "评论不存在或已删除");
-            }
-            if (c.getRootId() != null) {
-                throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "楼内回复不允许点赞");
-            }
-        }
-        return ReactionTargetVO.builder()
-                .targetType(targetTypeEnum)
-                .targetId(targetId)
-                .reactionType(reactionTypeEnum)
-                .build();
     }
 
     private boolean hasDeletePermission(Long userId, CommentBriefVO c) {
@@ -605,26 +475,12 @@ public class InteractionService implements IInteractionService {
         return end <= 0 ? "" : raw.substring(0, end);
     }
 
-    private void publishReplyCountChanged(Long rootCommentId, Long postId, Long delta, Long nowMs) {
-        try {
-            cn.nexus.types.event.interaction.RootReplyCountChangedEvent changed = new cn.nexus.types.event.interaction.RootReplyCountChangedEvent();
-            changed.setRootCommentId(rootCommentId);
-            changed.setPostId(postId);
-            changed.setDelta(delta);
-            changed.setTsMs(nowMs);
-            commentEventPort.publish(changed);
-        } catch (Exception e) {
-            log.warn("publish RootReplyCountChangedEvent failed, rootCommentId={}, postId={}, delta={}", rootCommentId, postId, delta, e);
-        }
-    }
-
     private String renderTitle(String bizType) {
         if (bizType == null) {
             return "通知";
         }
         return switch (bizType) {
             case "POST_LIKED" -> "帖子获赞";
-            case "COMMENT_LIKED" -> "评论获赞";
             case "POST_COMMENTED" -> "帖子被评论";
             case "COMMENT_REPLIED" -> "评论被回复";
             case "COMMENT_MENTIONED" -> "提及你";
@@ -639,7 +495,6 @@ public class InteractionService implements IInteractionService {
         }
         return switch (bizType) {
             case "POST_LIKED" -> "你的帖子新增 " + n + " 个赞";
-            case "COMMENT_LIKED" -> "你的评论新增 " + n + " 个赞";
             case "POST_COMMENTED" -> "你的帖子新增 " + n + " 条评论";
             case "COMMENT_REPLIED" -> "你的评论新增 " + n + " 条回复";
             case "COMMENT_MENTIONED" -> "有人在评论里提及你 " + n + " 次";

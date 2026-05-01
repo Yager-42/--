@@ -1,7 +1,5 @@
 package cn.nexus.integration.community;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -10,42 +8,34 @@ import org.junit.jupiter.api.Test;
 class CommunityHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
     @Test
-    void groupApis_shouldReturnExpectedStatuses() throws Exception {
+    void groupApis_shouldBeRemoved() throws Exception {
         TestSession user = registerAndLoginSession("group-user");
 
-        JsonNode pending = assertSuccess(postJson("/api/v1/group/join", JsonNodeFactory.instance.objectNode()
+        assertPostNotFound("/api/v1/group/join", JsonNodeFactory.instance.objectNode()
                 .put("groupId", uniqueId())
                 .put("answers", "a=b")
-                .put("inviteToken", ""), user.token()));
-        assertThat(pending.path("status").asText()).isEqualTo("PENDING");
+                .put("inviteToken", ""), user.token());
 
-        JsonNode joined = assertSuccess(postJson("/api/v1/group/join", JsonNodeFactory.instance.objectNode()
+        assertPostNotFound("/api/v1/group/join", JsonNodeFactory.instance.objectNode()
                 .put("groupId", uniqueId())
                 .put("answers", "a=b")
-                .put("inviteToken", "token-" + uniqueUuid().substring(0, 6)), user.token()));
-        assertThat(joined.path("status").asText()).isEqualTo("JOINED");
+                .put("inviteToken", "token-" + uniqueUuid().substring(0, 6)), user.token());
 
-        JsonNode kick = assertSuccess(postJson("/api/v1/group/member/kick", JsonNodeFactory.instance.objectNode()
+        assertPostNotFound("/api/v1/group/member/kick", JsonNodeFactory.instance.objectNode()
                 .put("groupId", uniqueId())
                 .put("targetId", uniqueId())
                 .put("reason", "spam")
-                .put("ban", true), user.token()));
-        assertThat(kick.path("success").asBoolean()).isTrue();
-        assertThat(kick.path("status").asText()).isEqualTo("BANNED");
+                .put("ban", true), user.token());
 
-        JsonNode role = assertSuccess(postJson("/api/v1/group/member/role", JsonNodeFactory.instance.objectNode()
+        assertPostNotFound("/api/v1/group/member/role", JsonNodeFactory.instance.objectNode()
                 .put("groupId", uniqueId())
                 .put("targetId", uniqueId())
-                .put("roleId", 2L), user.token()));
-        assertThat(role.path("success").asBoolean()).isTrue();
-        assertThat(role.path("status").asText()).isEqualTo("ROLE_CHANGED");
+                .put("roleId", 2L), user.token());
 
-        JsonNode channel = assertSuccess(postJson("/api/v1/group/channel/config", JsonNodeFactory.instance.objectNode()
+        assertPostNotFound("/api/v1/group/channel/config", JsonNodeFactory.instance.objectNode()
                 .put("channelId", uniqueId())
                 .put("slowModeInterval", 5)
-                .put("locked", false), user.token()));
-        assertThat(channel.path("success").asBoolean()).isTrue();
-        assertThat(channel.path("status").asText()).isEqualTo("OPEN");
+                .put("locked", false), user.token());
     }
 
     private TestSession registerAndLoginSession(String nicknamePrefix) throws Exception {
@@ -60,4 +50,3 @@ class CommunityHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     private record TestSession(long userId, String token) {
     }
 }
-

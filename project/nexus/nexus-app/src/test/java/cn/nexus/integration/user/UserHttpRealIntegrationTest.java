@@ -62,8 +62,11 @@ class UserHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertThat(publicProfile.path("userId").asLong()).isEqualTo(userId);
         assertThat(profilePage.path("profile").path("userId").asLong()).isEqualTo(userId);
         assertThat(profilePage.path("profile").path("status").asText()).isEqualTo("ACTIVE");
-        assertThat(profilePage.path("relation").path("followCount").asLong()).isZero();
-        assertThat(profilePage.path("relation").path("followerCount").asLong()).isZero();
+        assertThat(profilePage.path("relation").path("followings").asLong()).isZero();
+        assertThat(profilePage.path("relation").path("followers").asLong()).isZero();
+        assertThat(profilePage.path("relation").path("posts").asLong()).isZero();
+        assertThat(profilePage.path("relation").path("likesReceived").asLong()).isZero();
+        assertThat(profilePage.path("relation").path("favsReceived").asLong()).isZero();
         assertThat(profilePage.path("risk").path("status").asText()).isEqualTo("NORMAL");
     }
 

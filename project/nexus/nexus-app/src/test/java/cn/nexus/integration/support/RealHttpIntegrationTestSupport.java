@@ -27,11 +27,6 @@ import org.springframework.test.context.TestPropertySource;
 @ActiveProfiles({"test", "wsl", "real-it"})
 @TestPropertySource(properties = {
         "spring.task.scheduling.enabled=false",
-        "auth.sms.phone-send-limit-1m=1000",
-        "auth.sms.phone-send-limit-1h=1000",
-        "auth.sms.phone-send-limit-1d=1000",
-        "auth.sms.ip-send-limit-1m=1000",
-        "auth.sms.ip-send-limit-1d=1000",
         "auth.login.fail-threshold=1000"
 })
 public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegrationTestSupport {
@@ -69,6 +64,10 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
         return sendWithBody("POST", path, body, token);
     }
 
+    protected void assertPostNotFound(String path, Object body, String token) throws Exception {
+        assertStatusWithBody("POST", path, body, token, 404);
+    }
+
     protected JsonNode putJson(String path, Object body, String token) throws Exception {
         return sendWithBody("PUT", path, body, token);
     }
@@ -88,6 +87,16 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
         return send(builder.method("DELETE", HttpRequest.BodyPublishers.ofString(json)).build());
     }
 
+    protected void assertGetNotFound(String path, String token) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl(path)))
+                .timeout(Duration.ofSeconds(10))
+                .GET()
+                .header("Accept", "application/json");
+        withToken(builder, token);
+        assertStatus(builder.build(), 404);
+    }
+
     protected JsonNode assertSuccess(JsonNode response) {
         assertThat(response.path("code").asText()).isEqualTo("0000");
         return response.path("data");
@@ -97,20 +106,10 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
         return assertSuccess(response).path("token").asText();
     }
 
-    protected void sendSms(String phone, String bizType) throws Exception {
-        clearAuthThrottleKeys(phone);
-        JsonNode response = postJson("/api/v1/auth/sms/send", Map.of(
-                "phone", phone,
-                "bizType", bizType
-        ), null);
-        assertSuccess(response);
-    }
-
     protected long registerUser(String phone, String password, String nickname) throws Exception {
-        sendSms(phone, "REGISTER");
+        clearAuthThrottleKeys(phone);
         JsonNode response = postJson("/api/v1/auth/register", Map.of(
                 "phone", phone,
-                "smsCode", "123456",
                 "password", password,
                 "nickname", nickname,
                 "avatarUrl", "https://avatar.example/" + uniqueUuid() + ".png"
@@ -240,6 +239,24 @@ public abstract class RealHttpIntegrationTestSupport extends RealBusinessIntegra
         withToken(builder, token);
         String json = body == null ? "{}" : objectMapper.writeValueAsString(body);
         return send(builder.method(method, HttpRequest.BodyPublishers.ofString(json)).build());
+    }
+
+    private void assertStatusWithBody(String method, String path, Object body, String token, int expectedStatus) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl(path)))
+                .timeout(Duration.ofSeconds(10))
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json");
+        withToken(builder, token);
+        String json = body == null ? "{}" : objectMapper.writeValueAsString(body);
+        assertStatus(builder.method(method, HttpRequest.BodyPublishers.ofString(json)).build(), expectedStatus);
+    }
+
+    private void assertStatus(HttpRequest request, int expectedStatus) throws Exception {
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode())
+                .as("http status=%s, body=%s", response.statusCode(), response.body())
+                .isEqualTo(expectedStatus);
     }
 
     private void withToken(HttpRequest.Builder builder, String token) {

@@ -13,7 +13,10 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class UserRelationStatsVO {
-    private long followCount;
-    private long followerCount;
+    private long followings;
+    private long followers;
+    private long posts;
+    private long likesReceived;
+    private long favsReceived;
     private boolean isFollow;
 }

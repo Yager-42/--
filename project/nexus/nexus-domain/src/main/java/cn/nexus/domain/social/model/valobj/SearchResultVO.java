@@ -21,6 +21,7 @@ public class SearchResultVO {
     @AllArgsConstructor
     public static class SearchItemVO {
         private String id;
+        private String authorId;
         private String title;
         private String description;
         private String coverImage;
@@ -28,8 +29,6 @@ public class SearchResultVO {
         private String authorAvatar;
         private String authorNickname;
         private String tagJson;
-        private Long likeCount;
-        private Long favoriteCount;
         private Boolean liked;
         private Boolean faved;
         private Boolean isTop;

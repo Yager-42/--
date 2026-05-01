@@ -1,111 +1,42 @@
-import { createRouter, createWebHistory } from 'vue-router'
-import { useAuthStore } from '@/store/auth'
-import Home from '@/views/Home.vue'
-import Login from '@/views/Login.vue'
-import Register from '@/views/Register.vue'
-import ContentDetail from '@/views/ContentDetail.vue'
-import Profile from '@/views/Profile.vue'
-import RelationList from '@/views/RelationList.vue'
-import Notifications from '@/views/Notifications.vue'
-import SearchResults from '@/views/SearchResults.vue'
-import Publish from '@/views/Publish.vue'
-import RiskCenter from '@/views/RiskCenter.vue'
+import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
+import AppShell from '@/layouts/AppShell.vue'
+import LoginView from '@/views/LoginView.vue'
+import MeView from '@/views/MeView.vue'
+import NotificationsView from '@/views/NotificationsView.vue'
+import PostDetailView from '@/views/PostDetailView.vue'
+import ProfileView from '@/views/ProfileView.vue'
+import SearchView from '@/views/SearchView.vue'
+import TimelineView from '@/views/TimelineView.vue'
+import ComposerView from '@/views/ComposerView.vue'
+import ComposeHubView from '@/views/ComposeHubView.vue'
+import { registerAuthGuards } from './guards'
 
-const routes = [
-  {
-    path: '/',
-    name: 'Home',
-    component: Home,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/login',
-    name: 'Login',
-    component: Login
-  },
-  {
-    path: '/register',
-    name: 'Register',
-    component: Register
-  },
-  {
-    path: '/content/:postId',
-    name: 'ContentDetail',
-    component: ContentDetail,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/profile',
-    name: 'MyProfile',
-    component: Profile,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/user/:userId',
-    name: 'UserProfile',
-    component: Profile,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/relation/:type/:userId',
-    name: 'RelationList',
-    component: RelationList,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/notifications',
-    name: 'Notifications',
-    component: Notifications,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/search',
-    name: 'Search',
-    component: SearchResults,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/publish',
-    name: 'Publish',
-    component: Publish,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/settings/risk',
-    name: 'RiskCenter',
-    component: RiskCenter,
-    meta: { requiresAuth: true }
-  }
-]
+export function createAppRouter() {
+  const history = import.meta.env.MODE === 'test' ? createMemoryHistory() : createWebHistory()
 
-const router = createRouter({
-  history: createWebHistory(),
-  routes,
-  scrollBehavior() {
-    return { top: 0 }
-  }
-})
+  const router = createRouter({
+    history,
+    routes: [
+      { path: '/login', name: 'login', component: LoginView },
+      {
+        path: '/',
+        name: 'app-shell',
+        component: AppShell,
+        children: [
+          { path: '', name: 'timeline', component: TimelineView },
+          { path: 'search', name: 'search', component: SearchView },
+          { path: 'profile/:id', name: 'profile', component: ProfileView },
+          { path: 'me', name: 'me', component: MeView },
+          { path: 'notifications', name: 'notifications', component: NotificationsView },
+          { path: 'post/:id', name: 'post-detail', component: PostDetailView },
+          { path: 'compose', name: 'compose', component: ComposeHubView },
+          { path: 'compose/editor', name: 'compose-editor', component: ComposerView }
+        ]
+      }
+    ]
+  })
 
-// Global Navigation Guard
-router.beforeEach((to, from, next) => {
-  const authStore = useAuthStore()
+  registerAuthGuards(router)
 
-  const forceAuth = to.query?.forceAuth === '1'
-  const authPages = to.path === '/login' || to.path === '/register'
-
-  if (authPages && forceAuth) {
-    authStore.clearAuth()
-    next()
-    return
-  }
-
-  if (to.meta.requiresAuth && !authStore.isLoggedIn()) {
-    next('/login')
-  } else if (authPages && authStore.isLoggedIn() && !forceAuth) {
-    next('/')
-  } else {
-    next()
-  }
-})
-
-export default router
+  return router
+}

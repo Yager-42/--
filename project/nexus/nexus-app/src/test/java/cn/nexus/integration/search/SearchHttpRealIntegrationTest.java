@@ -145,45 +145,6 @@ class SearchHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         });
     }
 
-    @Test
-    void postLikeSnapshot_shouldRefreshIndexedLikeCount() throws Exception {
-        TestSession author = registerAndLoginSession("search-like-author");
-        TestSession liker = registerAndLoginSession("search-like-user");
-
-        long postId = uniqueId();
-        long nowMs = System.currentTimeMillis();
-        String title = "search-like-" + uniqueUuid().substring(0, 8);
-        seedPublishedPost(author.userId(), postId, title, nowMs);
-
-        deleteRedisKey("interact:content:author:" + postId);
-        deleteRedisKey("interact:content:post:" + postId);
-        deleteDocumentQuietly(postId);
-
-        publishSearchIndexCdc(postId, nowMs);
-
-        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            JsonNode source = fetchDocumentSource(postId);
-            assertThat(source).isNotNull();
-            assertThat(source.path("like_count").asLong()).isEqualTo(0L);
-        });
-
-        JsonNode like = assertSuccess(postJson("/api/v1/interact/reaction", JsonNodeFactory.instance.objectNode()
-                .put("requestId", "rid-" + uniqueUuid())
-                .put("targetId", postId)
-                .put("targetType", "POST")
-                .put("type", "LIKE")
-                .put("action", "ADD"), liker.token()));
-        assertThat(like.path("currentCount").asLong()).isEqualTo(1L);
-
-        publishPendingReliableMqMessages();
-
-        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            JsonNode source = fetchDocumentSource(postId);
-            assertThat(source).isNotNull();
-            assertThat(source.path("like_count").asLong()).isEqualTo(1L);
-        });
-    }
-
     private void seedPublishedPost(long authorId, long postId, String title, long nowMs) {
         Date now = new Date(nowMs);
         ContentPostPO post = new ContentPostPO();

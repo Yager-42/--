@@ -167,8 +167,6 @@ public class CommentController implements ICommentApi {
                 .replyToId(vo.getReplyToId())
                 .content(vo.getContent() == null ? "" : vo.getContent())
                 .status(vo.getStatus())
-                .likeCount(vo.getLikeCount() == null ? 0L : vo.getLikeCount())
-                .replyCount(vo.getReplyCount() == null ? 0L : vo.getReplyCount())
                 .createTime(vo.getCreateTime())
                 .build();
     }

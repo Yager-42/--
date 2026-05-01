@@ -23,9 +23,6 @@ public class CommentHotRankRebuildService {
     private static final int DEFAULT_SCAN_LIMIT = 5000;
     private static final int DEFAULT_KEEP_TOP = 200;
 
-    private static final double LIKE_WEIGHT = 10D;
-    private static final double REPLY_WEIGHT = 20D;
-
     private final ICommentRepository commentRepository;
     private final ICommentHotRankRepository hotRankRepository;
 
@@ -49,11 +46,12 @@ public class CommentHotRankRebuildService {
             return;
         }
 
-        for (CommentBriefVO r : roots) {
+        for (int i = 0; i < roots.size(); i++) {
+            CommentBriefVO r = roots.get(i);
             if (r == null || r.getCommentId() == null) {
                 continue;
             }
-            double score = safe(r.getLikeCount()) * LIKE_WEIGHT + safe(r.getReplyCount()) * REPLY_WEIGHT;
+            double score = roots.size() - i;
             hotRankRepository.upsert(postId, r.getCommentId(), score);
         }
         hotRankRepository.trimToTop(postId, keep);
@@ -68,8 +66,4 @@ public class CommentHotRankRebuildService {
         return Math.min(v, max);
     }
 
-    private long safe(Long v) {
-        return v == null ? 0L : v;
-    }
 }
-

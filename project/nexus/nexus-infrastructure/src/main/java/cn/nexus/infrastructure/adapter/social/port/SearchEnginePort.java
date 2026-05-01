@@ -185,9 +185,7 @@ public class SearchEnginePort implements ISearchEnginePort {
         root.put("track_total_hits", true);
         root.put("size", limit + 1);
 
-        // 查询体分三层：全文匹配、过滤条件、函数打分。这样相关性和业务排序可以分开调。
-        ObjectNode functionScore = root.putObject("query").putObject("function_score");
-        ObjectNode bool = functionScore.putObject("query").putObject("bool");
+        ObjectNode bool = root.putObject("query").putObject("bool");
         ArrayNode must = bool.putArray("must");
         ObjectNode multiMatch = must.addObject().putObject("multi_match");
         multiMatch.put("query", query.getKeyword());
@@ -209,23 +207,6 @@ public class SearchEnginePort implements ISearchEnginePort {
             }
         }
 
-        ArrayNode functions = functionScore.putArray("functions");
-        ObjectNode likeScore = functions.addObject();
-        likeScore.putObject("field_value_factor")
-                .put("field", "like_count")
-                .put("modifier", "log1p")
-                .put("missing", 0.0D);
-        likeScore.put("weight", 2.0D);
-
-        ObjectNode viewScore = functions.addObject();
-        viewScore.putObject("field_value_factor")
-                .put("field", "view_count")
-                .put("modifier", "log1p")
-                .put("missing", 0.0D);
-        viewScore.put("weight", 1.0D);
-        functionScore.put("score_mode", "sum");
-        functionScore.put("boost_mode", "sum");
-
         ObjectNode highlight = root.putObject("highlight");
         ArrayNode preTags = highlight.putArray("pre_tags");
         preTags.add("<em>");
@@ -238,8 +219,6 @@ public class SearchEnginePort implements ISearchEnginePort {
         ArrayNode sort = root.putArray("sort");
         sort.addObject().putObject("_score").put("order", "desc");
         sort.addObject().putObject("publish_time").put("order", "desc");
-        sort.addObject().putObject("like_count").put("order", "desc");
-        sort.addObject().putObject("view_count").put("order", "desc");
         sort.addObject().putObject("content_id").put("order", "desc");
 
         // `search_after` 只在游标合法时追加，避免第一页和翻页逻辑混在一起。
@@ -330,9 +309,6 @@ public class SearchEnginePort implements ISearchEnginePort {
                 .authorNickname(safeText(source.get("author_nickname")))
                 .authorTagJson(safeText(source.get("author_tag_json")))
                 .publishTime(safeLong(source.get("publish_time")))
-                .likeCount(safeLong(source.get("like_count")))
-                .favoriteCount(safeLong(source.get("favorite_count")))
-                .viewCount(safeLong(source.get("view_count")))
                 .status(safeText(source.get("status")))
                 .imgUrls(stringList(source.get("img_urls")))
                 .isTop(safeBoolean(source.get("is_top")))
@@ -354,9 +330,6 @@ public class SearchEnginePort implements ISearchEnginePort {
         putNullable(root, "author_nickname", doc.getAuthorNickname());
         putNullable(root, "author_tag_json", doc.getAuthorTagJson());
         putNullable(root, "publish_time", doc.getPublishTime());
-        putNullable(root, "like_count", doc.getLikeCount());
-        putNullable(root, "favorite_count", doc.getFavoriteCount());
-        putNullable(root, "view_count", doc.getViewCount());
         putNullable(root, "status", doc.getStatus());
         root.set("img_urls", stringArray(doc.getImgUrls()));
         if (doc.getIsTop() == null) {
@@ -424,7 +397,7 @@ public class SearchEnginePort implements ISearchEnginePort {
         try {
             String raw = new String(Base64.getUrlDecoder().decode(after), StandardCharsets.UTF_8);
             String[] parts = raw.split(",", -1);
-            if (parts.length != 5) {
+            if (parts.length != 3) {
                 return null;
             }
             ArrayNode array = objectMapper.createArrayNode();
@@ -432,8 +405,6 @@ public class SearchEnginePort implements ISearchEnginePort {
             array.add(Double.parseDouble(parts[0]));
             array.add(Long.parseLong(parts[1]));
             array.add(Long.parseLong(parts[2]));
-            array.add(Long.parseLong(parts[3]));
-            array.add(Long.parseLong(parts[4]));
             return array;
         } catch (Exception e) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), ResponseCode.ILLEGAL_PARAMETER.getInfo(), e);

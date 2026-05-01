@@ -315,6 +315,36 @@ public class ContentRepository implements IContentRepository {
         return post;
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public long countPublishedPostsByUser(Long userId) {
+        if (userId == null) {
+            return 0L;
+        }
+        Long count = contentPostDao.countPublishedByUser(userId);
+        return count == null ? 0L : Math.max(0L, count);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ContentPostEntity> listPublishedPostIdsByUser(Long userId) {
+        if (userId == null) {
+            return List.of();
+        }
+        List<Long> ids = contentPostDao.selectPublishedIdsByUser(userId);
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        List<ContentPostEntity> items = new ArrayList<>(ids.size());
+        for (Long id : ids) {
+            if (id == null) {
+                continue;
+            }
+            items.add(ContentPostEntity.builder().postId(id).userId(userId).build());
+        }
+        return items;
+    }
+
     /**
      * 批量按 ID 查询帖子。
      *

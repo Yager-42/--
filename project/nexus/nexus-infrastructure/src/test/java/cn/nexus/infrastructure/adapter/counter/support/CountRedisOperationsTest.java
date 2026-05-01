@@ -5,15 +5,18 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -26,13 +29,13 @@ class CountRedisOperationsTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get("count:comment:{8}"))
-                .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{5L, 9L}, 2)));
+        when(redisTemplate.execute(any(RedisCallback.class)))
+                .thenReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{0L, 5L, 0L, 0L, 0L}, 5)));
 
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
 
-        assertEquals(Map.of("like", 5L, "reply", 9L),
-                operations.readObjectSnapshot("count:comment:{8}", CountRedisSchema.forObject(ReactionTargetTypeEnumVO.COMMENT)));
+        assertEquals(Map.of("read", 0L, "like", 5L, "fav", 0L, "comment", 0L, "repost", 0L),
+                operations.readObjectSnapshot("cnt:v1:post:8", CountRedisSchema.forObject(ReactionTargetTypeEnumVO.POST)));
     }
 
     @Test
@@ -43,10 +46,9 @@ class CountRedisOperationsTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
 
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
-        operations.writeUserSnapshot("count:user:{7}", Map.of("following", 6L, "follower", -4L), CountRedisSchema.user());
+        operations.writeUserSnapshot("ucnt:7", Map.of("followings", 6L, "followers", -4L), CountRedisSchema.user());
 
-        verify(valueOperations).set(eq("count:user:{7}"),
-                eq(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{6L, 0L, 0L, 0L, 0L}, 5))));
+        verify(redisTemplate).execute(any(RedisCallback.class));
     }
 
     @Test
@@ -58,21 +60,21 @@ class CountRedisOperationsTest {
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(hashOperations.entries("count:agg:{post}:like")).thenReturn(Map.of("42", "3", "99", -2L));
+        when(hashOperations.entries("agg:v1:post:42")).thenReturn(Map.of("1", "3", "4", -2L));
         when(valueOperations.get("count:replay:checkpoint:object")).thenReturn("12");
         when(valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{42}"), eq("1"), anyLong(), eq(TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
 
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
 
-        operations.addAggregationDelta("count:agg:{post}:like", "42", 3L);
-        assertEquals(Map.of("42", 3L, "99", 0L), operations.readAggregationBucket("count:agg:{post}:like"));
+        operations.addAggregationDelta("agg:v1:post:42", "1", 3L);
+        assertEquals(Map.of("1", 3L, "4", 0L), operations.readAggregationBucket("agg:v1:post:42"));
         operations.writeReplayCheckpoint("count:replay:checkpoint:object", 12L);
         assertEquals(12L, operations.readReplayCheckpoint("count:replay:checkpoint:object"));
         assertTrue(operations.tryAcquireRebuildLock("count:rebuild-lock:object:{42}", 15));
         operations.releaseRebuildLock("count:rebuild-lock:object:{42}");
 
-        verify(hashOperations).increment("count:agg:{post}:like", "42", 3L);
+        verify(hashOperations).increment("agg:v1:post:42", "1", 3L);
         verify(valueOperations).set("count:replay:checkpoint:object", "12");
         verify(redisTemplate).delete("count:rebuild-lock:object:{42}");
     }
@@ -83,15 +85,19 @@ class CountRedisOperationsTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.getBit("count:fact:post_like:{42}:0", 7)).thenReturn(Boolean.TRUE);
-        when(valueOperations.setBit("count:fact:post_like:{42}:0", 7, true)).thenReturn(Boolean.FALSE);
+        String likeKey = CountRedisKeys.bitmapShard(ObjectCounterType.LIKE, ReactionTargetTypeEnumVO.POST, 42L, 0);
+        String favKey = CountRedisKeys.bitmapShard(ObjectCounterType.FAV, ReactionTargetTypeEnumVO.POST, 42L, 0);
+        when(valueOperations.getBit(likeKey, 7)).thenReturn(Boolean.TRUE);
+        when(valueOperations.setBit(favKey, 7, true)).thenReturn(Boolean.FALSE);
         when(valueOperations.setIfAbsent(eq("count:rate-limit:rebuild:{42}"), eq("1"), anyLong(), eq(TimeUnit.SECONDS)))
                 .thenReturn(Boolean.FALSE);
 
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
 
-        assertTrue(operations.readBitmapFact("count:fact:post_like:{42}:0", 7));
-        assertFalse(operations.writeBitmapFact("count:fact:post_like:{42}:0", 7, true));
+        assertEquals("bm:like:post:42:0", likeKey);
+        assertEquals("bm:fav:post:42:0", favKey);
+        assertTrue(operations.readBitmapFact(likeKey, 7));
+        assertFalse(operations.writeBitmapFact(favKey, 7, true));
         assertFalse(operations.tryAcquireRateLimit("count:rate-limit:rebuild:{42}", 30));
         verify(redisTemplate, never()).delete("unused");
     }

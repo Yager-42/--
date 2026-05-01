@@ -1,19 +1,17 @@
 package cn.nexus.trigger.http.social.support;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.nexus.api.social.content.dto.ContentDetailResponseDTO;
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -26,12 +24,12 @@ class ContentDetailQueryServiceTest {
     void query_shouldReuseFindPostAndCacheLocalSnapshot() {
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         Executor aggregationExecutor = Runnable::run;
         ContentDetailQueryService service = new ContentDetailQueryService(
                 contentRepository,
                 userBaseRepository,
-                objectCounterPort,
+                objectCounterService,
                 aggregationExecutor
         );
 
@@ -45,14 +43,23 @@ class ContentDetailQueryServiceTest {
                 .build());
         when(userBaseRepository.listByUserIds(List.of(11L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(11L).nickname("u").avatarUrl("a").build()));
-        when(objectCounterPort.getCount(any())).thenReturn(9L);
+        when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE))))
+                .thenReturn(java.util.Map.of("like", 9L, "fav", 4L));
+        when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV))))
+                .thenReturn(java.util.Map.of("like", 9L, "fav", 4L));
+        when(objectCounterService.isPostLiked(101L, 7L)).thenReturn(true);
+        when(objectCounterService.isPostFaved(101L, 7L)).thenReturn(true);
 
-        ContentDetailResponseDTO first = service.query(101L);
-        ContentDetailResponseDTO second = service.query(101L);
+        ContentDetailResponseDTO first = service.query(101L, 7L);
+        ContentDetailResponseDTO second = service.query(101L, 7L);
 
         assertEquals("body", first.getContent());
         assertEquals(9L, first.getLikeCount());
+        assertEquals(4L, first.getFavoriteCount());
+        assertEquals(true, first.getLiked());
+        assertEquals(true, first.getFaved());
         assertEquals("body", second.getContent());
+        verify(objectCounterService, times(2)).getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV)));
         verify(contentRepository, times(1)).findPost(101L);
     }
 
@@ -60,12 +67,12 @@ class ContentDetailQueryServiceTest {
     void query_shouldNotFailWhenAuthorLoadFailed() {
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         Executor aggregationExecutor = Runnable::run;
         ContentDetailQueryService service = new ContentDetailQueryService(
                 contentRepository,
                 userBaseRepository,
-                objectCounterPort,
+                objectCounterService,
                 aggregationExecutor
         );
 
@@ -78,12 +85,16 @@ class ContentDetailQueryServiceTest {
                 .status(2)
                 .build());
         when(userBaseRepository.listByUserIds(List.of(11L))).thenThrow(new RuntimeException("boom"));
-        when(objectCounterPort.getCount(any())).thenReturn(9L);
+        when(objectCounterService.getPostCounts(eq(101L), eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV))))
+                .thenReturn(java.util.Map.of("like", 9L, "fav", 3L));
 
-        ContentDetailResponseDTO response = service.query(101L);
+        ContentDetailResponseDTO response = service.query(101L, null);
 
         assertEquals("body", response.getContent());
         assertEquals(9L, response.getLikeCount());
+        assertEquals(3L, response.getFavoriteCount());
+        assertEquals(false, response.getLiked());
+        assertEquals(false, response.getFaved());
         assertEquals("", response.getAuthorNickname());
     }
 }

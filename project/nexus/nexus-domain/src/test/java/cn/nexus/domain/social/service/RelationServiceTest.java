@@ -8,14 +8,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
-import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
 import cn.nexus.domain.social.adapter.port.ISocialIdPort;
 import cn.nexus.domain.social.adapter.repository.IRelationEventOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
-import cn.nexus.domain.social.adapter.repository.IUserCounterRepairOutboxRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
 import cn.nexus.domain.social.model.valobj.FollowResultVO;
 import cn.nexus.domain.social.model.valobj.OperationResultVO;
@@ -29,10 +25,7 @@ class RelationServiceTest {
     private ISocialIdPort socialIdPort;
     private IRelationRepository relationRepository;
     private IRelationEventOutboxRepository relationEventOutboxRepository;
-    private IUserCounterRepairOutboxRepository userCounterRepairOutboxRepository;
     private IRelationPolicyPort relationPolicyPort;
-    private IRelationAdjacencyCachePort adjacencyCachePort;
-    private IUserCounterPort userCounterPort;
     private RelationService relationService;
 
     @BeforeEach
@@ -40,18 +33,12 @@ class RelationServiceTest {
         socialIdPort = Mockito.mock(ISocialIdPort.class);
         relationRepository = Mockito.mock(IRelationRepository.class);
         relationEventOutboxRepository = Mockito.mock(IRelationEventOutboxRepository.class);
-        userCounterRepairOutboxRepository = Mockito.mock(IUserCounterRepairOutboxRepository.class);
         relationPolicyPort = Mockito.mock(IRelationPolicyPort.class);
-        adjacencyCachePort = Mockito.mock(IRelationAdjacencyCachePort.class);
-        userCounterPort = Mockito.mock(IUserCounterPort.class);
         relationService = new RelationService(
                 socialIdPort,
                 relationRepository,
                 relationEventOutboxRepository,
-                userCounterRepairOutboxRepository,
-                relationPolicyPort,
-                adjacencyCachePort,
-                userCounterPort
+                relationPolicyPort
         );
     }
 
@@ -68,7 +55,6 @@ class RelationServiceTest {
     @Test
     void follow_shouldReturnActiveWhenAlreadyFollowing() {
         when(relationPolicyPort.isBlocked(1L, 2L)).thenReturn(false);
-        when(userCounterPort.getCount(1L, UserCounterType.FOLLOWING)).thenReturn(10L);
         when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(RelationEntity.builder().status(1).build());
 
         FollowResultVO result = relationService.follow(1L, 2L);
@@ -79,22 +65,47 @@ class RelationServiceTest {
     }
 
     @Test
-    void unfollow_shouldCleanupResidueWhenNotFollowing() {
+    void follow_shouldPersistTruthAndOutboxWithoutFollowerOrCounterSideEffects() {
+        when(relationPolicyPort.isBlocked(1L, 2L)).thenReturn(false);
+        when(socialIdPort.nextId()).thenReturn(10L, 12L);
+        when(socialIdPort.now()).thenReturn(1000L);
+
+        FollowResultVO result = relationService.follow(1L, 2L);
+
+        assertEquals("ACTIVE", result.getStatus());
+        verify(relationRepository).saveRelation(any(RelationEntity.class));
+        verify(relationRepository, never()).saveFollower(any(), any(), any(), any());
+        verify(relationEventOutboxRepository).save(eq(12L), eq("FOLLOW"), any(String.class));
+    }
+
+    @Test
+    void unfollow_shouldReturnNotFollowingWhenNoActiveRelation() {
         when(relationRepository.findRelation(1L, 2L, 1)).thenReturn(null);
 
         FollowResultVO result = relationService.unfollow(1L, 2L);
 
         assertEquals("NOT_FOLLOWING", result.getStatus());
-        verify(relationRepository).deleteFollower(2L, 1L);
-        verify(adjacencyCachePort).removeFollow(1L, 2L);
-        verify(userCounterPort).evict(1L, UserCounterType.FOLLOWING);
-        verify(userCounterPort).evict(2L, UserCounterType.FOLLOWER);
+        verify(relationRepository, never()).deleteFollower(any(), any());
         verify(relationEventOutboxRepository, never()).save(any(), any(), any());
     }
 
     @Test
-    void block_shouldCleanupBidirectionalFollowAndEmitBlockEvent() {
-        when(socialIdPort.nextId()).thenReturn(10L, 20L);
+    void unfollow_shouldPersistTruthAndOutboxWithoutFollowerOrCounterSideEffects() {
+        when(socialIdPort.nextId()).thenReturn(20L);
+        when(relationRepository.findRelation(1L, 2L, 1))
+                .thenReturn(RelationEntity.builder().status(1).build());
+
+        FollowResultVO result = relationService.unfollow(1L, 2L);
+
+        assertEquals("UNFOLLOWED", result.getStatus());
+        verify(relationRepository).deleteRelation(1L, 2L, 1);
+        verify(relationRepository, never()).deleteFollower(any(), any());
+        verify(relationEventOutboxRepository).save(eq(20L), eq("FOLLOW"), any(String.class));
+    }
+
+    @Test
+    void block_shouldEmitBlockEventAndNoDirectCounterSideEffects() {
+        when(socialIdPort.nextId()).thenReturn(10L, 20L, 21L, 22L);
         when(socialIdPort.now()).thenReturn(1000L);
         when(relationRepository.findRelation(1L, 2L, 1))
                 .thenReturn(RelationEntity.builder().status(1).build());
@@ -108,67 +119,12 @@ class RelationServiceTest {
         verify(relationRepository).saveRelation(any(RelationEntity.class));
         verify(relationRepository).deleteRelation(1L, 2L, 1);
         verify(relationRepository).deleteRelation(2L, 1L, 1);
-        verify(relationRepository).deleteFollower(2L, 1L);
-        verify(relationRepository).deleteFollower(1L, 2L);
-        verify(adjacencyCachePort).removeFollow(1L, 2L);
-        verify(adjacencyCachePort).removeFollow(2L, 1L);
-        verify(userCounterPort).increment(1L, UserCounterType.FOLLOWING, -1);
-        verify(userCounterPort).increment(2L, UserCounterType.FOLLOWER, -1);
-        verify(userCounterPort).increment(2L, UserCounterType.FOLLOWING, -1);
-        verify(userCounterPort).increment(1L, UserCounterType.FOLLOWER, -1);
+        verify(relationRepository, never()).deleteFollower(any(), any());
 
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
         verify(relationEventOutboxRepository).save(eq(20L), eq("BLOCK"), payloadCaptor.capture());
         assertEquals("{\"eventId\":20,\"sourceId\":1,\"targetId\":2}", payloadCaptor.getValue());
-    }
-
-    @Test
-    void follow_shouldRecordRepairOutboxWhenUserCounterUpdateFails() {
-        when(relationPolicyPort.isBlocked(1L, 2L)).thenReturn(false);
-        when(userCounterPort.getCount(1L, UserCounterType.FOLLOWING)).thenReturn(10L);
-        when(socialIdPort.nextId()).thenReturn(10L, 11L, 12L);
-        when(socialIdPort.now()).thenReturn(1000L);
-        Mockito.doThrow(new RuntimeException("redis down"))
-                .when(userCounterPort).increment(1L, UserCounterType.FOLLOWING, 1);
-
-        FollowResultVO result = relationService.follow(1L, 2L);
-
-        assertEquals("ACTIVE", result.getStatus());
-        verify(relationRepository).saveRelation(any(RelationEntity.class));
-        verify(userCounterRepairOutboxRepository).save(1L, 2L, "FOLLOW", "COUNT_REDIS_WRITE_FAILED", "12");
-        verify(userCounterRepairOutboxRepository, never()).save(2L, 1L, "FOLLOW", "COUNT_REDIS_WRITE_FAILED", "12");
-    }
-
-    @Test
-    void follow_shouldNotRecordRepairOutboxWhenUserCounterUpdatesSucceed() {
-        when(relationPolicyPort.isBlocked(1L, 2L)).thenReturn(false);
-        when(userCounterPort.getCount(1L, UserCounterType.FOLLOWING)).thenReturn(10L);
-        when(socialIdPort.nextId()).thenReturn(10L, 11L, 12L);
-        when(socialIdPort.now()).thenReturn(1000L);
-
-        FollowResultVO result = relationService.follow(1L, 2L);
-
-        assertEquals("ACTIVE", result.getStatus());
-        verify(userCounterRepairOutboxRepository, never()).save(any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void block_shouldRecordRepairOutboxOncePerAffectedRelationOnFailure() {
-        when(socialIdPort.nextId()).thenReturn(10L, 20L);
-        when(socialIdPort.now()).thenReturn(1000L);
-        when(relationRepository.findRelation(1L, 2L, 1))
-                .thenReturn(RelationEntity.builder().status(1).build());
-        when(relationRepository.findRelation(2L, 1L, 1))
-                .thenReturn(RelationEntity.builder().status(1).build());
-        Mockito.doThrow(new RuntimeException("redis down"))
-                .when(userCounterPort).increment(1L, UserCounterType.FOLLOWING, -1);
-        Mockito.doThrow(new RuntimeException("redis down"))
-                .when(userCounterPort).increment(2L, UserCounterType.FOLLOWING, -1);
-
-        OperationResultVO result = relationService.block(1L, 2L);
-
-        assertTrue(result.isSuccess());
-        verify(userCounterRepairOutboxRepository).save(1L, 2L, "BLOCK", "COUNT_REDIS_WRITE_FAILED", "20");
-        verify(userCounterRepairOutboxRepository).save(2L, 1L, "BLOCK", "COUNT_REDIS_WRITE_FAILED", "20");
+        verify(relationEventOutboxRepository).save(eq(21L), eq("FOLLOW"), any(String.class));
+        verify(relationEventOutboxRepository).save(eq(22L), eq("FOLLOW"), any(String.class));
     }
 }

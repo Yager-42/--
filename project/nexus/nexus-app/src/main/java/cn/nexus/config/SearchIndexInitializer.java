@@ -78,9 +78,6 @@ public class SearchIndexInitializer implements ApplicationRunner {
         properties.putObject("author_nickname").put("type", "keyword");
         properties.putObject("author_tag_json").put("type", "keyword");
         properties.putObject("publish_time").put("type", "date").put("format", "epoch_millis");
-        properties.putObject("like_count").put("type", "integer");
-        properties.putObject("favorite_count").put("type", "integer");
-        properties.putObject("view_count").put("type", "integer");
         properties.putObject("status").put("type", "keyword");
         properties.putObject("img_urls").put("type", "keyword");
         properties.putObject("is_top").put("type", "keyword");

@@ -74,6 +74,10 @@ public interface IContentPostDao {
      */
     java.util.List<ContentPostPO> selectByIds(@Param("postIds") java.util.List<Long> postIds);
 
+    long countPublishedByUser(@Param("userId") Long userId);
+
+    java.util.List<Long> selectPublishedIdsByUser(@Param("userId") Long userId);
+
     /**
      * 个人页分页查询已发布内容（按 create_time DESC, post_id DESC）。
      *

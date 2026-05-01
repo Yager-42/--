@@ -16,30 +16,10 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RedisAuthThrottlePort implements IAuthThrottlePort {
 
-    private static final String KEY_SMS_PHONE_1M = "auth:sms:send:phone:%s:1m";
-    private static final String KEY_SMS_PHONE_1H = "auth:sms:send:phone:%s:1h";
-    private static final String KEY_SMS_PHONE_1D = "auth:sms:send:phone:%s:1d";
-    private static final String KEY_SMS_IP_1M = "auth:sms:send:ip:%s:1m";
-    private static final String KEY_SMS_IP_1D = "auth:sms:send:ip:%s:1d";
     private static final String KEY_LOGIN_FAIL = "auth:login:fail:%s:%s";
     private static final String KEY_LOGIN_LOCK = "auth:login:lock:%s:%s";
 
     private final StringRedisTemplate stringRedisTemplate;
-
-    @Value("${auth.sms.phone-send-limit-1m:1}")
-    private int smsPhoneLimit1m;
-
-    @Value("${auth.sms.phone-send-limit-1h:5}")
-    private int smsPhoneLimit1h;
-
-    @Value("${auth.sms.phone-send-limit-1d:10}")
-    private int smsPhoneLimit1d;
-
-    @Value("${auth.sms.ip-send-limit-1m:5}")
-    private int smsIpLimit1m;
-
-    @Value("${auth.sms.ip-send-limit-1d:50}")
-    private int smsIpLimit1d;
 
     @Value("${auth.login.fail-threshold:5}")
     private int loginFailThreshold;
@@ -47,27 +27,6 @@ public class RedisAuthThrottlePort implements IAuthThrottlePort {
     @Value("${auth.login.lock-seconds:900}")
     private long loginLockSeconds;
 
-    @Override
-    public void checkSmsSendLimit(String phone, String ip) {
-        if (exceeded(String.format(KEY_SMS_PHONE_1M, phone), smsPhoneLimit1m)
-                || exceeded(String.format(KEY_SMS_PHONE_1H, phone), smsPhoneLimit1h)
-                || exceeded(String.format(KEY_SMS_PHONE_1D, phone), smsPhoneLimit1d)
-                || exceeded(String.format(KEY_SMS_IP_1M, ip), smsIpLimit1m)
-                || exceeded(String.format(KEY_SMS_IP_1D, ip), smsIpLimit1d)) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "短信发送过于频繁");
-        }
-    }
-
-    @Override
-    public void onSmsSend(String phone, String ip) {
-        incr(String.format(KEY_SMS_PHONE_1M, phone), Duration.ofMinutes(1));
-        incr(String.format(KEY_SMS_PHONE_1H, phone), Duration.ofHours(1));
-        incr(String.format(KEY_SMS_PHONE_1D, phone), Duration.ofDays(1));
-        incr(String.format(KEY_SMS_IP_1M, ip), Duration.ofMinutes(1));
-        incr(String.format(KEY_SMS_IP_1D, ip), Duration.ofDays(1));
-    }
-
-    @Override
     public void checkLoginLock(String loginType, String phone) {
         if (exceeded(String.format(KEY_LOGIN_LOCK, loginType, phone), 1)) {
             throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "登录已锁定，请稍后再试");

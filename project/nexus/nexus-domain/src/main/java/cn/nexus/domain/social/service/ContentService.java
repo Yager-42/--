@@ -1,5 +1,6 @@
 package cn.nexus.domain.social.service;
 
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
 import cn.nexus.domain.social.adapter.port.IContentEventOutboxPort;
 import cn.nexus.domain.social.adapter.port.IContentCacheEvictPort;
 import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
@@ -57,6 +58,7 @@ public class ContentService implements IContentService {
     private final IMediaStoragePort mediaStoragePort;
     private final IMediaTranscodePort mediaTranscodePort;
     private final IContentEventOutboxPort contentEventOutboxPort;
+    private final IUserCounterService userCounterService;
     private final IContentCacheEvictPort contentCacheEvictPort;
     private final IRiskService riskService;
     private final RedissonClient redissonClient;
@@ -366,6 +368,10 @@ public class ContentService implements IContentService {
                 contentRepository.replacePostTypes(targetPostId, normalizedPostTypes);
             }
 
+            if (!wasPublished(existedPost)) {
+                applyPostCounterDelta(userId, 1L);
+            }
+
             // 事务提交后再发 MQ：避免消费者读到未提交数据导致“索引误删”等线上鬼故事。
             if (existedPost == null) {
                 dispatchAfterCommit(targetPostId, userId, newVersion);
@@ -483,6 +489,9 @@ public class ContentService implements IContentService {
                     post.getVersionNum(),
                     socialIdPort.now());
             if (ok) {
+                if (wasPublished(post)) {
+                    applyPostCounterDelta(userId, -1L);
+                }
                 if (post.getContentUuid() != null && !post.getContentUuid().isBlank()) {
                     postContentKvPort.delete(post.getContentUuid());
                 }
@@ -724,6 +733,9 @@ public class ContentService implements IContentService {
                     .createTime(socialIdPort.now())
                     .build());
             if (ok) {
+                if (!wasPublished(post)) {
+                    applyPostCounterDelta(userId, 1L);
+                }
                 dispatchUpdateAfterCommit(postId, userId, newVersion);
             }
             return OperationResultVO.builder()
@@ -1026,6 +1038,7 @@ public class ContentService implements IContentService {
                 throw new IllegalStateException("Attempt 状态推进失败 attemptId=" + attemptId);
             }
             // 事务提交后再做缓存失效与 outbox 投递，确保“写库成功”先于“外部可见”。
+            applyPostCounterDelta(userId, 1L);
             dispatchAfterCommit(postId, userId, attempt.getPublishedVersionNum());
             attempt.setAttemptStatus(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode());
             attempt.setRiskStatus(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode());
@@ -1331,6 +1344,17 @@ public class ContentService implements IContentService {
                 }
             }
         });
+    }
+
+    private boolean wasPublished(ContentPostEntity post) {
+        return post != null && post.getStatus() != null && post.getStatus() == STATUS_PUBLISHED;
+    }
+
+    private void applyPostCounterDelta(Long authorId, long delta) {
+        if (authorId == null || delta == 0L) {
+            return;
+        }
+        userCounterService.incrementPosts(authorId, delta);
     }
 
     private void dispatchUpdateAfterCommit(Long postId, Long operatorId, Integer versionNum) {

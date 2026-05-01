@@ -9,10 +9,6 @@ import cn.nexus.api.social.interaction.dto.*;
  */
 public interface IInteractionApi {
 
-    Response<ReactionResponseDTO> react(ReactionRequestDTO requestDTO);
-
-    Response<ReactionStateResponseDTO> reactionState(ReactionStateRequestDTO requestDTO);
-
     Response<CommentResponseDTO> comment(CommentRequestDTO requestDTO);
 
     Response<OperationResultDTO> pinComment(PinCommentRequestDTO requestDTO);
@@ -23,11 +19,4 @@ public interface IInteractionApi {
 
     Response<OperationResultDTO> readAllNotifications();
 
-    Response<TipResponseDTO> tip(TipRequestDTO requestDTO);
-
-    Response<PollCreateResponseDTO> createPoll(PollCreateRequestDTO requestDTO);
-
-    Response<PollVoteResponseDTO> vote(PollVoteRequestDTO requestDTO);
-
-    Response<WalletBalanceResponseDTO> balance(WalletBalanceRequestDTO requestDTO);
 }

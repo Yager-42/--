@@ -1,9 +1,7 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
@@ -12,9 +10,6 @@ import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
-import cn.nexus.domain.social.model.valobj.ReactionTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -38,10 +33,9 @@ import org.springframework.stereotype.Service;
 public class FeedCardAssembleService {
 
     private final IFeedCardRepository feedCardRepository;
-    private final IObjectCounterPort objectCounterPort;
+    private final IObjectCounterService objectCounterService;
     private final IContentRepository contentRepository;
     private final IUserBaseRepository userBaseRepository;
-    private final IReactionCachePort reactionCachePort;
     private final RelationQueryService relationQueryService;
     private final IFeedFollowSeenRepository feedFollowSeenRepository;
 
@@ -70,15 +64,17 @@ public class FeedCardAssembleService {
 
         // 先批量拿稳定字段，避免对每个候选帖子重复查仓储。
         Map<Long, FeedCardBaseVO> baseMap = loadBaseCards(candidateIds);
-        Map<Long, Long> likeCountMap = loadLikeCounts(candidateIds);
+        Map<Long, Map<String, Long>> counterMap = loadCounters(candidateIds);
         Map<Long, UserBriefVO> authorMap = loadAuthorBriefs(baseMap.values());
 
         Set<Long> likedSet = Set.of();
+        Set<Long> favedSet = Set.of();
         Set<Long> followedSet = Set.of();
         Set<Long> seenSet = Set.of();
         if (userId != null) {
             // 个性化状态只在登录用户场景计算；匿名流量直接跳过。
             likedSet = loadLikedSet(userId, candidateIds);
+            favedSet = loadFavedSet(userId, candidateIds);
             followedSet = relationQueryService.batchFollowing(userId, new ArrayList<>(authorMap.keySet()));
             seenSet = feedFollowSeenRepository.batchSeen(userId, candidateIds);
         }
@@ -89,7 +85,9 @@ public class FeedCardAssembleService {
             if (base == null) {
                 continue;
             }
-            Long likeCount = likeCountMap.get(postId);
+            Map<String, Long> counters = counterMap.get(postId);
+            Long likeCount = counters == null ? null : counters.get(ObjectCounterType.LIKE.getCode());
+            Long favoriteCount = counters == null ? null : counters.get(ObjectCounterType.FAV.getCode());
             UserBriefVO author = authorMap.get(base.getAuthorId());
             boolean seen = userId != null && seenSet.contains(postId);
             items.add(FeedItemVO.builder()
@@ -104,7 +102,9 @@ public class FeedCardAssembleService {
                     .publishTime(base.getPublishTime())
                     .source(source)
                     .likeCount(likeCount == null ? 0L : likeCount)
+                    .favoriteCount(favoriteCount == null ? 0L : favoriteCount)
                     .liked(userId != null && likedSet.contains(postId))
+                    .faved(userId != null && favedSet.contains(postId))
                     .followed(userId != null && followedSet.contains(base.getAuthorId()))
                     .seen(seen)
                     .build());
@@ -150,30 +150,21 @@ public class FeedCardAssembleService {
         return rebuilt;
     }
 
-    private Map<Long, Long> loadLikeCounts(List<Long> candidateIds) {
+    private Map<Long, Map<String, Long>> loadCounters(List<Long> candidateIds) {
         if (candidateIds == null || candidateIds.isEmpty()) {
             return Map.of();
         }
-
-        List<ObjectCounterTarget> targets = new ArrayList<>(candidateIds.size());
+        Map<Long, Map<String, Long>> countById = objectCounterService.getPostCountsBatch(
+                candidateIds,
+                List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
+        Map<Long, Map<String, Long>> result = new HashMap<>(candidateIds.size());
         for (Long postId : candidateIds) {
-            if (postId == null) {
-                continue;
-            }
-            targets.add(ObjectCounterTarget.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(postId)
-                    .counterType(ObjectCounterType.LIKE)
-                    .build());
+            Map<String, Long> values = countById.get(postId);
+            long like = value(values, ObjectCounterType.LIKE.getCode());
+            long fav = value(values, ObjectCounterType.FAV.getCode());
+            result.put(postId, Map.of(ObjectCounterType.LIKE.getCode(), like, ObjectCounterType.FAV.getCode(), fav));
         }
-
-        Map<String, Long> countByTag = objectCounterPort.batchGetCount(targets);
-        Map<Long, Long> likeCountMap = new HashMap<>(candidateIds.size());
-        for (ObjectCounterTarget target : targets) {
-            Long count = countByTag.get(target.hashTag());
-            likeCountMap.put(target.getTargetId(), count == null ? 0L : count);
-        }
-        return likeCountMap;
+        return result;
     }
 
     private Map<Long, UserBriefVO> loadAuthorBriefs(Collection<FeedCardBaseVO> cards) {
@@ -206,16 +197,32 @@ public class FeedCardAssembleService {
             if (postId == null) {
                 continue;
             }
-            ReactionTargetVO target = ReactionTargetVO.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(postId)
-                    .reactionType(ReactionTypeEnumVO.LIKE)
-                    .build();
-            if (reactionCachePort.getState(userId, target)) {
+            if (objectCounterService.isPostLiked(postId, userId)) {
                 likedSet.add(postId);
             }
         }
         return likedSet;
+    }
+
+    private Set<Long> loadFavedSet(Long userId, List<Long> candidateIds) {
+        if (userId == null || candidateIds == null || candidateIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> favedSet = new LinkedHashSet<>();
+        for (Long postId : candidateIds) {
+            if (postId == null) {
+                continue;
+            }
+            if (objectCounterService.isPostFaved(postId, userId)) {
+                favedSet.add(postId);
+            }
+        }
+        return favedSet;
+    }
+
+    private long value(Map<String, Long> values, String code) {
+        Long value = values == null ? null : values.get(code);
+        return value == null ? 0L : Math.max(0L, value);
     }
 
 }

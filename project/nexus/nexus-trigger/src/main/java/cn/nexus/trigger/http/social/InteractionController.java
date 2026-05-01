@@ -32,72 +32,6 @@ public class InteractionController implements IInteractionApi {
     private IInteractionService interactionService;
 
     /**
-     * 处理互动动作并返回结果。
-     *
-     * @param requestDTO 请求参数。类型：{@link ReactionRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @PostMapping("/interact/reaction")
-    @Override
-    public Response<ReactionResponseDTO> react(@RequestBody ReactionRequestDTO requestDTO) {
-        try {
-            Long userId = UserContext.requireUserId();
-            ReactionResultVO vo = interactionService.react(
-                    userId,
-                    requestDTO.getTargetId(),
-                    requestDTO.getTargetType(),
-                    requestDTO.getType(),
-                    requestDTO.getAction(),
-                    requestDTO.getRequestId()
-            );
-            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                    ReactionResponseDTO.builder()
-                            .requestId(vo.getRequestId())
-                            .currentCount(vo.getCurrentCount())
-                            .success(vo.isSuccess())
-                            .build());
-        } catch (AppException e) {
-            return Response.<ReactionResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
-        } catch (Exception e) {
-            log.error("reaction api failed, req={}", requestDTO, e);
-            return Response.<ReactionResponseDTO>builder()
-                    .code(ResponseCode.UN_ERROR.getCode())
-                    .info(ResponseCode.UN_ERROR.getInfo())
-                    .build();
-        }
-    }
-
-    /**
-     * 查询互动状态。
-     *
-     * @param requestDTO 请求参数。类型：{@link ReactionStateRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @GetMapping("/interact/reaction/state")
-    @Override
-    public Response<ReactionStateResponseDTO> reactionState(ReactionStateRequestDTO requestDTO) {
-        try {
-            Long userId = UserContext.requireUserId();
-            ReactionStateVO vo = interactionService.reactionState(
-                    userId,
-                    requestDTO.getTargetId(),
-                    requestDTO.getTargetType(),
-                    requestDTO.getType()
-            );
-            return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                    ReactionStateResponseDTO.builder().state(vo.isState()).currentCount(vo.getCurrentCount()).build());
-        } catch (AppException e) {
-            return Response.<ReactionStateResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
-        } catch (Exception e) {
-            log.error("reaction state api failed, req={}", requestDTO, e);
-            return Response.<ReactionStateResponseDTO>builder()
-                    .code(ResponseCode.UN_ERROR.getCode())
-                    .info(ResponseCode.UN_ERROR.getInfo())
-                    .build();
-        }
-    }
-
-    /**
      * 创建评论并返回结果。
      *
      * @param requestDTO 请求参数。类型：{@link CommentRequestDTO}
@@ -221,66 +155,6 @@ public class InteractionController implements IInteractionApi {
                     .info(ResponseCode.UN_ERROR.getInfo())
                     .build();
         }
-    }
-
-    /**
-     * 执行打赏占位逻辑。
-     *
-     * @param requestDTO 请求参数。类型：{@link TipRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @PostMapping("/wallet/tip")
-    @Override
-    public Response<TipResponseDTO> tip(@RequestBody TipRequestDTO requestDTO) {
-        TipResultVO vo = interactionService.tip(requestDTO.getToUserId(), requestDTO.getAmount(), requestDTO.getCurrency(), requestDTO.getPostId());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                TipResponseDTO.builder().txId(vo.getTxId()).effectUrl(vo.getEffectUrl()).build());
-    }
-
-    /**
-     * 创建投票占位逻辑。
-     *
-     * @param requestDTO 请求参数。类型：{@link PollCreateRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @PostMapping("/interaction/poll/create")
-    @Override
-    public Response<PollCreateResponseDTO> createPoll(@RequestBody PollCreateRequestDTO requestDTO) {
-        PollCreateResultVO vo = interactionService.createPoll(requestDTO.getQuestion(), requestDTO.getOptions(), requestDTO.getAllowMulti(), requestDTO.getExpireSeconds());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                PollCreateResponseDTO.builder().pollId(vo.getPollId()).build());
-    }
-
-    /**
-     * 执行投票占位逻辑。
-     *
-     * @param requestDTO 请求参数。类型：{@link PollVoteRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @PostMapping("/interaction/poll/vote")
-    @Override
-    public Response<PollVoteResponseDTO> vote(@RequestBody PollVoteRequestDTO requestDTO) {
-        PollVoteResultVO vo = interactionService.vote(requestDTO.getPollId(), requestDTO.getOptionIds());
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(),
-                PollVoteResponseDTO.builder().updatedStats(vo.getUpdatedStats()).build());
-    }
-
-    /**
-     * 查询钱包余额占位结果。
-     *
-     * @param requestDTO 请求参数。类型：{@link WalletBalanceRequestDTO}
-     * @return 处理结果。类型：{@link Response}
-     */
-    @GetMapping("/wallet/balance")
-    @Override
-    public Response<WalletBalanceResponseDTO> balance(WalletBalanceRequestDTO requestDTO) {
-        WalletBalanceVO vo = interactionService.balance(requestDTO.getCurrencyType());
-        WalletBalanceResponseDTO dto = WalletBalanceResponseDTO.builder()
-                .currencyType(vo.getCurrencyType())
-                .amount(vo.getAmount())
-                .frozenAmount(vo.getFrozenAmount())
-                .build();
-        return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
     }
 
     private NotificationDTO toNotification(NotificationVO vo) {

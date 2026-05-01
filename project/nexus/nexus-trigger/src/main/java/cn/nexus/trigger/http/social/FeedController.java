@@ -114,7 +114,9 @@ public class FeedController implements IFeedApi {
                 .publishTime(vo.getPublishTime())
                 .source(vo.getSource())
                 .likeCount(vo.getLikeCount())
+                .favoriteCount(vo.getFavoriteCount())
                 .liked(vo.getLiked())
+                .faved(vo.getFaved())
                 .followed(vo.getFollowed())
                 .seen(vo.getSeen())
                 .build();

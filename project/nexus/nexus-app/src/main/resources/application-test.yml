@@ -14,3 +14,10 @@ reaction:
     mode: redis
   count:
     model: snapshot
+
+spring:
+  rabbitmq:
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true

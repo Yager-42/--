@@ -9,7 +9,7 @@ package cn.nexus.domain.counter.model.valobj;
 public enum ObjectCounterType {
 
     LIKE("like"),
-    REPLY("reply");
+    FAV("fav");
 
     private final String code;
 
@@ -19,5 +19,17 @@ public enum ObjectCounterType {
 
     public String getCode() {
         return code;
+    }
+
+    public static ObjectCounterType fromCode(String code) {
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+        for (ObjectCounterType type : values()) {
+            if (type.code.equals(code.trim())) {
+                return type;
+            }
+        }
+        return null;
     }
 }

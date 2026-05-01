@@ -14,7 +14,6 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class AuthRegisterRequestDTO {
     private String phone;
-    private String smsCode;
     private String password;
     private String nickname;
     private String avatarUrl;

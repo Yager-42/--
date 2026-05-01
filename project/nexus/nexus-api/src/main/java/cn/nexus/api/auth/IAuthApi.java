@@ -8,9 +8,6 @@ import cn.nexus.api.auth.dto.AuthPasswordLoginRequestDTO;
 import cn.nexus.api.auth.dto.AuthRefreshRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterResponseDTO;
-import cn.nexus.api.auth.dto.AuthSmsLoginRequestDTO;
-import cn.nexus.api.auth.dto.AuthSmsSendRequestDTO;
-import cn.nexus.api.auth.dto.AuthSmsSendResponseDTO;
 import cn.nexus.api.auth.dto.AuthTokenResponseDTO;
 import cn.nexus.api.response.Response;
 
@@ -19,13 +16,9 @@ import cn.nexus.api.response.Response;
  */
 public interface IAuthApi {
 
-    Response<AuthSmsSendResponseDTO> sendSms(AuthSmsSendRequestDTO requestDTO);
-
     Response<AuthRegisterResponseDTO> register(AuthRegisterRequestDTO requestDTO);
 
     Response<AuthTokenResponseDTO> passwordLogin(AuthPasswordLoginRequestDTO requestDTO);
-
-    Response<AuthTokenResponseDTO> smsLogin(AuthSmsLoginRequestDTO requestDTO);
 
     Response<AuthTokenResponseDTO> refresh(AuthRefreshRequestDTO requestDTO);
 

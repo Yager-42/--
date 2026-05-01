@@ -13,20 +13,15 @@ import cn.nexus.api.auth.dto.AuthPasswordLoginRequestDTO;
 import cn.nexus.api.auth.dto.AuthRefreshRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterRequestDTO;
 import cn.nexus.api.auth.dto.AuthRegisterResponseDTO;
-import cn.nexus.api.auth.dto.AuthSmsLoginRequestDTO;
-import cn.nexus.api.auth.dto.AuthSmsSendRequestDTO;
-import cn.nexus.api.auth.dto.AuthSmsSendResponseDTO;
 import cn.nexus.api.auth.dto.AuthTokenResponseDTO;
 import cn.nexus.api.response.Response;
 import cn.nexus.domain.auth.model.valobj.AuthAdminVO;
 import cn.nexus.domain.auth.model.valobj.AuthLoginResultVO;
 import cn.nexus.domain.auth.model.valobj.AuthMeVO;
-import cn.nexus.domain.auth.model.valobj.AuthSmsBizTypeVO;
 import cn.nexus.domain.auth.service.AuthService;
 import cn.nexus.trigger.http.support.UserContext;
 import cn.nexus.types.enums.ResponseCode;
 import cn.nexus.types.exception.AppException;
-import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -35,9 +30,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * 正式认证 HTTP 入口。
@@ -54,34 +46,8 @@ public class AuthController implements IAuthApi {
     private static final String REFRESH_TOKEN_PREFIX = "rt_";
     private static final String REFRESH_USER_ID_KEY = "refreshUserId";
     private static final long REFRESH_TOKEN_EXPIRE_SECONDS = 30L * 24L * 60L * 60L;
-    private static final int SMS_EXPIRE_SECONDS = 300;
 
     private final AuthService authService;
-
-    @PostMapping("/sms/send")
-    @Override
-    public Response<AuthSmsSendResponseDTO> sendSms(@RequestBody AuthSmsSendRequestDTO requestDTO) {
-        try {
-            authService.sendSms(
-                    requestDTO == null ? null : requestDTO.getPhone(),
-                    parseBizType(requestDTO == null ? null : requestDTO.getBizType()),
-                    resolveRequestIp()
-            );
-            return Response.success(
-                    ResponseCode.SUCCESS.getCode(),
-                    ResponseCode.SUCCESS.getInfo(),
-                    AuthSmsSendResponseDTO.builder().expireSeconds(SMS_EXPIRE_SECONDS).build()
-            );
-        } catch (AppException e) {
-            return Response.<AuthSmsSendResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
-        } catch (Exception e) {
-            log.error("auth send sms failed, req={}", requestDTO, e);
-            return Response.<AuthSmsSendResponseDTO>builder()
-                    .code(ResponseCode.UN_ERROR.getCode())
-                    .info(ResponseCode.UN_ERROR.getInfo())
-                    .build();
-        }
-    }
 
     @PostMapping("/register")
     @Override
@@ -89,7 +55,6 @@ public class AuthController implements IAuthApi {
         try {
             Long userId = authService.register(
                     requestDTO == null ? null : requestDTO.getPhone(),
-                    requestDTO == null ? null : requestDTO.getSmsCode(),
                     requestDTO == null ? null : requestDTO.getPassword(),
                     requestDTO == null ? null : requestDTO.getNickname(),
                     requestDTO == null ? null : requestDTO.getAvatarUrl()
@@ -127,30 +92,6 @@ public class AuthController implements IAuthApi {
             return Response.<AuthTokenResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
         } catch (Exception e) {
             log.error("auth password login failed, req={}", requestDTO, e);
-            return Response.<AuthTokenResponseDTO>builder()
-                    .code(ResponseCode.UN_ERROR.getCode())
-                    .info(ResponseCode.UN_ERROR.getInfo())
-                    .build();
-        }
-    }
-
-    @PostMapping("/login/sms")
-    @Override
-    public Response<AuthTokenResponseDTO> smsLogin(@RequestBody AuthSmsLoginRequestDTO requestDTO) {
-        try {
-            AuthLoginResultVO loginResult = authService.smsLogin(
-                    requestDTO == null ? null : requestDTO.getPhone(),
-                    requestDTO == null ? null : requestDTO.getSmsCode()
-            );
-            return Response.success(
-                    ResponseCode.SUCCESS.getCode(),
-                    ResponseCode.SUCCESS.getInfo(),
-                    buildTokenResponse(loginResult)
-            );
-        } catch (AppException e) {
-            return Response.<AuthTokenResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();
-        } catch (Exception e) {
-            log.error("auth sms login failed, req={}", requestDTO, e);
             return Response.<AuthTokenResponseDTO>builder()
                     .code(ResponseCode.UN_ERROR.getCode())
                     .info(ResponseCode.UN_ERROR.getInfo())
@@ -379,25 +320,4 @@ public class AuthController implements IAuthApi {
                 .build();
     }
 
-    private AuthSmsBizTypeVO parseBizType(String bizType) {
-        if (bizType == null || bizType.isBlank()) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "bizType 不能为空");
-        }
-        try {
-            return AuthSmsBizTypeVO.valueOf(bizType.trim().toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new AppException(ResponseCode.ILLEGAL_PARAMETER.getCode(), "bizType 仅支持 REGISTER/LOGIN");
-        }
-    }
-
-    private String resolveRequestIp() {
-        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
-        if (attributes instanceof ServletRequestAttributes servletAttributes) {
-            HttpServletRequest request = servletAttributes.getRequest();
-            if (request != null && request.getRemoteAddr() != null && !request.getRemoteAddr().isBlank()) {
-                return request.getRemoteAddr();
-            }
-        }
-        return "unknown";
-    }
 }

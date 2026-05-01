@@ -1,6 +1,9 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IRelationEventPort;
+import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
+import cn.nexus.types.event.relation.RelationCounterProjectEvent;
+import com.rabbitmq.client.ConfirmCallback;
 import lombok.RequiredArgsConstructor;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
@@ -16,8 +19,6 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RelationEventPort implements IRelationEventPort {
 
-    private static final String EXCHANGE = "social.relation";
-
     private final RabbitTemplate rabbitTemplate;
 
     /**
@@ -29,19 +30,53 @@ public class RelationEventPort implements IRelationEventPort {
      * @param status status 参数。类型：{@link String}
      */
     @Override
-    public void onFollow(Long eventId, Long sourceId, Long targetId, String status) {
-        rabbitTemplate.convertAndSend(EXCHANGE, "relation.follow", new RelationFollowEvent(eventId, sourceId, targetId, status));
+    public boolean publishCounterProjection(Long eventId, String eventType, Long sourceId, Long targetId, String status) {
+        if (eventId == null || eventType == null || eventType.isBlank()) {
+            return false;
+        }
+        RelationCounterProjectEvent event = new RelationCounterProjectEvent();
+        event.setEventId("relation-counter:" + eventId);
+        event.setRelationEventId(eventId);
+        event.setEventType(eventType);
+        event.setSourceId(sourceId);
+        event.setTargetId(targetId);
+        event.setStatus(status);
+        String normalizedType = eventType.trim().toUpperCase();
+        String routingKey = routingKeyOf(normalizedType);
+        if (routingKey == null) {
+            return false;
+        }
+        try {
+            rabbitTemplate.invoke(operations -> {
+                operations.convertAndSend(RelationCounterRouting.EXCHANGE, routingKey, event);
+                return null;
+            }, ackCallback(), nackCallback());
+            rabbitTemplate.waitForConfirmsOrDie(5000L);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
-    /**
-     * 执行 onBlock 逻辑。
-     *
-     * @param eventId eventId 参数。类型：{@link Long}
-     * @param sourceId sourceId 参数。类型：{@link Long}
-     * @param targetId 目标 ID。类型：{@link Long}
-     */
-    @Override
-    public void onBlock(Long eventId, Long sourceId, Long targetId) {
-        rabbitTemplate.convertAndSend(EXCHANGE, "relation.block", new RelationBlockEvent(eventId, sourceId, targetId));
+    private String routingKeyOf(String normalizedType) {
+        if ("FOLLOW".equals(normalizedType)) {
+            return RelationCounterRouting.RK_FOLLOW;
+        }
+        if ("BLOCK".equals(normalizedType)) {
+            return RelationCounterRouting.RK_BLOCK;
+        }
+        return null;
+    }
+
+    private ConfirmCallback ackCallback() {
+        return (sequence, multiple) -> {
+            // no-op
+        };
+    }
+
+    private ConfirmCallback nackCallback() {
+        return (sequence, multiple) -> {
+            throw new IllegalStateException("relation publish confirm nacked");
+        };
     }
 }

@@ -3,8 +3,6 @@ package cn.nexus.infrastructure.adapter.social.port;
 import cn.nexus.domain.social.adapter.port.ICommentEventPort;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.types.event.interaction.CommentCreatedEvent;
-import cn.nexus.types.event.interaction.CommentLikeChangedEvent;
-import cn.nexus.types.event.interaction.RootReplyCountChangedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -21,8 +19,6 @@ public class CommentEventPort implements ICommentEventPort {
     private static final String EXCHANGE = "social.interaction";
 
     private static final String RK_COMMENT_CREATED = "comment.created";
-    private static final String RK_REPLY_COUNT_CHANGED = "comment.reply_count.changed";
-    private static final String RK_COMMENT_LIKE_CHANGED = "comment.like.changed";
 
     private final ReliableMqOutboxService reliableMqOutboxService;
 
@@ -34,25 +30,5 @@ public class CommentEventPort implements ICommentEventPort {
     @Override
     public void publish(CommentCreatedEvent event) {
         reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_COMMENT_CREATED, event);
-    }
-
-    /**
-     * 发布回复数变更事件。
-     *
-     * @param event 回复数变更事件。类型：{@link RootReplyCountChangedEvent}
-     */
-    @Override
-    public void publish(RootReplyCountChangedEvent event) {
-        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_REPLY_COUNT_CHANGED, event);
-    }
-
-    /**
-     * 发布评论点赞数变更事件。
-     *
-     * @param event 评论点赞数变更事件。类型：{@link CommentLikeChangedEvent}
-     */
-    @Override
-    public void publish(CommentLikeChangedEvent event) {
-        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_COMMENT_LIKE_CHANGED, event);
     }
 }

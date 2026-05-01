@@ -281,39 +281,6 @@ CREATE TABLE IF NOT EXISTS `content_event_outbox` (
   KEY `idx_content_outbox_status_update_time` (`status`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='内容域事件Outbox';
 
-CREATE TABLE IF NOT EXISTS `interaction_reaction_event_log` (
-  `seq` BIGINT NOT NULL AUTO_INCREMENT,
-  `event_id` VARCHAR(128) NOT NULL,
-  `target_type` VARCHAR(32) NOT NULL,
-  `target_id` BIGINT NOT NULL,
-  `reaction_type` VARCHAR(16) NOT NULL,
-  `user_id` BIGINT NOT NULL,
-  `desired_state` TINYINT NOT NULL,
-  `delta` TINYINT NOT NULL,
-  `event_time` BIGINT NOT NULL,
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`seq`),
-  UNIQUE KEY `uk_interaction_reaction_event_log_event_id` (`event_id`),
-  KEY `idx_reaction_event_log_target_seq` (`target_type`, `target_id`, `reaction_type`, `seq`),
-  KEY `idx_reaction_event_log_user_seq` (`user_id`, `seq`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='互动态势事件流水表';
-
-CREATE TABLE IF NOT EXISTS `user_counter_repair_outbox` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT,
-  `source_user_id` BIGINT NOT NULL,
-  `target_user_id` BIGINT NOT NULL,
-  `operation` VARCHAR(16) NOT NULL,
-  `reason` VARCHAR(64) NOT NULL,
-  `correlation_id` VARCHAR(128) NULL,
-  `status` VARCHAR(16) NOT NULL DEFAULT 'NEW',
-  `retry_count` INT NOT NULL DEFAULT 0,
-  `next_retry_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_user_counter_repair_status_retry` (`status`, `next_retry_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='user counter repair outbox';
-
 CREATE TABLE IF NOT EXISTS `interaction_notify_inbox` (
   `event_id` VARCHAR(128) NOT NULL,
   `event_type` VARCHAR(32) NOT NULL,
@@ -341,8 +308,6 @@ CREATE TABLE IF NOT EXISTS `interaction_comment` (
   `reply_to_id` BIGINT NULL,
   `content_id` CHAR(36) NOT NULL COMMENT '评论正文UUID，正文实际存 Cassandra comment_content',
   `status` TINYINT NOT NULL COMMENT '0待审核,1正常,2删除',
-  `like_count` BIGINT NOT NULL DEFAULT 0,
-  `reply_count` BIGINT NOT NULL DEFAULT 0,
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`comment_id`),

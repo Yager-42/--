@@ -9,6 +9,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.method.HandlerMethod;
 
 import java.nio.charset.StandardCharsets;
 
@@ -49,6 +50,9 @@ public class UserContextInterceptor implements HandlerInterceptor {
 
         // CORS 预检请求不带业务 Header，必须放行
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
+        if (!(handler instanceof HandlerMethod)) {
             return true;
         }
 

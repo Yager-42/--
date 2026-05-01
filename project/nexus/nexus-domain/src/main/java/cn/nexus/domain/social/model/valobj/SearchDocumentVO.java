@@ -22,9 +22,6 @@ public class SearchDocumentVO {
     private String authorNickname;
     private String authorTagJson;
     private Long publishTime;
-    private Long likeCount;
-    private Long favoriteCount;
-    private Long viewCount;
     private String status;
     private List<String> imgUrls;
     private Boolean isTop;

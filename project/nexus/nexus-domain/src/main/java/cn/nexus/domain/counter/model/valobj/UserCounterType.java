@@ -8,11 +8,11 @@ package cn.nexus.domain.counter.model.valobj;
  */
 public enum UserCounterType {
 
-    FOLLOWING("following"),
-    FOLLOWER("follower"),
-    POST("post"),
-    LIKE_RECEIVED("like_received"),
-    FAVORITE_RECEIVED("favorite_received");
+    FOLLOWINGS("followings"),
+    FOLLOWERS("followers"),
+    POSTS("posts"),
+    LIKES_RECEIVED("likesReceived"),
+    FAVS_RECEIVED("favsReceived");
 
     private final String code;
 

@@ -3,14 +3,10 @@ package cn.nexus.infrastructure.adapter.social.repository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.CommentViewVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentItemVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentKeyVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentResultVO;
@@ -56,7 +52,6 @@ public class CommentRepository implements ICommentRepository {
     private final ICommentContentKvPort commentContentKvPort;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
-    private final IObjectCounterPort objectCounterPort;
 
     private final Cache<Long, CommentViewVO> commentViewCache = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofSeconds(2))
@@ -83,7 +78,7 @@ public class CommentRepository implements ICommentRepository {
         if (po == null) {
             return null;
         }
-        return toBrief(po, loadCounterSnapshots(List.of(po)));
+        return toBrief(po);
     }
 
     /**
@@ -164,8 +159,6 @@ public class CommentRepository implements ICommentRepository {
         po.setReplyToId(replyToId);
         po.setContentId(contentId);
         po.setStatus(status == null ? 1 : status);
-        po.setLikeCount(0L);
-        po.setReplyCount(0L);
         po.setCreateTime(now);
         po.setUpdateTime(now);
         commentDao.insert(po);
@@ -282,38 +275,6 @@ public class CommentRepository implements ICommentRepository {
         }
         int normalizedLimit = Math.max(1, limit);
         return commentDao.deleteSoftDeletedBefore(cutoff, normalizedLimit);
-    }
-
-    /**
-     * 执行 addReplyCount 逻辑。
-     *
-     * @param rootCommentId rootCommentId 参数。类型：{@link Long}
-     * @param delta delta 参数。类型：{@link Long}
-     */
-    @Override
-    public void addReplyCount(Long rootCommentId, Long delta) {
-        if (rootCommentId == null || delta == null || delta == 0) {
-            return;
-        }
-        commentDao.addReplyCount(rootCommentId, delta);
-        evictCommentView(rootCommentId);
-        // replyCount 会直接影响回复预览入口，必须同步清掉 preview cache。
-        evictReplyPreviews(rootCommentId);
-    }
-
-    /**
-     * 执行 addLikeCount 逻辑。
-     *
-     * @param rootCommentId rootCommentId 参数。类型：{@link Long}
-     * @param delta delta 参数。类型：{@link Long}
-     */
-    @Override
-    public void addLikeCount(Long rootCommentId, Long delta) {
-        if (rootCommentId == null || delta == null || delta == 0) {
-            return;
-        }
-        commentDao.addLikeCount(rootCommentId, delta);
-        evictCommentView(rootCommentId);
     }
 
     /**
@@ -527,12 +488,11 @@ public class CommentRepository implements ICommentRepository {
         }
 
         List<CommentPO> list = commentDao.selectByIds(unresolved);
-        Map<Long, CounterSnapshot> counterByCommentId = loadCounterSnapshots(list);
         Map<Long, CommentViewVO> found = new HashMap<>();
         List<ContentKey> contentKeys = new ArrayList<>();
         if (list != null) {
             for (CommentPO po : list) {
-                CommentViewVO view = toView(po, counterByCommentId);
+                CommentViewVO view = toView(po);
                 if (view == null || view.getCommentId() == null) {
                     continue;
                 }
@@ -676,15 +636,10 @@ public class CommentRepository implements ICommentRepository {
     }
 
     private CommentViewVO toView(CommentPO po) {
-        return toView(po, Map.of());
-    }
-
-    private CommentViewVO toView(CommentPO po, Map<Long, CounterSnapshot> counterByCommentId) {
         if (po == null) {
             return null;
         }
         Date ct = po.getCreateTime();
-        CounterSnapshot counter = counterSnapshotOf(po, counterByCommentId);
         return CommentViewVO.builder()
                 .commentId(po.getCommentId())
                 .postId(po.getPostId())
@@ -694,8 +649,6 @@ public class CommentRepository implements ICommentRepository {
                 .replyToId(po.getReplyToId())
                 .content(null)
                 .status(po.getStatus())
-                .likeCount(counter.likeCount())
-                .replyCount(counter.replyCount())
                 .createTime(ct == null ? null : ct.getTime())
                 .build();
     }
@@ -810,8 +763,6 @@ public class CommentRepository implements ICommentRepository {
                 .replyToId(v.getReplyToId())
                 .content(v.getContent())
                 .status(v.getStatus())
-                .likeCount(v.getLikeCount())
-                .replyCount(v.getReplyCount())
                 .createTime(v.getCreateTime())
                 .build();
     }
@@ -935,107 +886,27 @@ public class CommentRepository implements ICommentRepository {
         if (list == null || list.isEmpty()) {
             return List.of();
         }
-        Map<Long, CounterSnapshot> counterByCommentId = loadCounterSnapshots(list);
         List<CommentBriefVO> res = new ArrayList<>(list.size());
         for (CommentPO po : list) {
             if (po == null) {
                 continue;
             }
-            res.add(toBrief(po, counterByCommentId));
+            res.add(toBrief(po));
         }
         return res;
     }
 
-    private CommentBriefVO toBrief(CommentPO po, Map<Long, CounterSnapshot> counterByCommentId) {
+    private CommentBriefVO toBrief(CommentPO po) {
         if (po == null) {
             return null;
         }
-        CounterSnapshot counter = counterSnapshotOf(po, counterByCommentId);
         return CommentBriefVO.builder()
                 .commentId(po.getCommentId())
                 .postId(po.getPostId())
                 .userId(po.getUserId())
                 .rootId(po.getRootId())
                 .status(po.getStatus())
-                .likeCount(counter.likeCount())
-                .replyCount(counter.replyCount())
                 .build();
-    }
-
-    private Map<Long, CounterSnapshot> loadCounterSnapshots(List<CommentPO> comments) {
-        if (comments == null || comments.isEmpty()) {
-            return Map.of();
-        }
-        List<ObjectCounterTarget> likeTargets = new ArrayList<>(comments.size());
-        List<ObjectCounterTarget> replyTargets = new ArrayList<>(comments.size());
-        Map<Long, CounterSnapshot> fallback = new HashMap<>(comments.size() * 2);
-        for (CommentPO po : comments) {
-            if (po == null || po.getCommentId() == null) {
-                continue;
-            }
-            Long commentId = po.getCommentId();
-            fallback.put(commentId, new CounterSnapshot(safeLong(po.getLikeCount()), safeLong(po.getReplyCount())));
-            likeTargets.add(commentCounterTarget(commentId, ObjectCounterType.LIKE));
-            replyTargets.add(commentCounterTarget(commentId, ObjectCounterType.REPLY));
-        }
-        if (likeTargets.isEmpty()) {
-            return Map.of();
-        }
-        try {
-            Map<String, Long> likeCountByTag = objectCounterPort.batchGetCount(likeTargets);
-            Map<String, Long> replyCountByTag = objectCounterPort.batchGetCount(replyTargets);
-            Map<Long, CounterSnapshot> result = new HashMap<>(fallback.size() * 2);
-            for (CommentPO po : comments) {
-                if (po == null || po.getCommentId() == null) {
-                    continue;
-                }
-                Long commentId = po.getCommentId();
-                CounterSnapshot defaultCounter = fallback.get(commentId);
-                long likeCount = countOf(likeCountByTag, commentCounterTarget(commentId, ObjectCounterType.LIKE),
-                        defaultCounter == null ? 0L : defaultCounter.likeCount());
-                long replyCount = countOf(replyCountByTag, commentCounterTarget(commentId, ObjectCounterType.REPLY),
-                        defaultCounter == null ? 0L : defaultCounter.replyCount());
-                result.put(commentId, new CounterSnapshot(likeCount, replyCount));
-            }
-            return result;
-        } catch (Exception ignored) {
-            return fallback;
-        }
-    }
-
-    private CounterSnapshot counterSnapshotOf(CommentPO po, Map<Long, CounterSnapshot> counterByCommentId) {
-        if (po == null || po.getCommentId() == null) {
-            return CounterSnapshot.ZERO;
-        }
-        CounterSnapshot counter = counterByCommentId == null ? null : counterByCommentId.get(po.getCommentId());
-        if (counter != null) {
-            return counter;
-        }
-        return new CounterSnapshot(safeLong(po.getLikeCount()), safeLong(po.getReplyCount()));
-    }
-
-    private ObjectCounterTarget commentCounterTarget(Long commentId, ObjectCounterType counterType) {
-        return ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.COMMENT)
-                .targetId(commentId)
-                .counterType(counterType)
-                .build();
-    }
-
-    private long countOf(Map<String, Long> countByTag, ObjectCounterTarget target, long fallback) {
-        if (countByTag == null || target == null) {
-            return fallback;
-        }
-        Long count = countByTag.get(target.hashTag());
-        return count == null ? fallback : safeLong(count);
-    }
-
-    private long safeLong(Long value) {
-        return value == null ? 0L : Math.max(0L, value);
-    }
-
-    private record CounterSnapshot(Long likeCount, Long replyCount) {
-        private static final CounterSnapshot ZERO = new CounterSnapshot(0L, 0L);
     }
 
     private static final class Cursor {

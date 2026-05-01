@@ -6,10 +6,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.social.adapter.port.IReactionCachePort;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedCardRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
@@ -17,8 +15,6 @@ import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.List;
 import java.util.Map;
@@ -29,21 +25,19 @@ import org.mockito.Mockito;
 class FeedCardAssembleServiceTest {
 
     @Test
-    void assemble_shouldLoadLikeCountFromReactionCacheBatch() {
+    void assemble_shouldLoadLikeAndFavoriteCountFromPostCounterBatch() {
         IFeedCardRepository feedCardRepository = Mockito.mock(IFeedCardRepository.class);
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IUserBaseRepository userBaseRepository = Mockito.mock(IUserBaseRepository.class);
-        IReactionCachePort reactionCachePort = Mockito.mock(IReactionCachePort.class);
         RelationQueryService relationQueryService = Mockito.mock(RelationQueryService.class);
         IFeedFollowSeenRepository feedFollowSeenRepository = Mockito.mock(IFeedFollowSeenRepository.class);
 
         FeedCardAssembleService service = new FeedCardAssembleService(
                 feedCardRepository,
-                objectCounterPort,
+                objectCounterService,
                 contentRepository,
                 userBaseRepository,
-                reactionCachePort,
                 relationQueryService,
                 feedFollowSeenRepository
         );
@@ -58,17 +52,15 @@ class FeedCardAssembleServiceTest {
                 .thenReturn(Map.of(101L, base));
         when(userBaseRepository.listByUserIds(List.of(201L)))
                 .thenReturn(List.of(UserBriefVO.builder().userId(201L).nickname("author").avatarUrl("a.png").build()));
-        when(reactionCachePort.getState(eq(1L), any(ReactionTargetVO.class))).thenReturn(false);
+        when(objectCounterService.isPostLiked(eq(101L), eq(1L))).thenReturn(false);
+        when(objectCounterService.isPostFaved(eq(101L), eq(1L))).thenReturn(true);
         when(relationQueryService.batchFollowing(eq(1L), eq(List.of(201L)))).thenReturn(Set.of());
         when(feedFollowSeenRepository.batchSeen(eq(1L), eq(List.of(101L)))).thenReturn(Set.of());
 
-        ObjectCounterTarget target = ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(101L)
-                .counterType(ObjectCounterType.LIKE)
-                .build();
-        when(objectCounterPort.batchGetCount(any()))
-                .thenReturn(Map.of(target.hashTag(), 8L));
+        when(objectCounterService.getPostCountsBatch(
+                eq(List.of(101L)),
+                eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV))
+        )).thenReturn(Map.of(101L, Map.of("like", 8L, "fav", 3L)));
 
         List<FeedItemVO> items = service.assemble(
                 1L,
@@ -79,6 +71,10 @@ class FeedCardAssembleServiceTest {
 
         assertEquals(1, items.size());
         assertEquals(8L, items.get(0).getLikeCount());
-        verify(objectCounterPort).batchGetCount(any());
+        assertEquals(3L, items.get(0).getFavoriteCount());
+        assertEquals(true, items.get(0).getFaved());
+        verify(objectCounterService).getPostCountsBatch(
+                eq(List.of(101L)),
+                eq(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV)));
     }
 }

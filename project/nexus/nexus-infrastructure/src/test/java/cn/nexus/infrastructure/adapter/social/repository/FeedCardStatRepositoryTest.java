@@ -5,11 +5,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -18,27 +16,21 @@ import org.mockito.Mockito;
 class FeedCardStatRepositoryTest {
 
     @Test
-    void getBatch_shouldAdaptReactionCachePort() {
-        IObjectCounterPort objectCounterPort = Mockito.mock(IObjectCounterPort.class);
-        FeedCardStatRepository repository = new FeedCardStatRepository(objectCounterPort);
+    void getBatch_shouldAdaptObjectCounterService() {
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
+        FeedCardStatRepository repository = new FeedCardStatRepository(objectCounterService);
 
-        ObjectCounterTarget first = target(1L);
-        ObjectCounterTarget second = target(2L);
-        when(objectCounterPort.batchGetCount(any()))
-                .thenReturn(Map.of(first.hashTag(), 3L, second.hashTag(), 9L));
+        when(objectCounterService.getPostCountsBatch(
+                List.of(1L, 2L),
+                List.of(ObjectCounterType.LIKE)))
+                .thenReturn(Map.of(
+                        1L, Map.of("like", 3L),
+                        2L, Map.of("like", 9L)));
 
         Map<Long, FeedCardStatVO> result = repository.getBatch(List.of(1L, 2L));
 
         assertEquals(3L, result.get(1L).getLikeCount());
         assertEquals(9L, result.get(2L).getLikeCount());
-        verify(objectCounterPort).batchGetCount(any());
-    }
-
-    private ObjectCounterTarget target(Long postId) {
-        return ObjectCounterTarget.builder()
-                .targetType(ReactionTargetTypeEnumVO.POST)
-                .targetId(postId)
-                .counterType(ObjectCounterType.LIKE)
-                .build();
+        verify(objectCounterService).getPostCountsBatch(any(), any());
     }
 }

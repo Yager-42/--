@@ -6,3 +6,6 @@
 
 # Local runtime logs
 nexus-app/logs/
+
+# Local tool cache
+.toolcache/

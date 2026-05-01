@@ -1,7 +1,6 @@
 package cn.nexus.infrastructure.dao.auth;
 
 import cn.nexus.infrastructure.dao.auth.po.AuthAccountPO;
-import cn.nexus.infrastructure.dao.auth.po.AuthSmsCodePO;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Date;
@@ -30,9 +29,7 @@ class AuthMapperContractTest {
         configuration = new Configuration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(IAuthAccountDao.class);
-        configuration.addMapper(IAuthSmsCodeDao.class);
         parseMapper("mapper/auth/AuthAccountMapper.xml");
-        parseMapper("mapper/auth/AuthSmsCodeMapper.xml");
     }
 
     @Test
@@ -122,114 +119,6 @@ class AuthMapperContractTest {
                 touchLastLoginParam,
                 "lastLoginAt",
                 "userId"
-        );
-    }
-
-    @Test
-    void authSmsCodeMapper_shouldSupportInsertInvalidatePreviousFindLatestAndMarkUsed() {
-        AuthSmsCodePO smsCode = new AuthSmsCodePO();
-        smsCode.setBizType("REGISTER");
-        smsCode.setPhone("13800000002");
-        smsCode.setCodeHash("code-hash-v1");
-        smsCode.setExpireAt(new Date());
-        smsCode.setVerifyFailCount(0);
-        smsCode.setSendStatus("SENT");
-        smsCode.setRequestIp("127.0.0.1");
-        smsCode.setLatestFlag(1);
-
-        Map<String, Object> invalidateParam = Map.of(
-                "phone", "13800000002",
-                "bizType", "REGISTER"
-        );
-        assertSqlContains(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.invalidateLatest",
-                invalidateParam,
-                "update auth_sms_code",
-                "set latest_flag = 0",
-                "where phone = ?",
-                "and biz_type = ?",
-                "and latest_flag = 1"
-        );
-        assertParameterOrder(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.invalidateLatest",
-                invalidateParam,
-                "phone",
-                "bizType"
-        );
-
-        assertSqlContains(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.insert",
-                smsCode,
-                "insert into auth_sms_code",
-                "biz_type",
-                "phone",
-                "code_hash",
-                "expire_at",
-                "used_at",
-                "verify_fail_count",
-                "send_status",
-                "request_ip",
-                "latest_flag",
-                "now()"
-        );
-        assertGeneratedKey(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.insert",
-                "id"
-        );
-
-        Map<String, Object> selectLatestParam = Map.of(
-                "phone", "13800000002",
-                "bizType", "REGISTER"
-        );
-        assertSqlContains(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.selectLatestActive",
-                selectLatestParam,
-                "select id, biz_type, phone, code_hash, expire_at, used_at, verify_fail_count, send_status, request_ip, latest_flag, create_time",
-                "from auth_sms_code",
-                "where phone = ?",
-                "and biz_type = ?",
-                "and latest_flag = 1",
-                "and used_at is null",
-                "order by id desc",
-                "limit 1"
-        );
-        assertParameterOrder(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.selectLatestActive",
-                selectLatestParam,
-                "phone",
-                "bizType"
-        );
-
-        assertSqlContains(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.incrementVerifyFail",
-                Map.of("id", 99L),
-                "update auth_sms_code",
-                "set verify_fail_count = verify_fail_count + 1",
-                "where id = ?"
-        );
-        assertParameterOrder(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.incrementVerifyFail",
-                Map.of("id", 99L),
-                "id"
-        );
-
-        Map<String, Object> markUsedParam = Map.of(
-                "id", 99L,
-                "usedAt", new Date()
-        );
-        assertSqlContains(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.markUsed",
-                markUsedParam,
-                "update auth_sms_code",
-                "set used_at = ?",
-                "latest_flag = 0",
-                "where id = ?"
-        );
-        assertParameterOrder(
-                "cn.nexus.infrastructure.dao.auth.IAuthSmsCodeDao.markUsed",
-                markUsedParam,
-                "usedAt",
-                "id"
         );
     }
 

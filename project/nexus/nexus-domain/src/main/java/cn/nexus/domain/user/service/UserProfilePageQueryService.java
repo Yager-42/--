@@ -1,7 +1,7 @@
 package cn.nexus.domain.user.service;
 
-import cn.nexus.domain.counter.adapter.port.IUserCounterPort;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
+import cn.nexus.domain.counter.adapter.service.IUserCounterService;
+import cn.nexus.domain.counter.model.valobj.UserRelationCounterVO;
 import cn.nexus.domain.social.adapter.port.IRelationPolicyPort;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.RelationEntity;
@@ -39,7 +39,7 @@ public class UserProfilePageQueryService {
     private final IUserProfileRepository userProfileRepository;
     private final IUserStatusRepository userStatusRepository;
     private final IRelationRepository relationRepository;
-    private final IUserCounterPort userCounterPort;
+    private final IUserCounterService userCounterService;
     private final IRelationPolicyPort relationPolicyPort;
     private final IRiskService riskService;
     private final Executor aggregationExecutor;
@@ -47,14 +47,14 @@ public class UserProfilePageQueryService {
     public UserProfilePageQueryService(IUserProfileRepository userProfileRepository,
                                       IUserStatusRepository userStatusRepository,
                                       IRelationRepository relationRepository,
-                                      IUserCounterPort userCounterPort,
+                                      IUserCounterService userCounterService,
                                       IRelationPolicyPort relationPolicyPort,
                                       IRiskService riskService,
                                       @Qualifier("aggregationExecutor") Executor aggregationExecutor) {
         this.userProfileRepository = userProfileRepository;
         this.userStatusRepository = userStatusRepository;
         this.relationRepository = relationRepository;
-        this.userCounterPort = userCounterPort;
+        this.userCounterService = userCounterService;
         this.relationPolicyPort = relationPolicyPort;
         this.riskService = riskService;
         this.aggregationExecutor = aggregationExecutor;
@@ -87,11 +87,8 @@ public class UserProfilePageQueryService {
         CompletableFuture<String> statusFuture = CompletableFuture.supplyAsync(
                 () -> userStatusRepository.getStatus(targetUserId),
                 aggregationExecutor);
-        CompletableFuture<Long> followCountFuture = CompletableFuture.supplyAsync(
-                () -> userCounterPort.getCount(targetUserId, UserCounterType.FOLLOWING),
-                aggregationExecutor);
-        CompletableFuture<Long> followerCountFuture = CompletableFuture.supplyAsync(
-                () -> userCounterPort.getCount(targetUserId, UserCounterType.FOLLOWER),
+        CompletableFuture<UserRelationCounterVO> relationCountersFuture = CompletableFuture.supplyAsync(
+                () -> userCounterService.readRelationCountersWithVerification(targetUserId),
                 aggregationExecutor);
         CompletableFuture<Boolean> isFollowFuture = viewerId.equals(targetUserId)
                 ? CompletableFuture.completedFuture(false)
@@ -105,20 +102,27 @@ public class UserProfilePageQueryService {
                 aggregationExecutor);
 
         try {
-            CompletableFuture.allOf(statusFuture, followCountFuture, followerCountFuture, isFollowFuture, riskFuture)
+            CompletableFuture.allOf(statusFuture, relationCountersFuture, isFollowFuture, riskFuture)
                     .join();
         } catch (CompletionException e) {
             throw unwrapCompletionException(e);
         }
 
         String status = statusFuture.join();
-        long followCount = followCountFuture.join();
-        long followerCount = followerCountFuture.join();
+        UserRelationCounterVO relationCounters = relationCountersFuture.join();
         boolean isFollow = isFollowFuture.join();
         UserRiskStatusVO risk = riskFuture.join();
+        long followings = relationCounters == null ? 0L : relationCounters.getFollowings();
+        long followers = relationCounters == null ? 0L : relationCounters.getFollowers();
+        long posts = relationCounters == null ? 0L : relationCounters.getPosts();
+        long likesReceived = relationCounters == null ? 0L : relationCounters.getLikesReceived();
+        long favsReceived = relationCounters == null ? 0L : relationCounters.getFavsReceived();
         UserRelationStatsVO relation = UserRelationStatsVO.builder()
-                .followCount(followCount)
-                .followerCount(followerCount)
+                .followings(followings)
+                .followers(followers)
+                .posts(posts)
+                .likesReceived(likesReceived)
+                .favsReceived(favsReceived)
                 .isFollow(isFollow)
                 .build();
         return UserProfilePageVO.builder()

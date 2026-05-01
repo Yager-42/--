@@ -32,4 +32,7 @@ public class ContentDetailResponseDTO {
     private Long createTime;
 
     private Long likeCount;
+    private Long favoriteCount;
+    private Boolean liked;
+    private Boolean faved;
 }

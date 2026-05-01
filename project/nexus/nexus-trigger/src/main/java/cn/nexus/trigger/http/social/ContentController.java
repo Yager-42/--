@@ -211,8 +211,8 @@ public class ContentController implements IContentApi {
     public Response<ContentDetailResponseDTO> detail(@PathVariable("postId") Long postId,
                                                      @RequestParam(value = "userId", required = false) Long ignoredUserId) {
         try {
-            UserContext.requireUserId();
-            ContentDetailResponseDTO dto = contentDetailQueryService.query(postId);
+            Long userId = UserContext.getUserId();
+            ContentDetailResponseDTO dto = contentDetailQueryService.query(postId, userId);
             return Response.success(ResponseCode.SUCCESS.getCode(), ResponseCode.SUCCESS.getInfo(), dto);
         } catch (AppException e) {
             return Response.<ContentDetailResponseDTO>builder().code(e.getCode()).info(e.getInfo()).build();

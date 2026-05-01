@@ -51,6 +51,22 @@ public interface IContentRepository {
     ContentPostEntity findPostMeta(Long postId);
 
     /**
+     * 统计用户已发布内容数量。
+     *
+     * @param userId 用户 ID
+     * @return 已发布内容数
+     */
+    long countPublishedPostsByUser(Long userId);
+
+    /**
+     * 列举用户已发布内容及其当前展示点赞数（best-effort）。
+     *
+     * @param userId 用户 ID
+     * @return 仅包含 postId 的内容列表；点赞数由调用方通过计数服务读取
+     */
+    List<ContentPostEntity> listPublishedPostIdsByUser(Long userId);
+
+    /**
      * 批量查询已发布内容（用于 timeline 批量回表）。
      *
      * @param postIds 内容 ID 列表

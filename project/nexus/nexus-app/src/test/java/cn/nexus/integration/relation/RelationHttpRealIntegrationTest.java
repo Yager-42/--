@@ -6,7 +6,7 @@ import static org.awaitility.Awaitility.await;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
 import cn.nexus.trigger.job.social.RelationEventOutboxPublishJob;
-import cn.nexus.trigger.mq.config.RelationMqConfig;
+import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
 import cn.nexus.types.enums.ContentPostVisibilityEnumVO;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -17,6 +17,7 @@ import java.sql.ResultSet;
 import java.time.Duration;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -60,7 +61,7 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             publishPendingRelationEvents();
             assertThat(relationOutboxStatus(followEventId)).isEqualTo("DONE");
-            assertThat(relationInboxStatus(String.valueOf(followEventId))).isEqualTo("PROCESSED");
+            assertThat(relationConsumerStatus(followEventId)).isEqualTo("DONE");
             assertThat(inboxEntries(follower.userId(), 20))
                     .extracting(item -> item.getPostId())
                     .contains(postId);
@@ -74,6 +75,13 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertThat(followers.path("items"))
                 .extracting(JsonNode::toString)
                 .anySatisfy(raw -> assertThat(raw).contains("\"userId\":" + follower.userId()));
+        JsonNode followerCounter = assertSuccess(getJson("/api/v1/relation/counter", follower.token()));
+        assertThat(followerCounter.fieldNames()).toIterable()
+                .containsExactlyInAnyOrder("followings", "followers", "posts", "likesReceived", "favsReceived");
+        assertThat(followerCounter.path("followings").asLong()).isGreaterThanOrEqualTo(1L);
+        JsonNode followeeCounter = assertSuccess(getJson("/api/v1/relation/counter", followee.token()));
+        assertThat(followeeCounter.path("followers").asLong()).isGreaterThanOrEqualTo(1L);
+        assertThat(followeeCounter.path("posts").asLong()).isGreaterThanOrEqualTo(1L);
 
         JsonNode unfollow = postJson("/api/v1/relation/unfollow", JsonNodeFactory.instance.objectNode()
                 .put("targetId", followee.userId()), follower.token());
@@ -90,7 +98,7 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                 {
                     publishPendingRelationEvents();
                     assertThat(relationOutboxStatus(unfollowEventId)).isEqualTo("DONE");
-                    assertThat(relationInboxStatus(String.valueOf(unfollowEventId))).isEqualTo("PROCESSED");
+                    assertThat(relationConsumerStatus(unfollowEventId)).isEqualTo("DONE");
                 });
     }
 
@@ -125,8 +133,53 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                 {
                     publishPendingRelationEvents();
                     assertThat(relationOutboxStatus(blockEventId)).isEqualTo("DONE");
-                    assertThat(relationInboxStatus(String.valueOf(blockEventId))).isEqualTo("PROCESSED");
+                    assertThat(relationConsumerStatus(blockEventId)).isEqualTo("DONE");
                 });
+    }
+
+    @Test
+    void relationCounter_shouldRebuildMissingOrDamagedUcntAndSampleVerifyOnlyRelationSlots() throws Exception {
+        TestSession user = registerAndLoginSession("counter-user");
+        TestSession follower = registerAndLoginSession("counter-follower");
+        TestSession followed = registerAndLoginSession("counter-followed");
+        ensureRelationTopology();
+        ensureRelationConsumersReady();
+        seedPublishedPost(user.userId());
+
+        assertSuccess(postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
+                .put("targetId", user.userId()), follower.token()));
+        assertSuccess(postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
+                .put("targetId", followed.userId()), user.token()));
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            publishPendingRelationEvents();
+            JsonNode counter = assertSuccess(getJson("/api/v1/relation/counter", user.token()));
+            assertThat(counter.path("followers").asLong()).isGreaterThanOrEqualTo(1L);
+            assertThat(counter.path("followings").asLong()).isGreaterThanOrEqualTo(1L);
+        });
+
+        deleteRedisKey("ucnt:" + user.userId());
+        JsonNode rebuilt = assertSuccess(getJson("/api/v1/relation/counter", user.token()));
+        assertThat(rebuilt.path("followers").asLong()).isGreaterThanOrEqualTo(1L);
+        assertThat(rebuilt.path("followings").asLong()).isGreaterThanOrEqualTo(1L);
+
+        writeRawRedisValue("ucnt:" + user.userId(), new byte[]{1, 2, 3});
+        JsonNode repaired = assertSuccess(getJson("/api/v1/relation/counter", user.token()));
+        assertThat(repaired.path("followers").asLong()).isGreaterThanOrEqualTo(1L);
+        assertThat(repaired.path("followings").asLong()).isGreaterThanOrEqualTo(1L);
+
+        deleteRedisKey("ucnt:chk:" + user.userId());
+        long truthFollowings = repaired.path("followings").asLong();
+        long truthFollowers = repaired.path("followers").asLong();
+        writeUserSnapshot(user.userId(), new long[]{truthFollowings, truthFollowers, 123L, 456L, 0L});
+        JsonNode sampled = assertSuccess(getJson("/api/v1/relation/counter", user.token()));
+        assertThat(sampled.path("followings").asLong()).isEqualTo(truthFollowings);
+        assertThat(sampled.path("followers").asLong()).isEqualTo(truthFollowers);
+        assertThat(sampled.path("posts").asLong()).isEqualTo(123L);
+        assertThat(sampled.path("likesReceived").asLong()).isEqualTo(456L);
+        assertThat(sampled.path("favsReceived").asLong()).isZero();
+        assertThat(stringRedisTemplate.getExpire("ucnt:chk:" + user.userId(), TimeUnit.SECONDS))
+                .isBetween(1L, 300L);
     }
 
     @Test
@@ -164,11 +217,22 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
     private void ensureRelationTopology() {
         rabbitTemplate.execute(channel -> {
-            channel.exchangeDeclare(RelationMqConfig.EXCHANGE, "direct", true);
-            channel.queueDeclare(RelationMqConfig.Q_FOLLOW, true, false, false, null);
-            channel.queueDeclare(RelationMqConfig.Q_BLOCK, true, false, false, null);
-            channel.queueBind(RelationMqConfig.Q_FOLLOW, RelationMqConfig.EXCHANGE, RelationMqConfig.RK_FOLLOW);
-            channel.queueBind(RelationMqConfig.Q_BLOCK, RelationMqConfig.EXCHANGE, RelationMqConfig.RK_BLOCK);
+            channel.exchangeDeclare(RelationCounterRouting.EXCHANGE, "direct", true);
+            channel.exchangeDeclare(RelationCounterRouting.DLX_EXCHANGE, "direct", true);
+            channel.queueDeclare(RelationCounterRouting.Q_FOLLOW, true, false, false, java.util.Map.of(
+                    "x-dead-letter-exchange", RelationCounterRouting.DLX_EXCHANGE,
+                    "x-dead-letter-routing-key", RelationCounterRouting.RK_FOLLOW_DLX
+            ));
+            channel.queueDeclare(RelationCounterRouting.Q_BLOCK, true, false, false, java.util.Map.of(
+                    "x-dead-letter-exchange", RelationCounterRouting.DLX_EXCHANGE,
+                    "x-dead-letter-routing-key", RelationCounterRouting.RK_BLOCK_DLX
+            ));
+            channel.queueDeclare(RelationCounterRouting.DLQ_FOLLOW, true, false, false, null);
+            channel.queueDeclare(RelationCounterRouting.DLQ_BLOCK, true, false, false, null);
+            channel.queueBind(RelationCounterRouting.Q_FOLLOW, RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_FOLLOW);
+            channel.queueBind(RelationCounterRouting.Q_BLOCK, RelationCounterRouting.EXCHANGE, RelationCounterRouting.RK_BLOCK);
+            channel.queueBind(RelationCounterRouting.DLQ_FOLLOW, RelationCounterRouting.DLX_EXCHANGE, RelationCounterRouting.RK_FOLLOW_DLX);
+            channel.queueBind(RelationCounterRouting.DLQ_BLOCK, RelationCounterRouting.DLX_EXCHANGE, RelationCounterRouting.RK_BLOCK_DLX);
             return null;
         });
     }
@@ -177,8 +241,8 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         // 真实链路测试依赖 MQ listener 已就绪，否则 publish 会变成“无消费者 + 20s 超时”的随机失败。
         startRabbitListenerContainers();
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(queueConsumerCount(RelationMqConfig.Q_FOLLOW)).isGreaterThan(0);
-            assertThat(queueConsumerCount(RelationMqConfig.Q_BLOCK)).isGreaterThan(0);
+            assertThat(queueConsumerCount(RelationCounterRouting.Q_FOLLOW)).isGreaterThan(0);
+            assertThat(queueConsumerCount(RelationCounterRouting.Q_BLOCK)).isGreaterThan(0);
         });
     }
 
@@ -240,13 +304,14 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         }
     }
 
-    private String relationInboxStatus(String fingerprint) {
-        if (fingerprint == null || fingerprint.isBlank()) {
+    private String relationConsumerStatus(Long eventId) {
+        if (eventId == null || eventId <= 0) {
             return null;
         }
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement("SELECT status FROM relation_event_inbox WHERE fingerprint = ?")) {
-            ps.setString(1, fingerprint.trim());
+             PreparedStatement ps = conn.prepareStatement("SELECT status FROM reliable_mq_consumer_record WHERE event_id = ? AND consumer_name = ?")) {
+            ps.setString(1, "relation-counter:" + eventId);
+            ps.setString(2, "RelationCounterProjectConsumer");
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     return null;
@@ -254,7 +319,7 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                 return rs.getString(1);
             }
         } catch (Exception e) {
-            throw new IllegalStateException("query relation_event_inbox failed, fingerprint=" + fingerprint, e);
+            throw new IllegalStateException("query relation consumer record failed, eventId=" + eventId, e);
         }
     }
 
@@ -279,6 +344,18 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     private void publishPendingRelationEvents() {
         execUpdate("UPDATE relation_event_outbox SET next_retry_time = NOW() WHERE status IN ('NEW','FAIL')");
         relationEventOutboxPublishJob.publishPending();
+    }
+
+    private void writeUserSnapshot(long userId, long[] slots) {
+        writeRawRedisValue("ucnt:" + userId,
+                cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec.encodeSlots(slots, 5));
+    }
+
+    private void writeRawRedisValue(String key, byte[] payload) {
+        stringRedisTemplate.execute((org.springframework.data.redis.core.RedisCallback<Boolean>) connection -> {
+            connection.stringCommands().set(key.getBytes(java.nio.charset.StandardCharsets.UTF_8), payload);
+            return true;
+        });
     }
 
     private TestSession registerAndLoginSession(String nicknamePrefix) throws Exception {

@@ -22,10 +22,6 @@ public interface ICommentDao {
 
     int rejectPending(@Param("commentId") Long commentId, @Param("updateTime") java.util.Date updateTime);
 
-    int addReplyCount(@Param("commentId") Long commentId, @Param("delta") Long delta);
-
-    int addLikeCount(@Param("commentId") Long commentId, @Param("delta") Long delta);
-
     List<Long> pageRootIds(@Param("postId") Long postId,
                            @Param("pinnedId") Long pinnedId,
                            @Param("cursorTime") java.util.Date cursorTime,

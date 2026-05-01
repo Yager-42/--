@@ -1,11 +1,9 @@
 package cn.nexus.infrastructure.adapter.social.repository;
 
-import cn.nexus.domain.counter.adapter.port.IObjectCounterPort;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
+import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +23,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 @RequiredArgsConstructor
 public class FeedCardStatRepository implements IFeedCardStatRepository {
-    private final IObjectCounterPort objectCounterPort;
+    private final IObjectCounterService objectCounterService;
     private final SingleFlight singleFlight = new SingleFlight();
 
     /**
@@ -40,27 +38,26 @@ public class FeedCardStatRepository implements IFeedCardStatRepository {
             return Map.of();
         }
 
-        List<ObjectCounterTarget> targets = new java.util.ArrayList<>(postIds.size());
+        List<Long> normalizedPostIds = new java.util.ArrayList<>(postIds.size());
         for (Long postId : postIds) {
             if (postId == null) {
                 continue;
             }
-            targets.add(ObjectCounterTarget.builder()
-                    .targetType(ReactionTargetTypeEnumVO.POST)
-                    .targetId(postId)
-                    .counterType(ObjectCounterType.LIKE)
-                    .build());
+            normalizedPostIds.add(postId);
         }
-        if (targets.isEmpty()) {
+        if (normalizedPostIds.isEmpty()) {
             return Map.of();
         }
 
-        Map<String, Long> countByTag = objectCounterPort.batchGetCount(targets);
-        Map<Long, FeedCardStatVO> result = new HashMap<>(targets.size());
-        for (ObjectCounterTarget target : targets) {
-            Long count = countByTag.get(target.hashTag());
-            result.put(target.getTargetId(), FeedCardStatVO.builder()
-                    .postId(target.getTargetId())
+        Map<Long, Map<String, Long>> countById = objectCounterService.getPostCountsBatch(
+                normalizedPostIds,
+                List.of(ObjectCounterType.LIKE));
+        Map<Long, FeedCardStatVO> result = new HashMap<>(normalizedPostIds.size());
+        for (Long postId : normalizedPostIds) {
+            Map<String, Long> counts = countById == null ? null : countById.get(postId);
+            Long count = counts == null ? null : counts.get("like");
+            result.put(postId, FeedCardStatVO.builder()
+                    .postId(postId)
                     .likeCount(count == null ? 0L : count)
                     .build());
         }

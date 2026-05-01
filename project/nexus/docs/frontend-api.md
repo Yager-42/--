@@ -98,7 +98,8 @@ export async function uploadFile(file: File): Promise<string> {
   - 拿当前登录信息：`GET /api/v1/auth/me`
 - 首页/关注流
   - 拉时间线：`GET /api/v1/feed/timeline`
-  - 点赞/收藏/评论等动作：`POST /api/v1/interact/reaction`、`POST /api/v1/interact/comment`
+  - 点赞/收藏：`POST /api/v1/action/like`、`POST /api/v1/action/unlike`、`POST /api/v1/action/fav`、`POST /api/v1/action/unfav`
+  - 评论：`POST /api/v1/interact/comment`
 - 内容详情页
   - 内容详情：`GET /api/v1/content/{postId}`
   - 热门评论：`GET /api/v1/comment/hot`
@@ -160,10 +161,13 @@ export async function uploadFile(file: File): Promise<string> {
 | `GET` | `/api/v1/feed/profile/{targetId}` | 是 | `` | `FeedController#profile` | `` | `FeedTimelineResponseDTO` |
 | `GET` | `/api/v1/feed/timeline` | 是 | `` | `FeedController#timeline` | `` | `FeedTimelineResponseDTO` |
 | `GET` | `/api/v1/health` | 否 | `` | `SystemHealthController#health` | `` | `SystemHealthResponseDTO` |
+| `POST` | `/api/v1/action/like` | 是 | `` | `ActionController#like` | `ActionRequestDTO` | `ActionResponseDTO` |
+| `POST` | `/api/v1/action/unlike` | 是 | `` | `ActionController#unlike` | `ActionRequestDTO` | `ActionResponseDTO` |
+| `POST` | `/api/v1/action/fav` | 是 | `` | `ActionController#fav` | `ActionRequestDTO` | `ActionResponseDTO` |
+| `POST` | `/api/v1/action/unfav` | 是 | `` | `ActionController#unfav` | `ActionRequestDTO` | `ActionResponseDTO` |
+| `GET` | `/api/v1/counter/post/{postId}` | 是 | `` | `CounterController#postCounter` | `` | `PostCounterResponseDTO` |
 | `POST` | `/api/v1/interact/comment` | 是 | `` | `InteractionController#comment` | `CommentRequestDTO` | `CommentResponseDTO` |
 | `POST` | `/api/v1/interact/comment/pin` | 是 | `` | `InteractionController#pinComment` | `PinCommentRequestDTO` | `OperationResultDTO` |
-| `POST` | `/api/v1/interact/reaction` | 是 | `` | `InteractionController#react` | `ReactionRequestDTO` | `ReactionResponseDTO` |
-| `GET` | `/api/v1/interact/reaction/state` | 是 | `` | `InteractionController#reactionState` | `` | `ReactionStateResponseDTO` |
 | `POST` | `/api/v1/internal/user/upsert` | 是 | `` | `InternalUserController#upsert` | `UserInternalUpsertRequestDTO` | `OperationResultDTO` |
 | `POST` | `/api/v1/media/upload/session` | 是 | `` | `ContentController#createUploadSession` | `UploadSessionRequestDTO` | `UploadSessionResponseDTO` |
 | `GET` | `/api/v1/notification/list` | 是 | `` | `InteractionController#notifications` | `` | `NotificationListResponseDTO` |
@@ -370,35 +374,54 @@ export async function uploadFile(file: File): Promise<string> {
     - `message`: `String`
 - 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
 
-#### `POST /api/v1/interact/reaction`
+#### `POST /api/v1/action/like`
 
 - 鉴权：需要登录
 - 请求体（JSON）：
-  - 类型：`ReactionRequestDTO`
-  - `requestId`: `String`
+  - 类型：`ActionRequestDTO`
+  - `targetType`: `String`，固定为 `post`
   - `targetId`: `Long`
-  - `targetType`: `String`
-  - `type`: `String`
-  - `action`: `String`
+  - `requestId`: `String`
 - 响应：统一 `Response` 壳，成功 `code=0000`
   - `data` 字段：
-    - `requestId`: `String`
-    - `currentCount`: `Long`
-    - `success`: `boolean`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
+    - `changed`: `boolean`
+    - `liked`: `boolean`
+    - `faved`: `boolean`
+    - `likeCount`: `long`
+    - `favoriteCount`: `long`
+- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/ActionController.java`
 
-#### `GET /api/v1/interact/reaction/state`
+#### `POST /api/v1/action/unlike`
 
 - 鉴权：需要登录
-- Query 参数（来自 DTO 字段）：
-  - `targetId`: `Long`
-  - `targetType`: `String`
-  - `type`: `String`
+- 请求体（JSON）：同 `POST /api/v1/action/like`
+- 响应：同 `POST /api/v1/action/like`
+- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/ActionController.java`
+
+#### `POST /api/v1/action/fav`
+
+- 鉴权：需要登录
+- 请求体（JSON）：同 `POST /api/v1/action/like`
+- 响应：同 `POST /api/v1/action/like`
+- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/ActionController.java`
+
+#### `POST /api/v1/action/unfav`
+
+- 鉴权：需要登录
+- 请求体（JSON）：同 `POST /api/v1/action/like`
+- 响应：同 `POST /api/v1/action/like`
+- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/ActionController.java`
+
+#### `GET /api/v1/counter/post/{postId}`
+
+- 鉴权：需要登录
+- Query 参数：
+  - `metrics`: `String`，可选，逗号分隔；允许 `like`、`fav`，默认 `like,fav`
 - 响应：统一 `Response` 壳，成功 `code=0000`
   - `data` 字段：
-    - `state`: `boolean`
-    - `currentCount`: `Long`
-- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/InteractionController.java`
+    - `postId`: `Long`
+    - `counts`: `Map<String, Long>`
+- 代码位置：`project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/http/social/CounterController.java`
 
 #### `GET /api/v1/notification/list`
 
@@ -1394,6 +1417,8 @@ export async function uploadFile(file: File): Promise<string> {
 - `AuthTokenResponseDTO`
 - `BlockRequestDTO`
 - `BlockResponseDTO`
+- `ActionRequestDTO`
+- `ActionResponseDTO`
 - `CommentHotResponseDTO`
 - `CommentListResponseDTO`
 - `CommentReplyListResponseDTO`
@@ -1424,12 +1449,10 @@ export async function uploadFile(file: File): Promise<string> {
 - `NotificationReadRequestDTO`
 - `OperationResultDTO`
 - `PinCommentRequestDTO`
+- `PostCounterResponseDTO`
 - `PublishAttemptResponseDTO`
 - `PublishContentRequestDTO`
 - `PublishContentResponseDTO`
-- `ReactionRequestDTO`
-- `ReactionResponseDTO`
-- `ReactionStateResponseDTO`
 - `RelationListResponseDTO`
 - `RelationStateBatchRequestDTO`
 - `RelationStateBatchResponseDTO`
@@ -2429,56 +2452,59 @@ export async function uploadFile(file: File): Promise<string> {
 }
 ```
 
-### `ReactionRequestDTO`
+### `ActionRequestDTO`
 
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionRequestDTO.java`
+- 来源：`nexus-api/src/main/java/cn/nexus/api/social/action/dto/ActionRequestDTO.java`
 - 字段：
-  - `requestId`: `String`
-  - `targetId`: `Long`
   - `targetType`: `String`
-  - `type`: `String`
-  - `action`: `String`
-
-示例 JSON：
-```json
-{
-  "requestId": "string",
-  "targetId": 0,
-  "targetType": "string",
-  "type": "string",
-  "action": "string"
-}
-```
-
-### `ReactionResponseDTO`
-
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionResponseDTO.java`
-- 字段：
+  - `targetId`: `Long`
   - `requestId`: `String`
-  - `currentCount`: `Long`
-  - `success`: `boolean`
 
 示例 JSON：
 ```json
 {
-  "requestId": "string",
-  "currentCount": 0,
-  "success": false
+  "targetType": "post",
+  "targetId": 0,
+  "requestId": "string"
 }
 ```
 
-### `ReactionStateResponseDTO`
+### `ActionResponseDTO`
 
-- 来源：`nexus-api/src/main/java/cn/nexus/api/social/interaction/dto/ReactionStateResponseDTO.java`
+- 来源：`nexus-api/src/main/java/cn/nexus/api/social/action/dto/ActionResponseDTO.java`
 - 字段：
-  - `state`: `boolean`
-  - `currentCount`: `Long`
+  - `changed`: `boolean`
+  - `liked`: `boolean`
+  - `faved`: `boolean`
+  - `likeCount`: `long`
+  - `favoriteCount`: `long`
 
 示例 JSON：
 ```json
 {
-  "state": false,
-  "currentCount": 0
+  "changed": true,
+  "liked": true,
+  "faved": false,
+  "likeCount": 1,
+  "favoriteCount": 0
+}
+```
+
+### `PostCounterResponseDTO`
+
+- 来源：`nexus-api/src/main/java/cn/nexus/api/social/counter/dto/PostCounterResponseDTO.java`
+- 字段：
+  - `postId`: `Long`
+  - `counts`: `Map<String, Long>`
+
+示例 JSON：
+```json
+{
+  "postId": 0,
+  "counts": {
+    "like": 0,
+    "fav": 0
+  }
 }
 ```
 

@@ -146,7 +146,7 @@ These invariants are not optional and must be encoded in tests before implementa
 - Create: `nexus-app/src/test/java/cn/nexus/contract/counter/StrictZhiguangCounterBoundaryTest.java`
 - Modify after test failure: none in this task
 
-- [ ] **Step 1: Write the failing boundary test**
+- [x] **Step 1: Write the failing boundary test**
 
 The test must recursively scan these active paths:
 
@@ -193,7 +193,7 @@ Allowed files:
 - historical/reference docs outside `docs/frontend-api.md`, `docs/nexus_final_mysql_schema.sql`, `docs/social_schema.sql`, and `docs/migrations/**`
 - newly created drop migrations that mention removed table names
 
-- [ ] **Step 2: Run the boundary test and confirm it fails**
+- [x] **Step 2: Run the boundary test and confirm it fails**
 
 Run:
 
@@ -203,7 +203,7 @@ mvn -pl nexus-app -Dtest=StrictZhiguangCounterBoundaryTest test
 
 Expected: FAIL with existing references to old reaction routes, comment counter paths, sharded aggregation, projection/repair tables, and Count Redis module.
 
-- [ ] **Step 3: Commit the failing boundary test**
+- [x] **Step 3: Commit the failing boundary test**
 
 Run:
 
@@ -223,7 +223,7 @@ git commit -m "test: lock strict zhiguang counter boundaries"
 - Modify: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/support/CountRedisSchemaSupportTest.java`
 - Modify: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/support/CountRedisOperationsTest.java`
 
-- [ ] **Step 1: Replace schema tests with strict zhiguang assertions**
+- [x] **Step 1: Replace schema tests with strict zhiguang assertions**
 
 Required assertions:
 
@@ -240,7 +240,7 @@ Required assertions:
 - bitmap keys are `bm:like:post:{postId}:{chunk}` and `bm:fav:post:{postId}:{chunk}`
 - no helper returns `agg:v1:post:{postId}:{shard}`
 
-- [ ] **Step 2: Run schema tests and confirm failure**
+- [x] **Step 2: Run schema tests and confirm failure**
 
 Run:
 
@@ -250,7 +250,7 @@ mvn -pl nexus-infrastructure -Dtest=CountRedisSchemaSupportTest,CountRedisOperat
 
 Expected: FAIL because current code has only `LIKE`, still exposes comment object schema, and still has sharded aggregation helpers.
 
-- [ ] **Step 3: Implement the schema/key rewrite**
+- [x] **Step 3: Implement the schema/key rewrite**
 
 Rules:
 
@@ -262,7 +262,7 @@ Rules:
 - Remove `likeBitmapShardIndex`; rebuild must use `SCAN` and must not maintain bitmap shard-index sets.
 - Relation cache helpers remain `uf:flws:{userId}` and `uf:fans:{userId}`.
 
-- [ ] **Step 4: Run schema tests until they pass**
+- [x] **Step 4: Run schema tests until they pass**
 
 Run:
 
@@ -272,7 +272,7 @@ mvn -pl nexus-infrastructure -Dtest=CountRedisSchemaSupportTest,CountRedisOperat
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -291,7 +291,7 @@ git commit -m "refactor: align counter schema with strict zhiguang slots"
 - Modify: `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/counter/kafka/CounterEventProducer.java`
 - Modify: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/kafka/CounterEventProducerTest.java`
 
-- [ ] **Step 1: Replace object service tests with like/fav behavior**
+- [x] **Step 1: Replace object service tests with like/fav behavior**
 
 Required test cases:
 
@@ -307,7 +307,7 @@ Required test cases:
 - batch `getCountsBatch` returns zero for malformed/missing SDS and does not rebuild.
 - rebuild writes all five object slots and clears only fields `1` and/or `2` in `agg:v1:post:{postId}`.
 
-- [ ] **Step 2: Run object service tests and confirm failure**
+- [x] **Step 2: Run object service tests and confirm failure**
 
 Run:
 
@@ -317,7 +317,7 @@ mvn -pl nexus-infrastructure -Dtest=ObjectCounterServiceTest,CounterEventProduce
 
 Expected: FAIL because fav is missing, comment is still accepted, and aggregation cleanup still assumes shards.
 
-- [ ] **Step 3: Implement concrete service methods**
+- [x] **Step 3: Implement concrete service methods**
 
 Rules:
 
@@ -330,7 +330,7 @@ Rules:
 - Rebuild guard/backoff semantics remain: failed/contended rebuild returns zero rather than failing feed APIs.
 - Do not preserve like-only helpers as the controller path for fav.
 
-- [ ] **Step 4: Run object service tests until they pass**
+- [x] **Step 4: Run object service tests until they pass**
 
 Run:
 
@@ -340,7 +340,7 @@ mvn -pl nexus-infrastructure -Dtest=ObjectCounterServiceTest,CounterEventProduce
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -355,7 +355,7 @@ git commit -m "feat: implement strict post like fav counters"
 - Modify: `nexus-trigger/src/main/java/cn/nexus/trigger/counter/CounterAggregationConsumer.java`
 - Modify: `nexus-trigger/src/test/java/cn/nexus/trigger/counter/CounterAggregationConsumerTest.java`
 
-- [ ] **Step 1: Write aggregation tests**
+- [x] **Step 1: Write aggregation tests**
 
 Required cases:
 
@@ -367,7 +367,7 @@ Required cases:
 - failed slot increment leaves remaining hash value retryable.
 - bucket parser rejects keys with a shard suffix.
 
-- [ ] **Step 2: Run aggregation tests and confirm failure**
+- [x] **Step 2: Run aggregation tests and confirm failure**
 
 Run:
 
@@ -377,7 +377,7 @@ mvn -pl nexus-trigger -Dtest=CounterAggregationConsumerTest test
 
 Expected: FAIL because current consumer writes sharded buckets and accepts comment like events.
 
-- [ ] **Step 3: Implement single-key aggregation**
+- [x] **Step 3: Implement single-key aggregation**
 
 Rules:
 
@@ -388,7 +388,7 @@ Rules:
 - Flush validates field names against active object slots only.
 - No RabbitMQ object aggregation path may remain as a fallback.
 
-- [ ] **Step 4: Run aggregation tests until they pass**
+- [x] **Step 4: Run aggregation tests until they pass**
 
 Run:
 
@@ -398,7 +398,7 @@ mvn -pl nexus-trigger -Dtest=CounterAggregationConsumerTest test
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -421,7 +421,7 @@ git commit -m "refactor: use single zhiguang object aggregation key"
 - Create: `nexus-trigger/src/test/java/cn/nexus/trigger/http/social/ActionControllerTest.java`
 - Create: `nexus-trigger/src/test/java/cn/nexus/trigger/http/social/CounterControllerTest.java`
 
-- [ ] **Step 1: Write API tests**
+- [x] **Step 1: Write API tests**
 
 Required cases:
 
@@ -435,7 +435,7 @@ Required cases:
 - unsupported metric on `GET /api/v1/counter/post/{postId}` returns `ResponseCode.ILLEGAL_PARAMETER`.
 - `/api/v1/interact/reaction` and `/api/v1/interact/reaction/state` have no controller mappings.
 
-- [ ] **Step 2: Run API tests and confirm failure**
+- [x] **Step 2: Run API tests and confirm failure**
 
 Run:
 
@@ -445,7 +445,7 @@ mvn -pl nexus-trigger -Dtest=ActionControllerTest,CounterControllerTest,Interact
 
 Expected: FAIL because new controllers do not exist and old reaction routes still exist.
 
-- [ ] **Step 3: Implement action/counter controllers**
+- [x] **Step 3: Implement action/counter controllers**
 
 Rules:
 
@@ -457,7 +457,7 @@ Rules:
 - `PostCounterResponseDTO` contains `postId` plus a `counts` map whose keys can only be `like` and `fav`.
 - Counter read endpoint accepts only `like` and `fav`; unsupported metrics return `ResponseCode.ILLEGAL_PARAMETER`.
 
-- [ ] **Step 4: Remove old reaction counter routes**
+- [x] **Step 4: Remove old reaction counter routes**
 
 Rules:
 
@@ -465,7 +465,7 @@ Rules:
 - Remove `IInteractionApi` method declarations if they only describe the deleted routes.
 - Delete `ReactionRequestDTO`, `ReactionResponseDTO`, `ReactionStateRequestDTO`, and `ReactionStateResponseDTO` when their only callers are removed. If compilation reveals a non-counter caller, move that caller to the new action DTOs in this task.
 
-- [ ] **Step 5: Run API tests until they pass**
+- [x] **Step 5: Run API tests until they pass**
 
 Run:
 
@@ -475,7 +475,7 @@ mvn -pl nexus-trigger -Dtest=ActionControllerTest,CounterControllerTest,Interact
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 
@@ -496,7 +496,7 @@ git commit -m "feat: add zhiguang action and post counter APIs"
 - Create: `nexus-domain/src/test/java/cn/nexus/domain/social/service/PostActionServiceTest.java`
 - Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/InteractionServiceTest.java`
 
-- [ ] **Step 1: Write domain tests for removed generic reaction behavior**
+- [x] **Step 1: Write domain tests for removed generic reaction behavior**
 
 Required cases:
 
@@ -507,7 +507,7 @@ Required cases:
 - no `COMMENT_LIKED` notification event is produced.
 - post like notification and recommend unlike side effects remain only for post `LIKE`, not for `FAV`.
 
-- [ ] **Step 2: Run domain tests and confirm failure**
+- [x] **Step 2: Run domain tests and confirm failure**
 
 Run:
 
@@ -517,7 +517,7 @@ mvn -pl nexus-domain -Dtest=PostActionServiceTest,InteractionServiceTest test
 
 Expected: FAIL because current service accepts comment likes and has comment-like side effects.
 
-- [ ] **Step 3: Rewrite the domain path**
+- [x] **Step 3: Rewrite the domain path**
 
 Rules:
 
@@ -528,7 +528,7 @@ Rules:
 - Do not keep a disabled branch for comment likes.
 - Keep comment creation/listing/mention/reply notifications in `InteractionService`; they are not counter behavior.
 
-- [ ] **Step 4: Run domain tests until they pass**
+- [x] **Step 4: Run domain tests until they pass**
 
 Run:
 
@@ -538,7 +538,7 @@ mvn -pl nexus-domain -Dtest=PostActionServiceTest,InteractionServiceTest test
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -562,7 +562,7 @@ git commit -m "refactor: remove generic reaction counter domain path"
 - Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedCardAssembleServiceTest.java`
 - Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/SearchServiceTest.java`.
 
-- [ ] **Step 1: Write display tests**
+- [x] **Step 1: Write display tests**
 
 Required cases:
 
@@ -573,7 +573,7 @@ Required cases:
 - search result `liked/faved` state is read from bitmap truth at query time and never from indexed document fields.
 - unauthenticated or missing current-user context returns `liked=false` and `faved=false` without failing public reads.
 
-- [ ] **Step 2: Run display tests and confirm failure**
+- [x] **Step 2: Run display tests and confirm failure**
 
 Run:
 
@@ -584,7 +584,7 @@ mvn -pl nexus-domain -Dtest=FeedCardAssembleServiceTest,SearchServiceTest test
 
 Expected: FAIL because fav count/state is not assembled.
 
-- [ ] **Step 3: Implement DTO and assembler changes**
+- [x] **Step 3: Implement DTO and assembler changes**
 
 Rules:
 
@@ -593,7 +593,7 @@ Rules:
 - Do not add `favCount` as a third synonym.
 - Do not add comment count fields while editing display DTOs.
 
-- [ ] **Step 4: Run display tests until they pass**
+- [x] **Step 4: Run display tests until they pass**
 
 Run:
 
@@ -604,7 +604,7 @@ mvn -pl nexus-domain -Dtest=FeedCardAssembleServiceTest,SearchServiceTest test
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -623,7 +623,7 @@ git commit -m "feat: expose post favorite count and state"
 - Modify: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/counter/service/UserCounterServiceTest.java`
 - Modify: user/relation/profile controller tests that assert counter fields
 
-- [ ] **Step 1: Rewrite user counter tests**
+- [x] **Step 1: Rewrite user counter tests**
 
 Required cases:
 
@@ -638,7 +638,7 @@ Required cases:
 - rebuild does not preserve stale previous received-counter values.
 - child object counter read failure contributes zero and does not fail the user profile API.
 
-- [ ] **Step 2: Run user counter tests and confirm failure**
+- [x] **Step 2: Run user counter tests and confirm failure**
 
 Run:
 
@@ -648,7 +648,7 @@ mvn -pl nexus-infrastructure -Dtest=UserCounterServiceTest test
 
 Expected: FAIL because favorite received is currently zeroed and like received can be preserved.
 
-- [ ] **Step 3: Implement user counter service changes**
+- [x] **Step 3: Implement user counter service changes**
 
 Rules:
 
@@ -659,7 +659,7 @@ Rules:
 - Do not use `user_counter_repair_outbox` or any replacement repair-outbox table.
 - Do not directly manipulate Redis strings from relation/content services; use `IUserCounterService`.
 
-- [ ] **Step 4: Run user counter tests until they pass**
+- [x] **Step 4: Run user counter tests until they pass**
 
 Run:
 
@@ -669,7 +669,7 @@ mvn -pl nexus-infrastructure -Dtest=UserCounterServiceTest test
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -687,7 +687,7 @@ git commit -m "feat: implement zhiguang five slot user counters"
 - Modify: `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/FeedCounterSideEffectPort.java`
 - Modify: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/port/FeedCounterSideEffectPortTest.java`
 
-- [ ] **Step 1: Write side-effect tests**
+- [x] **Step 1: Write side-effect tests**
 
 Required cases:
 
@@ -698,7 +698,7 @@ Required cases:
 - feed side-effect cache update is best effort and non-authoritative.
 - failure in feed side effects does not roll back or fail user counter update.
 
-- [ ] **Step 2: Run side-effect tests and confirm failure**
+- [x] **Step 2: Run side-effect tests and confirm failure**
 
 Run:
 
@@ -709,7 +709,7 @@ mvn -pl nexus-infrastructure -Dtest=FeedCounterSideEffectPortTest test
 
 Expected: FAIL because fav side effects are missing.
 
-- [ ] **Step 3: Implement side effects**
+- [x] **Step 3: Implement side effects**
 
 Rules:
 
@@ -717,7 +717,7 @@ Rules:
 - Feed counter cache side effects update like/fav display caches when existing cache surfaces need them, and remain non-authoritative.
 - Do not reintroduce search index updates here.
 
-- [ ] **Step 4: Run side-effect tests until they pass**
+- [x] **Step 4: Run side-effect tests until they pass**
 
 Run:
 
@@ -728,7 +728,7 @@ mvn -pl nexus-infrastructure -Dtest=FeedCounterSideEffectPortTest test
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -749,7 +749,7 @@ git commit -m "feat: apply favorite received side effects"
 - Modify: comment DTOs under `nexus-api/src/main/java/cn/nexus/api/social/interaction/dto`
 - Modify: comment services/repositories/tests under `nexus-domain` and `nexus-infrastructure`
 
-- [ ] **Step 1: Write comment removal tests**
+- [x] **Step 1: Write comment removal tests**
 
 Required cases:
 
@@ -760,7 +760,7 @@ Required cases:
 - comment creation, reply notification, mention notification, listing, and deletion still work.
 - final schema no longer creates `interaction_comment.like_count` or `interaction_comment.reply_count`.
 
-- [ ] **Step 2: Run comment tests and confirm failure**
+- [x] **Step 2: Run comment tests and confirm failure**
 
 Run:
 
@@ -772,7 +772,7 @@ mvn -pl nexus-trigger -Dtest=CommentHttpRealIntegrationTest test
 
 Expected: FAIL for fields/paths that still carry comment counters. If the real integration test requires unavailable middleware, record that and keep focused unit tests mandatory.
 
-- [ ] **Step 3: Delete comment-like counter path**
+- [x] **Step 3: Delete comment-like counter path**
 
 Rules:
 
@@ -782,11 +782,11 @@ Rules:
 - Do not remove comment business capabilities unrelated to counters.
 - Do not create replacement comment counter fields backed by zero constants.
 
-- [ ] **Step 4: Run focused comment tests until they pass**
+- [x] **Step 4: Run focused comment tests until they pass**
 
 Run the focused unit tests from Step 2. Real integration is deferred only when the exact missing middleware dependency is recorded in the implementation notes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -810,7 +810,7 @@ git commit -m "refactor: remove comment counter capabilities"
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/RelationCounterProjectionProcessor.java`
 - Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/RelationCounterProjectionProcessorTest.java`
 
-- [ ] **Step 1: Write post-count edge tests**
+- [x] **Step 1: Write post-count edge tests**
 
 Required cases:
 
@@ -820,7 +820,7 @@ Required cases:
 - retrying delete does not decrement again.
 - edge detection uses content state/update result, not a counter projection table.
 
-- [ ] **Step 2: Write relation cleanup tests**
+- [x] **Step 2: Write relation cleanup tests**
 
 Required cases:
 
@@ -831,7 +831,7 @@ Required cases:
 - no relation code writes to `user_counter_repair_outbox`.
 - no active code writes or reads `interaction_reaction_event_log`.
 
-- [ ] **Step 3: Run tests and confirm failure**
+- [x] **Step 3: Run tests and confirm failure**
 
 Run:
 
@@ -841,7 +841,7 @@ mvn -pl nexus-domain -Dtest=ContentServiceTest,RelationCounterProjectionProcesso
 
 Expected: FAIL where current code depends on projection/repair concepts.
 
-- [ ] **Step 4: Implement content and relation rewrites**
+- [x] **Step 4: Implement content and relation rewrites**
 
 Rules:
 
@@ -850,7 +850,7 @@ Rules:
 - Use the content table's own status/version/update result for idempotent edge detection.
 - Relation list cache remains allowed, but it is not counter truth.
 
-- [ ] **Step 5: Add drop migration and final schema cleanup**
+- [x] **Step 5: Add drop migration and final schema cleanup**
 
 Rules:
 
@@ -861,7 +861,7 @@ Rules:
 - Remove both tables from final schema docs.
 - Do not leave old creation migrations active as the final setup path.
 
-- [ ] **Step 6: Run domain tests until they pass**
+- [x] **Step 6: Run domain tests until they pass**
 
 Run:
 
@@ -871,7 +871,7 @@ mvn -pl nexus-domain -Dtest=ContentServiceTest,RelationCounterProjectionProcesso
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Run:
 
@@ -894,7 +894,7 @@ git commit -m "refactor: remove nexus counter projection repair mechanics"
 - Modify: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/port/SearchEnginePortCountFieldContractTest.java`
 - Modify: `nexus-app/src/test/java/cn/nexus/config/SearchIndexMappingCountFieldContractTest.java`
 
-- [ ] **Step 1: Write search count-removal tests**
+- [x] **Step 1: Write search count-removal tests**
 
 Required cases:
 
@@ -903,7 +903,7 @@ Required cases:
 - index initializer mapping does not create counter fields populated by the counter system.
 - historical index fields, if still present for compatibility, are not updated by counter events.
 
-- [ ] **Step 2: Run search tests and confirm failure**
+- [x] **Step 2: Run search tests and confirm failure**
 
 Run:
 
@@ -915,7 +915,7 @@ mvn -pl nexus-app -Dtest=SearchIndexMappingCountFieldContractTest test
 
 Expected: FAIL for any current count propagation.
 
-- [ ] **Step 3: Remove counter-to-search wiring**
+- [x] **Step 3: Remove counter-to-search wiring**
 
 Rules:
 
@@ -923,13 +923,13 @@ Rules:
 - Search documents should remain focused on searchable content fields.
 - Do not replace count propagation with delayed or sampled propagation.
 
-- [ ] **Step 4: Run search tests until they pass**
+- [x] **Step 4: Run search tests until they pass**
 
 Run the commands from Step 2.
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -948,7 +948,7 @@ git commit -m "refactor: remove search counter propagation"
 - Modify: `nexus-app/src/main/resources/application-docker.yml`
 - Modify: root-level Docker or Maven files reported by Step 1 as active runtime/build references.
 
-- [ ] **Step 1: Run reference search before deletion**
+- [x] **Step 1: Run reference search before deletion**
 
 Run:
 
@@ -958,7 +958,7 @@ rg -n "count-redis-module|loadmodule|count_int|Roaring|COUNT\\." count-redis-mod
 
 Expected: references identify the module directory and any runtime/config hooks.
 
-- [ ] **Step 2: Delete module and runtime hooks**
+- [x] **Step 2: Delete module and runtime hooks**
 
 Rules:
 
@@ -967,7 +967,7 @@ Rules:
 - Keep normal Redis bitmap/string/hash operations.
 - Do not replace the module with another custom Redis command dependency.
 
-- [ ] **Step 3: Run boundary test**
+- [x] **Step 3: Run boundary test**
 
 Run:
 
@@ -977,7 +977,7 @@ mvn -pl nexus-app -Dtest=StrictZhiguangCounterBoundaryTest test
 
 Expected: no failure related to Count Redis module.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 
@@ -998,7 +998,7 @@ git commit -m "refactor: remove count redis module runtime"
 - Modify: `docs/frontend-api.md`
 - Modify: active source/config/schema files reported by `StrictZhiguangCounterBoundaryTest`. Do not edit unrelated historical/reference docs to satisfy this task.
 
-- [ ] **Step 1: Run full forbidden reference scan**
+- [x] **Step 1: Run full forbidden reference scan**
 
 Run:
 
@@ -1008,7 +1008,7 @@ rg -n "post_counter_projection|user_counter_repair_outbox|interaction_reaction_e
 
 Expected: initial run lists active cleanup targets; final run after this task has no main-source, mapper, final-schema, frontend API, build, or runtime-config hits. Test files are verified by `StrictZhiguangCounterBoundaryTest`, not by this raw grep.
 
-- [ ] **Step 2: Remove or rewrite stale tests**
+- [x] **Step 2: Remove or rewrite stale tests**
 
 Rules:
 
@@ -1016,7 +1016,7 @@ Rules:
 - Replace reaction HTTP integration with action HTTP integration.
 - If old DTOs are retained only because frontend docs still mention them, update docs and delete DTOs.
 
-- [ ] **Step 3: Update frontend API docs**
+- [x] **Step 3: Update frontend API docs**
 
 Rules:
 
@@ -1029,7 +1029,7 @@ Rules:
 - Remove `/api/v1/interact/reaction` and `/api/v1/interact/reaction/state`.
 - Keep comment APIs documented without counter fields.
 
-- [ ] **Step 4: Run boundary test until it passes**
+- [x] **Step 4: Run boundary test until it passes**
 
 Run:
 
@@ -1039,7 +1039,7 @@ mvn -pl nexus-app -Dtest=StrictZhiguangCounterBoundaryTest test
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -1055,7 +1055,7 @@ git commit -m "refactor: remove legacy counter API artifacts"
 - Modify: `nexus-app/src/test/java/cn/nexus/integration/content/ContentHttpRealIntegrationTest.java`
 - Modify: relation/profile integration tests that assert user counters
 
-- [ ] **Step 1: Write post action integration tests**
+- [x] **Step 1: Write post action integration tests**
 
 Required flows:
 
@@ -1067,7 +1067,7 @@ Required flows:
 - unfav -> count eventually reaches `0`, state `faved=false`.
 - comment target on action API returns parameter error and creates no keys/events.
 
-- [ ] **Step 2: Write user received counter integration tests**
+- [x] **Step 2: Write user received counter integration tests**
 
 Required flows:
 
@@ -1076,7 +1076,7 @@ Required flows:
 - duplicate actions do not double count.
 - rebuild of malformed `ucnt` recomputes both received counters from post object counters.
 
-- [ ] **Step 3: Run focused integration tests**
+- [x] **Step 3: Run focused integration tests**
 
 Run:
 
@@ -1086,7 +1086,7 @@ mvn -pl nexus-app -Dtest=PostActionHttpRealIntegrationTest,ContentHttpRealIntegr
 
 Expected: PASS if local middleware is available. If middleware is unavailable, record exact missing dependency and keep all unit/contract tests mandatory.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 
@@ -1100,7 +1100,7 @@ git commit -m "test: cover strict zhiguang counter integration flows"
 **Files:**
 - Modify only concrete files required to fix verification failures.
 
-- [ ] **Step 1: Run focused module suites**
+- [x] **Step 1: Run focused module suites**
 
 Run:
 
@@ -1113,7 +1113,7 @@ mvn -pl nexus-app -Dtest=StrictZhiguangCounterBoundaryTest test
 
 Expected: PASS.
 
-- [ ] **Step 2: Run forbidden reference scan**
+- [x] **Step 2: Run forbidden reference scan**
 
 Run:
 
@@ -1123,7 +1123,7 @@ rg -n "post_counter_projection|user_counter_repair_outbox|interaction_reaction_e
 
 Expected: no main-source, mapper, final-schema, frontend API, build, or runtime-config hits. Drop migrations are the only allowed hits for removed table names, and they are intentionally outside this raw grep scope.
 
-- [ ] **Step 3: Run compile or broader tests**
+- [x] **Step 3: Run compile or broader tests**
 
 Run:
 
@@ -1133,7 +1133,7 @@ mvn -pl nexus-api,nexus-domain,nexus-infrastructure,nexus-trigger,nexus-app test
 
 Expected: PASS, or record exact external middleware blocker for integration-only failures.
 
-- [ ] **Step 4: Verify git state**
+- [x] **Step 4: Verify git state**
 
 Run:
 
@@ -1147,7 +1147,7 @@ Expected:
 - only intentional implementation changes are staged/committed or visible.
 - pre-existing unrelated changes such as `../../zhiguang_be` and `docs/counter-system/` remain untouched unless the user explicitly asked otherwise.
 
-- [ ] **Step 5: Final commit if any verification fixes were needed**
+- [x] **Step 5: Final commit if any verification fixes were needed**
 
 Run:
 

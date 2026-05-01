@@ -8,7 +8,6 @@ import cn.nexus.domain.counter.model.valobj.UserRelationCounterVO;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisOperations;
@@ -236,8 +235,7 @@ public class UserCounterService implements IUserCounterService {
                 continue;
             }
             try {
-                Map<String, Long> values = objectCounterService.getCounts(
-                        ReactionTargetTypeEnumVO.POST,
+                Map<String, Long> values = objectCounterService.getPostCounts(
                         post.getPostId(),
                         List.of(ObjectCounterType.LIKE));
                 Long like = values == null ? null : values.get(ObjectCounterType.LIKE.getCode());

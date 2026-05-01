@@ -19,12 +19,12 @@ public class CounterEventProducer implements ICounterEventProducer {
 
     @Override
     public void publish(CounterDeltaEvent event) {
-        if (event == null || event.getEntityType() == null || event.getEntityId() == null
-                || event.getMetric() == null || event.getIdx() == null || event.getDelta() == null) {
+        if (event == null || event.getTargetType() == null || event.getTargetId() == null
+                || event.getMetric() == null || event.getSlot() == null || event.getDelta() == null) {
             return;
         }
         try {
-            String key = event.getEntityType().getCode() + ":" + event.getEntityId();
+            String key = event.getTargetType() + ":" + event.getTargetId();
             kafkaTemplate.send(CounterTopics.COUNTER_EVENTS, key, objectMapper.writeValueAsString(event));
         } catch (Exception e) {
             log.warn("publish counter delta event failed, event={}", event, e);

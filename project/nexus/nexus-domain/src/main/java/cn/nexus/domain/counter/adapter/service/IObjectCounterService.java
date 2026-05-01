@@ -1,7 +1,7 @@
 package cn.nexus.domain.counter.adapter.service;
 
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
+import cn.nexus.domain.social.model.valobj.PostActionResultVO;
 import java.util.List;
 import java.util.Map;
 
@@ -10,14 +10,19 @@ import java.util.Map;
  */
 public interface IObjectCounterService {
 
-    boolean like(ReactionTargetTypeEnumVO targetType, Long targetId, Long userId);
+    PostActionResultVO likePost(Long postId, Long userId);
 
-    boolean unlike(ReactionTargetTypeEnumVO targetType, Long targetId, Long userId);
+    PostActionResultVO unlikePost(Long postId, Long userId);
 
-    boolean isLiked(ReactionTargetTypeEnumVO targetType, Long targetId, Long userId);
+    PostActionResultVO favPost(Long postId, Long userId);
 
-    Map<String, Long> getCounts(ReactionTargetTypeEnumVO targetType, Long targetId, List<ObjectCounterType> metrics);
+    PostActionResultVO unfavPost(Long postId, Long userId);
 
-    Map<Long, Map<String, Long>> getCountsBatch(ReactionTargetTypeEnumVO targetType, List<Long> targetIds, List<ObjectCounterType> metrics);
+    boolean isPostLiked(Long postId, Long userId);
+
+    boolean isPostFaved(Long postId, Long userId);
+
+    Map<String, Long> getPostCounts(Long postId, List<ObjectCounterType> metrics);
+
+    Map<Long, Map<String, Long>> getPostCountsBatch(List<Long> postIds, List<ObjectCounterType> metrics);
 }
-

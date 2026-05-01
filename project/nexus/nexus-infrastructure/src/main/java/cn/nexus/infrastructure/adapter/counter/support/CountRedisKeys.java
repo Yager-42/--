@@ -72,27 +72,24 @@ public final class CountRedisKeys {
     }
 
     public static String objectRebuildLock(ObjectCounterTarget target) {
-        if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
+        if (target == null || target.getTargetType() != ReactionTargetTypeEnumVO.POST || target.getTargetId() == null) {
             return null;
         }
-        return "count:rebuild-lock:object:{" + target.getTargetType().getCode() + ":" + target.getTargetId()
-                + ":" + target.getCounterType().getCode() + "}";
+        return "count:rebuild-lock:object:{post:" + target.getTargetId() + "}";
     }
 
     public static String objectRebuildRateLimit(ObjectCounterTarget target) {
-        if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
+        if (target == null || target.getTargetType() != ReactionTargetTypeEnumVO.POST || target.getTargetId() == null) {
             return null;
         }
-        return "count:rate-limit:object:{" + target.getTargetType().getCode() + ":" + target.getTargetId()
-                + ":" + target.getCounterType().getCode() + "}";
+        return "count:rate-limit:object:{post:" + target.getTargetId() + "}";
     }
 
     public static String objectRebuildBackoff(ObjectCounterTarget target) {
-        if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
+        if (target == null || target.getTargetType() != ReactionTargetTypeEnumVO.POST || target.getTargetId() == null) {
             return null;
         }
-        return "count:rebuild-backoff:object:{" + target.getTargetType().getCode() + ":" + target.getTargetId()
-                + ":" + target.getCounterType().getCode() + "}";
+        return "count:rebuild-backoff:object:{post:" + target.getTargetId() + "}";
     }
 
     public static String userRebuildLock(Long userId) {

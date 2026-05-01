@@ -4,7 +4,6 @@ import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IFeedCardStatRepository;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,8 +49,7 @@ public class FeedCardStatRepository implements IFeedCardStatRepository {
             return Map.of();
         }
 
-        Map<Long, Map<String, Long>> countById = objectCounterService.getCountsBatch(
-                ReactionTargetTypeEnumVO.POST,
+        Map<Long, Map<String, Long>> countById = objectCounterService.getPostCountsBatch(
                 normalizedPostIds,
                 List.of(ObjectCounterType.LIKE));
         Map<Long, FeedCardStatVO> result = new HashMap<>(normalizedPostIds.size());

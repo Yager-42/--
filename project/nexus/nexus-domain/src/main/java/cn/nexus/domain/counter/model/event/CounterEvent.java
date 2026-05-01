@@ -1,7 +1,5 @@
 package cn.nexus.domain.counter.model.event;
 
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -17,11 +15,11 @@ import lombok.NoArgsConstructor;
 public class CounterEvent {
 
     private String requestId;
-    private ReactionTargetTypeEnumVO targetType;
+    private String targetType;
     private Long targetId;
-    private ObjectCounterType counterType;
+    private String metric;
+    private Integer slot;
     private Long actorUserId;
     private long delta;
     private long tsMs;
 }
-

@@ -107,7 +107,8 @@ public class ReactionLikeService implements IReactionLikeService {
         requireTarget(target);
         requireLikeOnly(target);
 
-        boolean state = objectCounterService.isLiked(target.getTargetType(), target.getTargetId(), userId);
+        boolean state = target.getTargetType() == ReactionTargetTypeEnumVO.POST
+                && objectCounterService.isPostLiked(target.getTargetId(), userId);
         long cnt = currentLikeCount(target);
         return ReactionStateVO.builder().state(state).currentCount(cnt).build();
     }
@@ -278,8 +279,10 @@ public class ReactionLikeService implements IReactionLikeService {
         if (target == null || target.getTargetType() == null || target.getTargetId() == null) {
             return 0L;
         }
-        Map<String, Long> counts = objectCounterService.getCounts(
-                target.getTargetType(),
+        if (target.getTargetType() != ReactionTargetTypeEnumVO.POST) {
+            return 0L;
+        }
+        Map<String, Long> counts = objectCounterService.getPostCounts(
                 target.getTargetId(),
                 List.of(ObjectCounterType.LIKE));
         Long like = counts == null ? null : counts.get(ObjectCounterType.LIKE.getCode());
@@ -288,10 +291,13 @@ public class ReactionLikeService implements IReactionLikeService {
 
     private int applyToggleDelta(Long userId, ReactionTargetVO target, int desiredState) {
         try {
-            if (desiredState == 1) {
-                return objectCounterService.like(target.getTargetType(), target.getTargetId(), userId) ? 1 : 0;
+            if (target == null || target.getTargetType() != ReactionTargetTypeEnumVO.POST) {
+                return 0;
             }
-            return objectCounterService.unlike(target.getTargetType(), target.getTargetId(), userId) ? -1 : 0;
+            if (desiredState == 1) {
+                return objectCounterService.likePost(target.getTargetId(), userId).isChanged() ? 1 : 0;
+            }
+            return objectCounterService.unlikePost(target.getTargetId(), userId).isChanged() ? -1 : 0;
         } catch (Exception e) {
             throw new AppException(ResponseCode.UN_ERROR.getCode(), ResponseCode.UN_ERROR.getInfo(), e);
         }
@@ -308,9 +314,10 @@ public class ReactionLikeService implements IReactionLikeService {
         try {
             applicationEventPublisher.publishEvent(CounterEvent.builder()
                     .requestId(requestId)
-                    .targetType(target.getTargetType())
+                    .targetType(target.getTargetType().getCode().toLowerCase())
                     .targetId(target.getTargetId())
-                    .counterType(ObjectCounterType.LIKE)
+                    .metric(ObjectCounterType.LIKE.getCode())
+                    .slot(1)
                     .actorUserId(userId)
                     .delta(delta)
                     .tsMs(nowMs)

@@ -8,7 +8,6 @@ import static org.mockito.Mockito.when;
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.FeedCardStatVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -21,8 +20,7 @@ class FeedCardStatRepositoryTest {
         IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         FeedCardStatRepository repository = new FeedCardStatRepository(objectCounterService);
 
-        when(objectCounterService.getCountsBatch(
-                ReactionTargetTypeEnumVO.POST,
+        when(objectCounterService.getPostCountsBatch(
                 List.of(1L, 2L),
                 List.of(ObjectCounterType.LIKE)))
                 .thenReturn(Map.of(
@@ -33,6 +31,6 @@ class FeedCardStatRepositoryTest {
 
         assertEquals(3L, result.get(1L).getLikeCount());
         assertEquals(9L, result.get(2L).getLikeCount());
-        verify(objectCounterService).getCountsBatch(any(), any(), any());
+        verify(objectCounterService).getPostCountsBatch(any(), any());
     }
 }

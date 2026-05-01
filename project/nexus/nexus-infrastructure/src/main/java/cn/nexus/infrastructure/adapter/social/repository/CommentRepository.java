@@ -4,12 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import cn.nexus.domain.counter.adapter.service.IObjectCounterService;
-import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.ICommentContentKvPort;
 import cn.nexus.domain.social.adapter.repository.ICommentRepository;
 import cn.nexus.domain.social.model.valobj.CommentBriefVO;
 import cn.nexus.domain.social.model.valobj.CommentViewVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentItemVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentKeyVO;
 import cn.nexus.domain.social.model.valobj.kv.CommentContentResultVO;
@@ -940,28 +938,7 @@ public class CommentRepository implements ICommentRepository {
         if (commentIds.isEmpty()) {
             return Map.of();
         }
-        try {
-            Map<Long, Map<String, Long>> likeCountByCommentId = objectCounterService.getCountsBatch(
-                    ReactionTargetTypeEnumVO.COMMENT,
-                    commentIds,
-                    List.of(ObjectCounterType.LIKE));
-            Map<Long, CounterSnapshot> result = new HashMap<>(fallback.size() * 2);
-            for (CommentPO po : comments) {
-                if (po == null || po.getCommentId() == null) {
-                    continue;
-                }
-                Long commentId = po.getCommentId();
-                CounterSnapshot defaultCounter = fallback.get(commentId);
-                long fallbackLike = defaultCounter == null ? 0L : defaultCounter.likeCount();
-                Map<String, Long> likeCounts = likeCountByCommentId == null ? null : likeCountByCommentId.get(commentId);
-                Long like = likeCounts == null ? null : likeCounts.get(ObjectCounterType.LIKE.getCode());
-                long likeCount = like == null ? fallbackLike : safeLong(like);
-                result.put(commentId, new CounterSnapshot(likeCount));
-            }
-            return result;
-        } catch (Exception ignored) {
-            return fallback;
-        }
+        return fallback;
     }
 
     private CounterSnapshot counterSnapshotOf(CommentPO po, Map<Long, CounterSnapshot> counterByCommentId) {

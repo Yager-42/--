@@ -5,7 +5,6 @@ import cn.nexus.domain.counter.model.event.CounterEvent;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.port.IPostAuthorPort;
 import cn.nexus.domain.social.adapter.port.IFeedCounterSideEffectPort;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -42,8 +41,8 @@ public class KnowpostCounterSideEffectListener {
 
     private boolean isEffectivePostLikeEvent(CounterEvent event) {
         return event != null
-                && event.getCounterType() == ObjectCounterType.LIKE
-                && event.getTargetType() == ReactionTargetTypeEnumVO.POST
+                && ObjectCounterType.LIKE.getCode().equals(event.getMetric())
+                && "post".equals(event.getTargetType())
                 && event.getTargetId() != null
                 && event.getDelta() != 0;
     }

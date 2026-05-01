@@ -6,7 +6,6 @@ import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IUserBaseRepository;
 import cn.nexus.domain.social.model.entity.ContentPostEntity;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import cn.nexus.infrastructure.support.SingleFlight;
 import cn.nexus.types.enums.ResponseCode;
@@ -146,8 +145,7 @@ public class ContentDetailQueryService {
             return 0L;
         }
         try {
-            java.util.Map<String, Long> counts = objectCounterService.getCounts(
-                    ReactionTargetTypeEnumVO.POST,
+            java.util.Map<String, Long> counts = objectCounterService.getPostCounts(
                     postId,
                     java.util.List.of(ObjectCounterType.LIKE));
             Long likeCount = counts == null ? null : counts.get("like");

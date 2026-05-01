@@ -10,7 +10,6 @@ import cn.nexus.domain.social.model.entity.ContentPostEntity;
 import cn.nexus.domain.social.model.valobj.FeedCardBaseVO;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.domain.social.model.valobj.FeedItemVO;
-import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import cn.nexus.domain.social.model.valobj.UserBriefVO;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -150,8 +149,7 @@ public class FeedCardAssembleService {
             return Map.of();
         }
         Map<Long, Long> likeCountMap = new HashMap<>(candidateIds.size());
-        Map<Long, Map<String, Long>> countById = objectCounterService.getCountsBatch(
-                ReactionTargetTypeEnumVO.POST,
+        Map<Long, Map<String, Long>> countById = objectCounterService.getPostCountsBatch(
                 candidateIds,
                 List.of(ObjectCounterType.LIKE));
         for (Long postId : candidateIds) {
@@ -192,7 +190,7 @@ public class FeedCardAssembleService {
             if (postId == null) {
                 continue;
             }
-            if (objectCounterService.isLiked(ReactionTargetTypeEnumVO.POST, postId, userId)) {
+            if (objectCounterService.isPostLiked(postId, userId)) {
                 likedSet.add(postId);
             }
         }

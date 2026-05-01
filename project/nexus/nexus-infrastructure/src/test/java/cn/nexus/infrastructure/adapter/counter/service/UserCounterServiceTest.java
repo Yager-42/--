@@ -37,10 +37,10 @@ class UserCounterServiceTest {
 
         UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
 
-        assertEquals(6L, service.getCount(7L, UserCounterType.FOLLOWING));
-        assertEquals(8L, service.getCount(7L, UserCounterType.FOLLOWER));
-        assertEquals(2L, service.getCount(7L, UserCounterType.POST));
-        assertEquals(13L, service.getCount(7L, UserCounterType.LIKE_RECEIVED));
+        assertEquals(6L, service.getCount(7L, UserCounterType.FOLLOWINGS));
+        assertEquals(8L, service.getCount(7L, UserCounterType.FOLLOWERS));
+        assertEquals(2L, service.getCount(7L, UserCounterType.POSTS));
+        assertEquals(13L, service.getCount(7L, UserCounterType.LIKES_RECEIVED));
     }
 
     @Test
@@ -65,7 +65,7 @@ class UserCounterServiceTest {
 
         UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
 
-        long likeReceived = service.getCount(9L, UserCounterType.LIKE_RECEIVED);
+        long likeReceived = service.getCount(9L, UserCounterType.LIKES_RECEIVED);
 
         assertEquals(0L, likeReceived);
         verify(redisTemplate, Mockito.times(2)).execute(any(RedisCallback.class));
@@ -87,7 +87,7 @@ class UserCounterServiceTest {
 
         UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
 
-        long count = service.getCount(15L, UserCounterType.FOLLOWING);
+        long count = service.getCount(15L, UserCounterType.FOLLOWINGS);
 
         assertEquals(0L, count);
         verify(relationRepository, never()).countActiveRelationsBySource(any(), any());

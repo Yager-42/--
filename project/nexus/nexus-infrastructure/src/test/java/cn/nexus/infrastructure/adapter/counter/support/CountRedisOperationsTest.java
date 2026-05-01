@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -34,7 +35,7 @@ class CountRedisOperationsTest {
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
 
         assertEquals(Map.of("read", 0L, "like", 5L, "fav", 0L, "comment", 0L, "repost", 0L),
-                operations.readObjectSnapshot("cnt:v1:comment:8", CountRedisSchema.forObject(ReactionTargetTypeEnumVO.COMMENT)));
+                operations.readObjectSnapshot("cnt:v1:post:8", CountRedisSchema.forObject(ReactionTargetTypeEnumVO.POST)));
     }
 
     @Test
@@ -45,7 +46,7 @@ class CountRedisOperationsTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
 
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
-        operations.writeUserSnapshot("ucnt:7", Map.of("following", 6L, "follower", -4L), CountRedisSchema.user());
+        operations.writeUserSnapshot("ucnt:7", Map.of("followings", 6L, "followers", -4L), CountRedisSchema.user());
 
         verify(redisTemplate).execute(any(RedisCallback.class));
     }
@@ -84,15 +85,19 @@ class CountRedisOperationsTest {
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.getBit("bm:like:post:42:0", 7)).thenReturn(Boolean.TRUE);
-        when(valueOperations.setBit("bm:like:post:42:0", 7, true)).thenReturn(Boolean.FALSE);
+        String likeKey = CountRedisKeys.bitmapShard(ObjectCounterType.LIKE, ReactionTargetTypeEnumVO.POST, 42L, 0);
+        String favKey = CountRedisKeys.bitmapShard(ObjectCounterType.FAV, ReactionTargetTypeEnumVO.POST, 42L, 0);
+        when(valueOperations.getBit(likeKey, 7)).thenReturn(Boolean.TRUE);
+        when(valueOperations.setBit(favKey, 7, true)).thenReturn(Boolean.FALSE);
         when(valueOperations.setIfAbsent(eq("count:rate-limit:rebuild:{42}"), eq("1"), anyLong(), eq(TimeUnit.SECONDS)))
                 .thenReturn(Boolean.FALSE);
 
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
 
-        assertTrue(operations.readBitmapFact("bm:like:post:42:0", 7));
-        assertFalse(operations.writeBitmapFact("bm:like:post:42:0", 7, true));
+        assertEquals("bm:like:post:42:0", likeKey);
+        assertEquals("bm:fav:post:42:0", favKey);
+        assertTrue(operations.readBitmapFact(likeKey, 7));
+        assertFalse(operations.writeBitmapFact(favKey, 7, true));
         assertFalse(operations.tryAcquireRateLimit("count:rate-limit:rebuild:{42}", 30));
         verify(redisTemplate, never()).delete("unused");
     }

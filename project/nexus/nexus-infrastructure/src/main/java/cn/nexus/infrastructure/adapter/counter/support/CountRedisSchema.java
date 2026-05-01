@@ -23,24 +23,19 @@ public final class CountRedisSchema {
     private static final CountRedisSchema POST = new CountRedisSchema(
             SCHEMA_ID,
             orderedObjectSlots(
-                    ObjectCounterType.LIKE, 1),
-            Map.of());
-
-    private static final CountRedisSchema COMMENT = new CountRedisSchema(
-            SCHEMA_ID,
-            orderedObjectSlots(
-                    ObjectCounterType.LIKE, 1),
+                    ObjectCounterType.LIKE, 1,
+                    ObjectCounterType.FAV, 2),
             Map.of());
 
     private static final CountRedisSchema USER = new CountRedisSchema(
             SCHEMA_ID,
             Map.of(),
             orderedUserSlots(
-                    UserCounterType.FOLLOWING, 1,
-                    UserCounterType.FOLLOWER, 2,
-                    UserCounterType.POST, 3,
-                    UserCounterType.LIKE_RECEIVED, 4,
-                    UserCounterType.FAVORITE_RECEIVED, 5));
+                    UserCounterType.FOLLOWINGS, 1,
+                    UserCounterType.FOLLOWERS, 2,
+                    UserCounterType.POSTS, 3,
+                    UserCounterType.LIKES_RECEIVED, 4,
+                    UserCounterType.FAVS_RECEIVED, 5));
 
     private final String schemaName;
     private final Map<ObjectCounterType, Integer> objectSlots;
@@ -62,7 +57,7 @@ public final class CountRedisSchema {
         }
         return switch (targetType) {
             case POST -> POST;
-            case COMMENT -> COMMENT;
+            case COMMENT -> null;
             case USER -> null;
         };
     }

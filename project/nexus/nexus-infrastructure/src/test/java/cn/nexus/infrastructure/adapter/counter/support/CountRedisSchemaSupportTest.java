@@ -2,11 +2,14 @@ package cn.nexus.infrastructure.adapter.counter.support;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
+import java.util.Arrays;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class CountRedisSchemaSupportTest {
@@ -20,14 +23,12 @@ class CountRedisSchemaSupportTest {
         assertEquals(5, CountRedisSchema.SCHEMA_LEN);
         assertEquals(4, CountRedisSchema.FIELD_SIZE);
         assertEquals("v1", post.schemaName());
-        assertEquals("v1", comment.schemaName());
         assertEquals(5, post.slotCount());
-        assertEquals(5, comment.slotCount());
         assertEquals(20, post.totalPayloadBytes());
+        assertNull(comment);
         assertEquals(1, post.slotOf(ObjectCounterType.LIKE));
-        assertFalse(comment.objectSlots().containsKey(null));
-        assertEquals(1, ObjectCounterType.values().length);
-        assertEquals(ObjectCounterType.LIKE, ObjectCounterType.values()[0]);
+        assertEquals(2, post.slotOf(ObjectCounterType.FAV));
+        assertEquals(List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV), Arrays.asList(ObjectCounterType.values()));
         assertEquals("read", post.fieldNameAt(0));
         assertEquals("like", post.fieldNameAt(1));
         assertEquals("fav", post.fieldNameAt(2));
@@ -38,29 +39,44 @@ class CountRedisSchemaSupportTest {
     @Test
     void userSchemaExposesLogicalIndexesAndOffsets() {
         assertEquals("v1", CountRedisSchema.user().schemaName());
-        assertEquals(1, CountRedisSchema.user().logicalIndexOf(UserCounterType.FOLLOWING));
-        assertEquals(2, CountRedisSchema.user().logicalIndexOf(UserCounterType.FOLLOWER));
-        assertEquals(3, CountRedisSchema.user().logicalIndexOf(UserCounterType.POST));
-        assertEquals(4, CountRedisSchema.user().logicalIndexOf(UserCounterType.LIKE_RECEIVED));
-        assertEquals(5, CountRedisSchema.user().logicalIndexOf(UserCounterType.FAVORITE_RECEIVED));
-        assertEquals(0, CountRedisSchema.user().byteOffsetOf(UserCounterType.FOLLOWING));
-        assertEquals(4, CountRedisSchema.user().byteOffsetOf(UserCounterType.FOLLOWER));
-        assertEquals(8, CountRedisSchema.user().byteOffsetOf(UserCounterType.POST));
-        assertEquals(12, CountRedisSchema.user().byteOffsetOf(UserCounterType.LIKE_RECEIVED));
-        assertEquals(16, CountRedisSchema.user().byteOffsetOf(UserCounterType.FAVORITE_RECEIVED));
+        assertEquals(List.of(
+                UserCounterType.FOLLOWINGS,
+                UserCounterType.FOLLOWERS,
+                UserCounterType.POSTS,
+                UserCounterType.LIKES_RECEIVED,
+                UserCounterType.FAVS_RECEIVED), Arrays.asList(UserCounterType.values()));
+        assertEquals(1, CountRedisSchema.user().logicalIndexOf(UserCounterType.FOLLOWINGS));
+        assertEquals(2, CountRedisSchema.user().logicalIndexOf(UserCounterType.FOLLOWERS));
+        assertEquals(3, CountRedisSchema.user().logicalIndexOf(UserCounterType.POSTS));
+        assertEquals(4, CountRedisSchema.user().logicalIndexOf(UserCounterType.LIKES_RECEIVED));
+        assertEquals(5, CountRedisSchema.user().logicalIndexOf(UserCounterType.FAVS_RECEIVED));
+        assertEquals("followings", UserCounterType.FOLLOWINGS.getCode());
+        assertEquals("followers", UserCounterType.FOLLOWERS.getCode());
+        assertEquals("posts", UserCounterType.POSTS.getCode());
+        assertEquals("likesReceived", UserCounterType.LIKES_RECEIVED.getCode());
+        assertEquals("favsReceived", UserCounterType.FAVS_RECEIVED.getCode());
+        assertEquals(0, CountRedisSchema.user().byteOffsetOf(UserCounterType.FOLLOWINGS));
+        assertEquals(4, CountRedisSchema.user().byteOffsetOf(UserCounterType.FOLLOWERS));
+        assertEquals(8, CountRedisSchema.user().byteOffsetOf(UserCounterType.POSTS));
+        assertEquals(12, CountRedisSchema.user().byteOffsetOf(UserCounterType.LIKES_RECEIVED));
+        assertEquals(16, CountRedisSchema.user().byteOffsetOf(UserCounterType.FAVS_RECEIVED));
     }
 
     @Test
     void keyBuildersRenderZhiguangFamilies() {
         assertEquals("cnt:v1:post:42", CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.POST, 42L));
-        assertEquals("cnt:v1:comment:99", CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.COMMENT, 99L));
+        assertNull(CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.COMMENT, 99L));
         assertEquals("ucnt:7", CountRedisKeys.userSnapshot(7L));
         assertEquals("agg:v1:post:42",
                 CountRedisKeys.objectAggregationBucket(ReactionTargetTypeEnumVO.POST, 42L));
-        assertEquals("agg:v1:post:42:7",
-                CountRedisKeys.objectAggregationBucket(ReactionTargetTypeEnumVO.POST, 42L, 7L));
-        assertEquals("bm:like:post:42:0", CountRedisKeys.likeBitmapShard(ReactionTargetTypeEnumVO.POST, 42L, 0));
-        assertEquals("bm:like:post:42:idx", CountRedisKeys.likeBitmapShardIndex(ReactionTargetTypeEnumVO.POST, 42L));
+        assertTrue(Arrays.stream(CountRedisKeys.class.getDeclaredMethods())
+                .noneMatch(method -> method.getName().equals("objectAggregationBucket") && method.getParameterCount() == 3));
+        assertEquals("bm:like:post:42:0",
+                CountRedisKeys.bitmapShard(ObjectCounterType.LIKE, ReactionTargetTypeEnumVO.POST, 42L, 0));
+        assertEquals("bm:fav:post:42:3",
+                CountRedisKeys.bitmapShard(ObjectCounterType.FAV, ReactionTargetTypeEnumVO.POST, 42L, 3));
+        assertTrue(Arrays.stream(CountRedisKeys.class.getDeclaredMethods())
+                .noneMatch(method -> method.getName().equals("likeBitmapShardIndex")));
         assertEquals("uf:flws:7", CountRedisKeys.relationFollowings(7L));
         assertEquals("uf:fans:7", CountRedisKeys.relationFollowers(7L));
         assertEquals("ucnt:chk:7", CountRedisKeys.userCounterSampleCheck(7L));

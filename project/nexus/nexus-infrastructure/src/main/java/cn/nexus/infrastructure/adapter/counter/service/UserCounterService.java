@@ -47,22 +47,22 @@ public class UserCounterService implements IUserCounterService {
 
     @Override
     public long incrementFollowings(Long userId, long delta) {
-        return increment(userId, UserCounterType.FOLLOWING, delta);
+        return increment(userId, UserCounterType.FOLLOWINGS, delta);
     }
 
     @Override
     public long incrementFollowers(Long userId, long delta) {
-        return increment(userId, UserCounterType.FOLLOWER, delta);
+        return increment(userId, UserCounterType.FOLLOWERS, delta);
     }
 
     @Override
     public long incrementPosts(Long userId, long delta) {
-        return increment(userId, UserCounterType.POST, delta);
+        return increment(userId, UserCounterType.POSTS, delta);
     }
 
     @Override
     public long incrementLikesReceived(Long userId, long delta) {
-        return increment(userId, UserCounterType.LIKE_RECEIVED, delta);
+        return increment(userId, UserCounterType.LIKES_RECEIVED, delta);
     }
 
     @Override
@@ -204,21 +204,21 @@ public class UserCounterService implements IUserCounterService {
 
     private Map<String, Long> rebuildClass2Slots(Long userId, Map<String, Long> previousSnapshot) {
         Map<String, Long> rebuilt = CountRedisSchema.userSnapshotDefaults();
-        rebuilt.put(UserCounterType.FOLLOWING.getCode(),
+        rebuilt.put(UserCounterType.FOLLOWINGS.getCode(),
                 Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1)));
-        rebuilt.put(UserCounterType.FOLLOWER.getCode(),
+        rebuilt.put(UserCounterType.FOLLOWERS.getCode(),
                 Math.max(0L, relationRepository.countFollowerIds(userId)));
-        rebuilt.put(UserCounterType.POST.getCode(),
+        rebuilt.put(UserCounterType.POSTS.getCode(),
                 Math.max(0L, contentRepository.countPublishedPostsByUser(userId)));
         long preservedLikeReceived = 0L;
         if (previousSnapshot != null) {
-            Long prev = previousSnapshot.get(UserCounterType.LIKE_RECEIVED.getCode());
+            Long prev = previousSnapshot.get(UserCounterType.LIKES_RECEIVED.getCode());
             if (prev != null) {
                 preservedLikeReceived = Math.max(0L, prev);
             }
         }
-        rebuilt.put(UserCounterType.LIKE_RECEIVED.getCode(), preservedLikeReceived);
-        rebuilt.put(UserCounterType.FAVORITE_RECEIVED.getCode(), 0L);
+        rebuilt.put(UserCounterType.LIKES_RECEIVED.getCode(), preservedLikeReceived);
+        rebuilt.put(UserCounterType.FAVS_RECEIVED.getCode(), 0L);
         return rebuilt;
     }
 
@@ -315,8 +315,8 @@ public class UserCounterService implements IUserCounterService {
         if (!Boolean.TRUE.equals(shouldCheck)) {
             return;
         }
-        long following = valueOf(snapshot, UserCounterType.FOLLOWING);
-        long follower = valueOf(snapshot, UserCounterType.FOLLOWER);
+        long following = valueOf(snapshot, UserCounterType.FOLLOWINGS);
+        long follower = valueOf(snapshot, UserCounterType.FOLLOWERS);
         long truthFollowing = Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1));
         long truthFollower = Math.max(0L, relationRepository.countFollowerIds(userId));
         if (following != truthFollowing || follower != truthFollower) {
@@ -332,10 +332,10 @@ public class UserCounterService implements IUserCounterService {
 
     private UserRelationCounterVO toPublicCounters(Map<String, Long> snapshot) {
         return UserRelationCounterVO.builder()
-                .followings(valueOf(snapshot, UserCounterType.FOLLOWING))
-                .followers(valueOf(snapshot, UserCounterType.FOLLOWER))
-                .posts(valueOf(snapshot, UserCounterType.POST))
-                .likedPosts(valueOf(snapshot, UserCounterType.LIKE_RECEIVED))
+                .followings(valueOf(snapshot, UserCounterType.FOLLOWINGS))
+                .followers(valueOf(snapshot, UserCounterType.FOLLOWERS))
+                .posts(valueOf(snapshot, UserCounterType.POSTS))
+                .likedPosts(valueOf(snapshot, UserCounterType.LIKES_RECEIVED))
                 .build();
     }
 

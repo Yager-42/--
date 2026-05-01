@@ -19,7 +19,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -33,7 +35,6 @@ public class ObjectCounterService implements IObjectCounterService {
     private static final long REBUILD_LOCK_SECONDS = 15L;
     private static final long REBUILD_RATE_LIMIT_SECONDS = 30L;
     private static final long REBUILD_BACKOFF_SECONDS = 120L;
-    private static final int AGG_SHARDS = 64;
 
     private final StringRedisTemplate redisTemplate;
     private final ICounterEventProducer counterEventProducer;
@@ -55,7 +56,7 @@ public class ObjectCounterService implements IObjectCounterService {
         }
         long shard = userId / CountRedisKeys.CHUNK_SIZE;
         long offset = userId % CountRedisKeys.CHUNK_SIZE;
-        String key = CountRedisKeys.likeBitmapShard(targetType, targetId, shard);
+        String key = CountRedisKeys.bitmapShard(ObjectCounterType.LIKE, targetType, targetId, shard);
         return Boolean.TRUE.equals(redisTemplate.opsForValue().getBit(key, offset));
     }
 
@@ -132,14 +133,13 @@ public class ObjectCounterService implements IObjectCounterService {
         }
         long shard = userId / CountRedisKeys.CHUNK_SIZE;
         long offset = userId % CountRedisKeys.CHUNK_SIZE;
-        String bitmapKey = CountRedisKeys.likeBitmapShard(targetType, targetId, shard);
+        String bitmapKey = CountRedisKeys.bitmapShard(ObjectCounterType.LIKE, targetType, targetId, shard);
         Boolean previous = redisTemplate.opsForValue().setBit(bitmapKey, offset, desiredState);
         boolean changed = desiredState ? !Boolean.TRUE.equals(previous) : Boolean.TRUE.equals(previous);
         if (!changed) {
             return false;
         }
         int slot = CountRedisSchema.forObject(targetType).slotOf(ObjectCounterType.LIKE);
-        registerBitmapShard(targetType, targetId, shard);
         counterEventProducer.publish(CounterDeltaEvent.builder()
                 .entityType(targetType)
                 .entityId(targetId)
@@ -160,14 +160,6 @@ public class ObjectCounterService implements IObjectCounterService {
 
     private boolean supportsBitmapRebuild(ReactionTargetTypeEnumVO targetType) {
         return targetType == ReactionTargetTypeEnumVO.POST || targetType == ReactionTargetTypeEnumVO.COMMENT;
-    }
-
-    private void registerBitmapShard(ReactionTargetTypeEnumVO targetType, Long targetId, long shard) {
-        String indexKey = CountRedisKeys.likeBitmapShardIndex(targetType, targetId);
-        if (indexKey == null) {
-            return;
-        }
-        redisTemplate.opsForSet().add(indexKey, String.valueOf(shard));
     }
 
     private byte[] rebuildSnapshotIfPossible(ReactionTargetTypeEnumVO targetType, Long targetId) {
@@ -232,18 +224,12 @@ public class ObjectCounterService implements IObjectCounterService {
         if (target == null || target.getTargetType() == null || target.getTargetId() == null) {
             return 0L;
         }
-        Set<String> shards = redisTemplate.opsForSet().members(
-                CountRedisKeys.likeBitmapShardIndex(target.getTargetType(), target.getTargetId()));
-        if (shards == null || shards.isEmpty()) {
+        Set<String> shardKeys = scanBitmapShardKeys(ObjectCounterType.LIKE, target.getTargetType(), target.getTargetId());
+        if (shardKeys == null || shardKeys.isEmpty()) {
             return 0L;
         }
         long sum = 0L;
-        for (String shard : shards) {
-            Long shardId = parseShard(shard);
-            if (shardId == null) {
-                continue;
-            }
-            String shardKey = CountRedisKeys.likeBitmapShard(target.getTargetType(), target.getTargetId(), shardId);
+        for (String shardKey : shardKeys) {
             Long shardCount = redisTemplate.execute((RedisCallback<Long>) connection -> {
                 if (connection == null) {
                     return 0L;
@@ -257,6 +243,32 @@ public class ObjectCounterService implements IObjectCounterService {
         return Math.max(0L, sum);
     }
 
+    private Set<String> scanBitmapShardKeys(ObjectCounterType metric,
+                                            ReactionTargetTypeEnumVO targetType,
+                                            Long targetId) {
+        if (metric == null || targetType != ReactionTargetTypeEnumVO.POST || targetId == null) {
+            return Set.of();
+        }
+        String pattern = "bm:" + metric.getCode() + ":post:" + targetId + ":*";
+        Set<String> keys = redisTemplate.execute((RedisCallback<Set<String>>) connection -> {
+            Set<String> result = new java.util.HashSet<>();
+            if (connection == null) {
+                return result;
+            }
+            ScanOptions options = ScanOptions.scanOptions().match(pattern).count(256).build();
+            try (Cursor<byte[]> cursor = connection.scan(options)) {
+                while (cursor.hasNext()) {
+                    byte[] keyBytes = cursor.next();
+                    if (keyBytes != null && keyBytes.length > 0) {
+                        result.add(new String(keyBytes, StandardCharsets.UTF_8));
+                    }
+                }
+            }
+            return result;
+        });
+        return keys == null ? Set.of() : keys;
+    }
+
     private void clearAggregationOverlap(ObjectCounterTarget target) {
         if (target == null || target.getTargetType() == null || target.getTargetId() == null || target.getCounterType() == null) {
             return;
@@ -266,14 +278,9 @@ public class ObjectCounterService implements IObjectCounterService {
         if (slot < 0) {
             return;
         }
-        for (int shard = 0; shard < AGG_SHARDS; shard++) {
-            String aggregationKey = CountRedisKeys.objectAggregationBucket(
-                    target.getTargetType(),
-                    target.getTargetId(),
-                    shard);
-            if (aggregationKey != null) {
-                redisTemplate.opsForHash().delete(aggregationKey, String.valueOf(slot));
-            }
+        String aggregationKey = CountRedisKeys.objectAggregationBucket(target.getTargetType(), target.getTargetId());
+        if (aggregationKey != null) {
+            redisTemplate.opsForHash().delete(aggregationKey, String.valueOf(slot));
         }
     }
 
@@ -312,18 +319,6 @@ public class ObjectCounterService implements IObjectCounterService {
             return Long.parseLong(raw);
         } catch (NumberFormatException ignored) {
             return 0L;
-        }
-    }
-
-    private Long parseShard(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-        try {
-            long shard = Long.parseLong(raw.trim());
-            return shard < 0L ? null : shard;
-        } catch (NumberFormatException ignored) {
-            return null;
         }
     }
 

@@ -140,7 +140,7 @@ class CounterReplacementContractTest {
         assertThat(Files.readString(ROOT.resolve("nexus-domain/src/main/java/cn/nexus/domain/counter/model/valobj/UserCounterType.java")))
                 .contains("FAVORITE_RECEIVED", "favorite_received");
         assertThat(Files.readString(ROOT.resolve("nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/counter/support/CountRedisSchema.java")))
-                .contains("UserCounterType.FAVORITE_RECEIVED, 5");
+                .contains("UserCounterType.FAVS_RECEIVED, 5");
         assertThat(Files.readString(ROOT.resolve("nexus-domain/src/main/java/cn/nexus/domain/counter/adapter/service/IUserCounterService.java")))
                 .doesNotContain("incrementFavsReceived");
         assertThat(Files.readString(ROOT.resolve("nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/counter/service/UserCounterService.java")))

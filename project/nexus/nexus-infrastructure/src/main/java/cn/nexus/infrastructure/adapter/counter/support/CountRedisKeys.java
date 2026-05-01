@@ -23,7 +23,7 @@ public final class CountRedisKeys {
     }
 
     public static String objectSnapshot(ReactionTargetTypeEnumVO targetType, Long targetId) {
-        if (targetType == null || targetId == null) {
+        if (targetType == null || targetId == null || targetType != ReactionTargetTypeEnumVO.POST) {
             return null;
         }
         return "cnt:" + CountRedisSchema.SCHEMA_ID + ":" + lower(targetType) + ":" + targetId;
@@ -36,25 +36,11 @@ public final class CountRedisKeys {
         return "ucnt:" + userId;
     }
 
-    public static String objectAggregationBucket(ReactionTargetTypeEnumVO targetType, ObjectCounterType counterType) {
-        if (targetType == null || counterType == null) {
-            return null;
-        }
-        return "agg:" + CountRedisSchema.SCHEMA_ID + ":" + lower(targetType) + ":" + counterType.getCode();
-    }
-
     public static String objectAggregationBucket(ReactionTargetTypeEnumVO targetType, Long targetId) {
-        if (targetType == null || targetId == null) {
+        if (targetType == null || targetId == null || targetType != ReactionTargetTypeEnumVO.POST) {
             return null;
         }
         return "agg:" + CountRedisSchema.SCHEMA_ID + ":" + lower(targetType) + ":" + targetId;
-    }
-
-    public static String objectAggregationBucket(ReactionTargetTypeEnumVO targetType, Long targetId, long shard) {
-        if (targetType == null || targetId == null) {
-            return null;
-        }
-        return objectAggregationBucket(targetType, targetId) + ":" + shard;
     }
 
     public static String objectAggregationActiveIndex() {
@@ -68,18 +54,14 @@ public final class CountRedisKeys {
         return "count:agg:{user}:" + counterType.getCode();
     }
 
-    public static String likeBitmapShard(ReactionTargetTypeEnumVO targetType, Long targetId, long shard) {
-        if (targetType == null || targetId == null) {
+    public static String bitmapShard(ObjectCounterType counterType, ReactionTargetTypeEnumVO targetType, Long targetId, long shard) {
+        if (counterType == null || targetType == null || targetId == null || targetType != ReactionTargetTypeEnumVO.POST) {
             return null;
         }
-        return "bm:like:" + lower(targetType) + ":" + targetId + ":" + shard;
-    }
-
-    public static String likeBitmapShardIndex(ReactionTargetTypeEnumVO targetType, Long targetId) {
-        if (targetType == null || targetId == null) {
+        if (counterType != ObjectCounterType.LIKE && counterType != ObjectCounterType.FAV) {
             return null;
         }
-        return "bm:like:" + lower(targetType) + ":" + targetId + ":idx";
+        return "bm:" + counterType.getCode() + ":" + lower(targetType) + ":" + targetId + ":" + shard;
     }
 
     public static String likeFactCount(ReactionTargetTypeEnumVO targetType, Long targetId) {
@@ -149,7 +131,7 @@ public final class CountRedisKeys {
     }
 
     public static String bitmapField(ObjectCounterType counterType) {
-        if (counterType == ObjectCounterType.LIKE) {
+        if (counterType == ObjectCounterType.LIKE || counterType == ObjectCounterType.FAV) {
             return counterType.getCode();
         }
         return null;

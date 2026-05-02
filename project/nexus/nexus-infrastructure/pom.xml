@@ -26,6 +26,10 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
         <!-- Nacos 配置中心（用于 storage.type 热切换 + @RefreshScope） -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>

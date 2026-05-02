@@ -2,10 +2,9 @@ package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IRelationEventPort;
 import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.types.event.relation.RelationCounterProjectEvent;
-import com.rabbitmq.client.ConfirmCallback;
 import lombok.RequiredArgsConstructor;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -19,7 +18,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RelationEventPort implements IRelationEventPort {
 
-    private final RabbitTemplate rabbitTemplate;
+    private final ReliableMqOutboxService reliableMqOutboxService;
 
     /**
      * 执行 onFollow 逻辑。
@@ -47,11 +46,7 @@ public class RelationEventPort implements IRelationEventPort {
             return false;
         }
         try {
-            rabbitTemplate.invoke(operations -> {
-                operations.convertAndSend(RelationCounterRouting.EXCHANGE, routingKey, event);
-                return null;
-            }, ackCallback(), nackCallback());
-            rabbitTemplate.waitForConfirmsOrDie(5000L);
+            reliableMqOutboxService.save(event.getEventId(), RelationCounterRouting.EXCHANGE, routingKey, event);
             return true;
         } catch (Exception e) {
             return false;
@@ -66,17 +61,5 @@ public class RelationEventPort implements IRelationEventPort {
             return RelationCounterRouting.RK_BLOCK;
         }
         return null;
-    }
-
-    private ConfirmCallback ackCallback() {
-        return (sequence, multiple) -> {
-            // no-op
-        };
-    }
-
-    private ConfirmCallback nackCallback() {
-        return (sequence, multiple) -> {
-            throw new IllegalStateException("relation publish confirm nacked");
-        };
     }
 }

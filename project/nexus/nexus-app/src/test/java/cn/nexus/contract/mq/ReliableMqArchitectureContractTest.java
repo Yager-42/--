@@ -20,6 +20,9 @@ class ReliableMqArchitectureContractTest {
     private static final Set<String> RAW_PUBLISH_ALLOWED_KEYS = Set.of(
             "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/ReliableMqOutboxService.java:publishReady:record.getExchangeName()|record.getRoutingKey()",
             "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/ReliableMqReplayService.java:replayReady:record.getOriginalExchange()|record.getOriginalRoutingKey()",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onDeleted:EXCHANGE|ROUTING_KEY_DELETED",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onPublished:EXCHANGE|ROUTING_KEY",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onUpdated:EXCHANGE|ROUTING_KEY_UPDATED",
             "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java:publishOne:EXCHANGE|ROUTING_KEY_DELETED",
             "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java:publishOne:EXCHANGE|ROUTING_KEY_PUBLISHED",
             "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java:publishOne:EXCHANGE|ROUTING_KEY_SUMMARY_GENERATE",
@@ -93,17 +96,7 @@ class ReliableMqArchitectureContractTest {
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java:onUserNicknameChanged"
     );
 
-    private static final List<String> EXPECTED_RAW_PUBLISH_FINDING_KEYS = List.of(
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onDeleted:EXCHANGE|ROUTING_KEY_DELETED",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onPublished:EXCHANGE|ROUTING_KEY",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onUpdated:EXCHANGE|ROUTING_KEY_UPDATED",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionNotifyMqPort.java:publish:EXCHANGE|ROUTING_KEY",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionRecommendFeedbackMqPort.java:publish:EXCHANGE|ROUTING_KEY",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationEventPort.java:publishCounterProjection:RelationCounterRouting.EXCHANGE|routingKey",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendImageScan:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_IMAGE_SCAN",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendLlmScan:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_LLM_SCAN",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendReviewCase:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_REVIEW_CASE"
-    );
+    private static final List<String> EXPECTED_RAW_PUBLISH_FINDING_KEYS = List.of();
 
     private static final List<String> EXPECTED_UNANNOTATED_LISTENER_FINDINGS = List.of(
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentCreatedConsumer.java:onMessage",

@@ -7,17 +7,18 @@ import cn.nexus.types.event.PostUpdatedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.stereotype.Component;
 
 /**
- * 内容分发事件端口实现：使用 RabbitMQ 直接投递。
+ * 内容分发事件端口实现：历史直投路径。
+ *
+ * <p>Active content services publish through {@link ContentEventOutboxPort}; this class is intentionally
+ * not a Spring bean and remains only as a legacy adapter reference until the old port is deleted.</p>
  *
  * @author rr
  * @author codex
  * @since 2026-01-05
  */
 @Slf4j
-@Component
 @RequiredArgsConstructor
 public class ContentDispatchPort implements IContentDispatchPort {
 

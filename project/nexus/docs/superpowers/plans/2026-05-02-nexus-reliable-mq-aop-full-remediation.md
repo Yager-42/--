@@ -575,7 +575,7 @@ Also add only the downstream publish test files created or modified in this task
 - Update: `project/nexus/docs/operations/reliable-mq-chain-inventory.md`
 - Test producer tests.
 
-- [ ] **Step 1: Write failing raw publish architecture test**
+- [x] **Step 1: Write failing raw publish architecture test**
 
 Enable or update `ReliableMqArchitectureContractTest` so raw publish in these files fails.
 
@@ -587,7 +587,7 @@ Expected: fail listing the remaining raw producers.
 
 Do not commit at this point.
 
-- [ ] **Step 2: Convert or classify each producer**
+- [x] **Step 2: Convert or classify each producer**
 
 For each file:
 
@@ -597,7 +597,7 @@ For each file:
 - For `ContentDispatchPort`, first determine whether any active domain service still uses it instead of `ContentEventOutboxPort`. If unused, remove the bean or classify it as dead code in the inventory rather than adding another publish path.
 - For `RelationEventPort`, keep relation projection manual-ack semantics and convert only the producer-side durability.
 
-- [ ] **Step 3: Run producer and architecture tests**
+- [x] **Step 3: Run producer and architecture tests**
 
 Run:
 
@@ -605,7 +605,7 @@ Run:
 
 Expected: all existing and newly created tests pass. If a per-class producer test is not created, the architecture test must explicitly cover that producer's raw publish removal or best-effort classification.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 

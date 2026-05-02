@@ -1,12 +1,13 @@
 package cn.nexus.trigger.mq.producer;
 
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqPublish;
 import cn.nexus.trigger.mq.config.RiskMqConfig;
 import cn.nexus.types.event.risk.ImageScanRequestedEvent;
 import cn.nexus.types.event.risk.LlmScanRequestedEvent;
 import cn.nexus.types.event.risk.ReviewCaseCreatedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 /**
@@ -17,13 +18,13 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RiskProducer {
 
-    private final RabbitTemplate rabbitTemplate;
+    private final ObjectProvider<RiskProducer> selfProvider;
 
     public void sendLlmScan(LlmScanRequestedEvent event) {
         if (event == null) {
             return;
         }
-        rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_LLM_SCAN, event);
+        selfProvider.getObject().publishLlmScan(event);
         log.debug("Risk LLM scan dispatched. decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId());
     }
 
@@ -31,7 +32,7 @@ public class RiskProducer {
         if (event == null) {
             return;
         }
-        rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_IMAGE_SCAN, event);
+        selfProvider.getObject().publishImageScan(event);
         log.debug("Risk image scan dispatched. decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId());
     }
 
@@ -39,8 +40,28 @@ public class RiskProducer {
         if (event == null) {
             return;
         }
-        rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_REVIEW_CASE, event);
+        selfProvider.getObject().publishReviewCase(event);
         log.debug("Risk review case dispatched. caseId={}, decisionId={}", event.getCaseId(), event.getDecisionId());
     }
-}
 
+    @ReliableMqPublish(exchange = RiskMqConfig.EXCHANGE,
+            routingKey = RiskMqConfig.RK_LLM_SCAN,
+            eventId = "#event.eventId",
+            payload = "#event")
+    public void publishLlmScan(LlmScanRequestedEvent event) {
+    }
+
+    @ReliableMqPublish(exchange = RiskMqConfig.EXCHANGE,
+            routingKey = RiskMqConfig.RK_IMAGE_SCAN,
+            eventId = "#event.eventId",
+            payload = "#event")
+    public void publishImageScan(ImageScanRequestedEvent event) {
+    }
+
+    @ReliableMqPublish(exchange = RiskMqConfig.EXCHANGE,
+            routingKey = RiskMqConfig.RK_REVIEW_CASE,
+            eventId = "#event.eventId",
+            payload = "#event")
+    public void publishReviewCase(ReviewCaseCreatedEvent event) {
+    }
+}

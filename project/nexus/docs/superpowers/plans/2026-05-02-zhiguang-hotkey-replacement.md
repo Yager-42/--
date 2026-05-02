@@ -390,7 +390,7 @@ Run:
 **Files:**
 - Verify: active runtime files and tests
 
-- [ ] **Step 1: Run targeted tests**
+- [x] **Step 1: Run targeted tests**
 
 Run:
 
@@ -398,7 +398,7 @@ Run:
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Run infrastructure test suite**
+- [x] **Step 2: Run infrastructure test suite**
 
 Run:
 
@@ -406,7 +406,7 @@ Run:
 
 Expected: build succeeds and tests pass.
 
-- [ ] **Step 3: Run active runtime JD artifact search**
+- [x] **Step 3: Run active runtime JD artifact search**
 
 Run:
 
@@ -414,7 +414,7 @@ Run:
 
 Expected: no matches.
 
-- [ ] **Step 4: Confirm historical docs are the only remaining references**
+- [x] **Step 4: Confirm historical docs are the only remaining references**
 
 Run:
 
@@ -422,7 +422,7 @@ Run:
 
 Expected: matches are limited to historical docs/specs/plans outside active runtime paths. If active runtime files still match, fix them before completion.
 
-- [ ] **Step 5: Check git state**
+- [x] **Step 5: Check git state**
 
 Run:
 

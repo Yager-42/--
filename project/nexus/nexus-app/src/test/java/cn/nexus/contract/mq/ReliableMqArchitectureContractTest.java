@@ -35,6 +35,9 @@ class ReliableMqArchitectureContractTest {
             "nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationCounterProjectConsumer.java:onFollow",
             "nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationCounterProjectConsumer.java:onBlock"
     );
+    private static final Set<String> METHOD_DECLARATION_EXCLUDED_NAMES = Set.of(
+            "if", "for", "while", "switch", "catch", "try", "do", "synchronized"
+    );
 
     private static final Set<String> SIDE_EFFECTING_LISTENER_FILES = Set.of(
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentCreatedConsumer.java",
@@ -125,10 +128,9 @@ class ReliableMqArchitectureContractTest {
     );
 
     private static final Pattern METHOD_DECLARATION = Pattern.compile(
-            "^\\s*(?:public|private|protected)\\s+(?:static\\s+)?[^\\n=;]+?\\s+(\\w+)\\s*\\([^\\n;]*\\)\\s*(?:throws\\s+[^\\n{]+)?\\s*\\{?\\s*$",
+            "^\\s*(?:(?:public|private|protected)\\s+)?(?:static\\s+)?[^\\n=;]+?\\s+(\\w+)\\s*\\([^\\n;]*\\)\\s*(?:throws\\s+[^\\n{]+)?\\s*\\{?\\s*$",
             Pattern.MULTILINE);
-    private static final Pattern CONVERT_AND_SEND = Pattern.compile(
-            "(?:\\w+\\.)?convertAndSend\\s*\\(\\s*([^,\\n]+)\\s*,\\s*([^,\\n]+)\\s*,");
+    private static final Pattern CONVERT_AND_SEND_START = Pattern.compile("(?:\\w+\\.)?convertAndSend\\s*\\(");
 
     @Test
     void rawRabbitTemplatePublishesRemainAtCurrentAuditBaseline() throws IOException {
@@ -201,6 +203,32 @@ class ReliableMqArchitectureContractTest {
         ), methods);
     }
 
+    @Test
+    void rawPublishDetectionHandlesMultilineInvocationsAndPackagePrivateMethods() {
+        String source = """
+                class Example {
+                    @RabbitListener(queues = "example.queue")
+                    void packagePrivateListener(Object event) {
+                    }
+
+                    void publish(Object event) {
+                        rabbitTemplate.convertAndSend(
+                                EXCHANGE,
+                                ROUTING_KEY,
+                                event);
+                    }
+                }
+                """;
+
+        List<RawPublishFinding> rawPublishFindings = rawPublishFindings(Path.of("Example.java"), source);
+        List<ListenerMethod> listenerMethods = rabbitListenerMethods(Path.of("Example.java"), source);
+
+        assertEquals(List.of("nexus-app/Example.java:publish:EXCHANGE|ROUTING_KEY"),
+                rawPublishFindings.stream().map(RawPublishFinding::key).toList());
+        assertEquals(List.of(new ListenerMethod("nexus-app/Example.java", "packagePrivateListener", false)),
+                listenerMethods);
+    }
+
     private static List<Path> javaSources() throws IOException {
         Path root = nexusRoot();
         try (var stream = Files.walk(root)) {
@@ -212,17 +240,19 @@ class ReliableMqArchitectureContractTest {
     }
 
     private static List<RawPublishFinding> rawPublishFindings(Path path) {
-        String source = read(path);
+        return rawPublishFindings(path, read(path));
+    }
+
+    private static List<RawPublishFinding> rawPublishFindings(Path path, String source) {
         List<RawPublishFinding> findings = new ArrayList<>();
-        String[] lines = source.split("\\R", -1);
-        for (int i = 0; i < lines.length; i++) {
-            String line = lines[i];
-            if (line.contains("rabbitTemplate.convertAndSend(") || line.contains(".convertAndSend(")) {
-                Matcher call = CONVERT_AND_SEND.matcher(line);
-                String target = call.find() ? normalize(call.group(1)) + "|" + normalize(call.group(2)) : "unknown|unknown";
-                findings.add(new RawPublishFinding(relative(path), enclosingMethod(source, offsetOfLine(lines, i)), target,
-                        i + 1, line.trim()));
-            }
+        Matcher matcher = CONVERT_AND_SEND_START.matcher(source);
+        while (matcher.find()) {
+            int openParen = source.indexOf('(', matcher.start());
+            int closeParen = closeParenIndex(source, openParen);
+            List<String> args = splitTopLevelArguments(source.substring(openParen + 1, closeParen));
+            String target = args.size() >= 2 ? normalize(args.get(0)) + "|" + normalize(args.get(1)) : "unknown|unknown";
+            findings.add(new RawPublishFinding(relative(path), enclosingMethod(source, matcher.start()), target,
+                    lineNumber(source, matcher.start()), invocationDiagnostic(source, matcher.start(), closeParen)));
         }
         return findings;
     }
@@ -318,17 +348,101 @@ class ReliableMqArchitectureContractTest {
         Matcher matcher = METHOD_DECLARATION.matcher(source.substring(0, Math.min(offset, source.length())));
         String method = "<class>";
         while (matcher.find()) {
-            method = matcher.group(1);
+            if (!METHOD_DECLARATION_EXCLUDED_NAMES.contains(matcher.group(1))) {
+                method = matcher.group(1);
+            }
         }
         return method;
     }
 
-    private static int offsetOfLine(String[] lines, int lineIndex) {
-        int offset = 0;
-        for (int i = 0; i < lineIndex; i++) {
-            offset += lines[i].length() + 1;
+    private static int closeParenIndex(String source, int openParen) {
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = openParen; i < source.length(); i++) {
+            char ch = source.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (ch == '"') {
+                inString = true;
+                continue;
+            }
+            if (ch == '(') {
+                depth++;
+                continue;
+            }
+            if (ch == ')') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
         }
-        return offset;
+        return source.length() - 1;
+    }
+
+    private static List<String> splitTopLevelArguments(String rawArguments) {
+        List<String> args = new ArrayList<>();
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        int start = 0;
+        for (int i = 0; i < rawArguments.length(); i++) {
+            char ch = rawArguments.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (ch == '"') {
+                inString = true;
+                continue;
+            }
+            if (ch == '(' || ch == '[' || ch == '{') {
+                depth++;
+                continue;
+            }
+            if (ch == ')' || ch == ']' || ch == '}') {
+                depth--;
+                continue;
+            }
+            if (ch == ',' && depth == 0) {
+                args.add(rawArguments.substring(start, i).trim());
+                start = i + 1;
+            }
+        }
+        if (start < rawArguments.length()) {
+            args.add(rawArguments.substring(start).trim());
+        }
+        return args;
+    }
+
+    private static int lineNumber(String source, int offset) {
+        int line = 1;
+        for (int i = 0; i < offset && i < source.length(); i++) {
+            if (source.charAt(i) == '\n') {
+                line++;
+            }
+        }
+        return line;
+    }
+
+    private static String invocationDiagnostic(String source, int start, int closeParen) {
+        int end = Math.min(source.length(), closeParen + 2);
+        return source.substring(start, end).trim().replaceAll("\\s+", " ");
     }
 
     private static String normalize(String expression) {

@@ -1,6 +1,8 @@
 package cn.nexus.trigger.mq.config;
 
 import cn.nexus.infrastructure.mq.reliable.ReliableMqPolicy;
+import java.util.Map;
+import org.springframework.amqp.ImmediateRequeueAmqpException;
 import org.springframework.amqp.rabbit.config.RetryInterceptorBuilder;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -9,6 +11,7 @@ import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.retry.interceptor.RetryOperationsInterceptor;
+import org.springframework.retry.policy.SimpleRetryPolicy;
 
 /**
  * 统一 RabbitMQ 可靠消费容器：
@@ -26,15 +29,25 @@ public class ReliableMqListenerContainerConfig {
         factory.setMessageConverter(messageConverter);
         factory.setDefaultRequeueRejected(false);
 
-        RetryOperationsInterceptor interceptor = RetryInterceptorBuilder.stateless()
-                .maxAttempts(ReliableMqPolicy.CONSUMER_MAX_ATTEMPTS)
+        RetryOperationsInterceptor interceptor = reliableRetryInterceptor();
+        factory.setAdviceChain(interceptor);
+        return factory;
+    }
+
+    static RetryOperationsInterceptor reliableRetryInterceptor() {
+        SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(
+                ReliableMqPolicy.CONSUMER_MAX_ATTEMPTS,
+                Map.of(ImmediateRequeueAmqpException.class, false),
+                true,
+                true);
+        retryPolicy.setNotRecoverable(ImmediateRequeueAmqpException.class);
+        return RetryInterceptorBuilder.stateless()
+                .retryPolicy(retryPolicy)
                 .backOffOptions(
                         ReliableMqPolicy.CONSUMER_INITIAL_INTERVAL_MS,
                         ReliableMqPolicy.CONSUMER_MULTIPLIER,
                         ReliableMqPolicy.CONSUMER_MAX_INTERVAL_MS)
                 .recoverer(new RejectAndDontRequeueRecoverer())
                 .build();
-        factory.setAdviceChain(interceptor);
-        return factory;
     }
 }

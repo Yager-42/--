@@ -238,7 +238,7 @@ public class FeedCardRepository implements IFeedCardRepository {
         try {
             return hotKeyStoreBridge.isHotKey(hotkey);
         } catch (Exception e) {
-            log.warn("jd-hotkey isHotKey failed, hotkey={}", hotkey, e);
+            log.warn("hotkey isHotKey failed, hotkey={}", hotkey, e);
             return false;
         }
     }

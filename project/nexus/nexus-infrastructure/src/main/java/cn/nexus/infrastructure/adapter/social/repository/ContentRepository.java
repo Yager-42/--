@@ -1082,7 +1082,7 @@ public class ContentRepository implements IContentRepository {
             return hotKeyStoreBridge.isHotKey(hotkey);
         } catch (Exception e) {
             // 澶栭儴渚濊禆涓嶅彲鐢ㄦ椂锛岀儹鐐规不鐞嗙洿鎺ュ叧闂紙涓嶅奖鍝嶄富閾捐矾锛夈€?
-            log.warn("jd-hotkey isHotKey failed, hotkey={}", hotkey, e);
+            log.warn("hotkey isHotKey failed, hotkey={}", hotkey, e);
             return false;
         }
     }

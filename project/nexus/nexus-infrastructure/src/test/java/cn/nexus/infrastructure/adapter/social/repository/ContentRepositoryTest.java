@@ -69,6 +69,30 @@ class ContentRepositoryTest {
     }
 
     @Test
+    void findPost_hotKeyShouldExtendRedisTtlUsingPostHotKey() throws Exception {
+        IContentPostDao contentPostDao = Mockito.mock(IContentPostDao.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        RepositoryFixture fixture = newRepositoryFixture(contentPostDao, valueOperations);
+        fixture.properties().setContentPostSeconds(300L);
+
+        String json = new ObjectMapper().writeValueAsString(ContentPostEntity.builder()
+                .postId(101L)
+                .userId(11L)
+                .title("cached")
+                .contentText("body")
+                .status(1)
+                .build());
+        when(valueOperations.get("interact:content:post:101")).thenReturn(json);
+        when(fixture.stringRedisTemplate().getExpire("interact:content:post:101", TimeUnit.SECONDS)).thenReturn(60L);
+        when(fixture.hotKeyStoreBridge().isHotKey("post__101")).thenReturn(true);
+
+        fixture.repository().findPost(101L);
+
+        verify(fixture.stringRedisTemplate()).expire("interact:content:post:101", 300L, TimeUnit.SECONDS);
+    }
+
+    @Test
     void listPostsByIds_shouldFilterNonPublishedEntriesFromSharedPostCache() throws Exception {
         IContentPostDao contentPostDao = Mockito.mock(IContentPostDao.class);
         @SuppressWarnings("unchecked")
@@ -116,6 +140,10 @@ class ContentRepositoryTest {
     }
 
     private ContentRepository newRepository(IContentPostDao contentPostDao, ValueOperations<String, String> valueOperations) {
+        return newRepositoryFixture(contentPostDao, valueOperations).repository();
+    }
+
+    private RepositoryFixture newRepositoryFixture(IContentPostDao contentPostDao, ValueOperations<String, String> valueOperations) {
         IContentDraftDao contentDraftDao = Mockito.mock(IContentDraftDao.class);
         IContentPostTypeDao contentPostTypeDao = Mockito.mock(IContentPostTypeDao.class);
         IContentHistoryDao contentHistoryDao = Mockito.mock(IContentHistoryDao.class);
@@ -128,7 +156,7 @@ class ContentRepositoryTest {
         HotKeyStoreBridge hotKeyStoreBridge = Mockito.mock(HotKeyStoreBridge.class);
         properties.setContentPostSeconds(0L);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
-        return new ContentRepository(
+        ContentRepository repository = new ContentRepository(
                 contentDraftDao,
                 contentPostDao,
                 contentPostTypeDao,
@@ -141,5 +169,15 @@ class ContentRepositoryTest {
                 properties,
                 hotKeyStoreBridge
         );
+        return new RepositoryFixture(repository, stringRedisTemplate, valueOperations, properties, hotKeyStoreBridge);
+    }
+
+    private record RepositoryFixture(
+            ContentRepository repository,
+            StringRedisTemplate stringRedisTemplate,
+            ValueOperations<String, String> valueOperations,
+            SocialCacheHotTtlProperties properties,
+            HotKeyStoreBridge hotKeyStoreBridge
+    ) {
     }
 }

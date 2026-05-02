@@ -6,13 +6,12 @@ import lombok.RequiredArgsConstructor;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
-import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 @Aspect
 @Component
-@Order(Ordered.LOWEST_PRECEDENCE)
+@Order(ReliableMqAopOrder.RELIABLE_MQ_ASPECT_ORDER)
 @RequiredArgsConstructor
 public class ReliableMqPublishAspect {
 
@@ -21,6 +20,7 @@ public class ReliableMqPublishAspect {
 
     @Around("@annotation(annotation)")
     public Object around(ProceedingJoinPoint joinPoint, ReliableMqPublish annotation) throws Throwable {
+        // Producer validation must run first; metadata is evaluated only after a successful method body.
         Object result = joinPoint.proceed();
         String eventId = expressionEvaluator.requiredString(joinPoint, annotation.eventId(), "eventId");
         Object payload = expressionEvaluator.requiredObject(joinPoint, annotation.payload(), "payload");

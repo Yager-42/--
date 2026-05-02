@@ -1,6 +1,7 @@
 package cn.nexus.infrastructure.mq.reliable.aop;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -55,6 +56,21 @@ class ReliableMqPublishAspectTest {
         assertThrows(RuntimeException.class,
                 () -> aspect.around(joinPoint, method.getAnnotation(ReliableMqPublish.class)));
 
+        verify(outboxService, never()).save(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any());
+    }
+
+    @Test
+    void around_shouldNotPreEvaluateMetadataWhenBusinessMethodFails() throws Throwable {
+        PublishFixture fixture = new PublishFixture();
+        PublishEvent event = new PublishEvent(" ", "hello");
+        Method method = PublishFixture.class.getMethod("publish", PublishEvent.class);
+        RuntimeException failure = new RuntimeException("producer validation failed");
+        ProceedingJoinPoint joinPoint = joinPoint(method, fixture, new Object[] {event}, failure);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class,
+                () -> aspect.around(joinPoint, method.getAnnotation(ReliableMqPublish.class)));
+
+        assertSame(failure, thrown);
         verify(outboxService, never()).save(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any());
     }
 

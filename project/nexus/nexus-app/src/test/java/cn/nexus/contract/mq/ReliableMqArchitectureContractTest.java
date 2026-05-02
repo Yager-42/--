@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -16,11 +17,14 @@ import org.junit.jupiter.api.Test;
 
 class ReliableMqArchitectureContractTest {
 
-    private static final Set<String> RAW_PUBLISH_ALLOWED_FILES = Set.of(
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/ReliableMqOutboxService.java",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/ReliableMqReplayService.java",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/user/port/UserEventOutboxPort.java"
+    private static final Set<String> RAW_PUBLISH_ALLOWED_KEYS = Set.of(
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/ReliableMqOutboxService.java:publishReady:record.getExchangeName()|record.getRoutingKey()",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/ReliableMqReplayService.java:replayReady:record.getOriginalExchange()|record.getOriginalRoutingKey()",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java:publishOne:EXCHANGE|ROUTING_KEY_DELETED",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java:publishOne:EXCHANGE|ROUTING_KEY_PUBLISHED",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java:publishOne:EXCHANGE|ROUTING_KEY_SUMMARY_GENERATE",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentEventOutboxPort.java:publishOne:EXCHANGE|ROUTING_KEY_UPDATED",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/user/port/UserEventOutboxPort.java:publishOne:EXCHANGE|ROUTING_KEY_NICKNAME_CHANGED"
     );
 
     private static final Set<String> BEST_EFFORT_LISTENERS_FROM_INVENTORY = Set.of(
@@ -52,20 +56,54 @@ class ReliableMqArchitectureContractTest {
             "nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationCounterProjectConsumer.java"
     );
 
-    private static final List<String> EXPECTED_RAW_PUBLISH_FINDINGS = List.of(
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:43:rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, event);",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:59:rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY_UPDATED, event);",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:75:rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY_DELETED, event);",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionNotifyMqPort.java:20:rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, event);",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionRecommendFeedbackMqPort.java:20:rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, event);",
-            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationEventPort.java:51:operations.convertAndSend(RelationCounterRouting.EXCHANGE, routingKey, event);",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java:132:rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, FeedFanoutConfig.TASK_ROUTING_KEY, task);",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanConsumer.java:183:rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_SCAN_COMPLETED, evt);",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanConsumer.java:286:rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_SCAN_COMPLETED, evt);",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcRawPublisher.java:94:rabbitTemplate.convertAndSend(publishExchange, publishRoutingKey, event);",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:26:rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_LLM_SCAN, event);",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:34:rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_IMAGE_SCAN, event);",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:42:rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_REVIEW_CASE, event);"
+    private static final Set<String> EXPECTED_LISTENER_INVENTORY = Set.of(
+            "nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationCounterProjectConsumer.java:onBlock",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationCounterProjectConsumer.java:onFollow",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentCreatedConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentCacheEvictConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentScheduleConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentScheduleDLQConsumer.java:onDLQ",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackAConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackADlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/PostSummaryGenerateConsumer.java:onPostSummaryGenerate",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/PostSummaryGenerateDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RelationBlockDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RelationFollowDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcConsumer.java:onPostChanged",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcRawPublisher.java:onRaw",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java:onUserNicknameChanged"
+    );
+
+    private static final List<String> EXPECTED_RAW_PUBLISH_FINDING_KEYS = List.of(
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onDeleted:EXCHANGE|ROUTING_KEY_DELETED",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onPublished:EXCHANGE|ROUTING_KEY",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java:onUpdated:EXCHANGE|ROUTING_KEY_UPDATED",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionNotifyMqPort.java:publish:EXCHANGE|ROUTING_KEY",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionRecommendFeedbackMqPort.java:publish:EXCHANGE|ROUTING_KEY",
+            "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationEventPort.java:publishCounterProjection:RelationCounterRouting.EXCHANGE|routingKey",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java:dispatch:FeedFanoutConfig.EXCHANGE|FeedFanoutConfig.TASK_ROUTING_KEY",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanConsumer.java:publishCompleted:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_SCAN_COMPLETED",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanConsumer.java:publishCompleted:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_SCAN_COMPLETED",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcRawPublisher.java:onRaw:publishExchange|publishRoutingKey",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendImageScan:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_IMAGE_SCAN",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendLlmScan:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_LLM_SCAN",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendReviewCase:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_REVIEW_CASE"
     );
 
     private static final List<String> EXPECTED_UNANNOTATED_LISTENER_FINDINGS = List.of(
@@ -86,19 +124,23 @@ class ReliableMqArchitectureContractTest {
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java:onUserNicknameChanged"
     );
 
-    private static final Pattern METHOD_AFTER_RABBIT_LISTENER = Pattern.compile(
-            "@RabbitListener[\\s\\S]*?\\n\\s*public\\s+[^\\n=;]+?\\s+(\\w+)\\s*\\(");
+    private static final Pattern METHOD_DECLARATION = Pattern.compile(
+            "^\\s*(?:public|private|protected)\\s+(?:static\\s+)?[^\\n=;]+?\\s+(\\w+)\\s*\\([^\\n;]*\\)\\s*(?:throws\\s+[^\\n{]+)?\\s*\\{?\\s*$",
+            Pattern.MULTILINE);
+    private static final Pattern CONVERT_AND_SEND = Pattern.compile(
+            "(?:\\w+\\.)?convertAndSend\\s*\\(\\s*([^,\\n]+)\\s*,\\s*([^,\\n]+)\\s*,");
 
     @Test
     void rawRabbitTemplatePublishesRemainAtCurrentAuditBaseline() throws IOException {
-        List<String> findings = javaSources().stream()
+        List<RawPublishFinding> findings = javaSources().stream()
                 .filter(path -> !isTestSource(path))
-                .filter(path -> !RAW_PUBLISH_ALLOWED_FILES.contains(relative(path)))
                 .flatMap(path -> rawPublishFindings(path).stream())
+                .filter(finding -> !RAW_PUBLISH_ALLOWED_KEYS.contains(finding.key()))
                 .sorted()
                 .toList();
 
-        assertEquals(EXPECTED_RAW_PUBLISH_FINDINGS, findings);
+        assertEquals(EXPECTED_RAW_PUBLISH_FINDING_KEYS, findings.stream().map(RawPublishFinding::key).toList(),
+                () -> "Raw publish diagnostics:\n" + diagnostics(findings));
     }
 
     @Test
@@ -112,6 +154,53 @@ class ReliableMqArchitectureContractTest {
         assertEquals(EXPECTED_UNANNOTATED_LISTENER_FINDINGS, findings);
     }
 
+    @Test
+    void rabbitListenersRemainCoveredByInventory() throws IOException {
+        Set<String> listeners = new LinkedHashSet<>();
+        for (Path path : javaSources()) {
+            if (!isTestSource(path)) {
+                listeners.addAll(rabbitListenerMethods(path).stream().map(ListenerMethod::id).toList());
+            }
+        }
+
+        assertEquals(EXPECTED_LISTENER_INVENTORY, listeners);
+    }
+
+    @Test
+    void reliableConsumeDetectionHandlesMultilineAnnotationBlocks() {
+        String source = """
+                class Example {
+                    @ReliableMqConsume(
+                            consumerName = "example",
+                            eventId = "#event.eventId",
+                            payload = "#event"
+                    )
+                    @RabbitListener(
+                            queues = "example.queue",
+                            containerFactory = "reliableMqListenerContainerFactory"
+                    )
+                    public void consume(Object event) {
+                    }
+
+                    @RabbitListener(queues = "other.queue")
+                    @ReliableMqConsume(
+                            consumerName = "other",
+                            eventId = "#event.id",
+                            payload = "#event"
+                    )
+                    public void consumeOther(Object event) {
+                    }
+                }
+                """;
+
+        List<ListenerMethod> methods = rabbitListenerMethods(Path.of("Example.java"), source);
+
+        assertEquals(List.of(
+                new ListenerMethod("nexus-app/Example.java", "consume", true),
+                new ListenerMethod("nexus-app/Example.java", "consumeOther", true)
+        ), methods);
+    }
+
     private static List<Path> javaSources() throws IOException {
         Path root = nexusRoot();
         try (var stream = Files.walk(root)) {
@@ -122,63 +211,161 @@ class ReliableMqArchitectureContractTest {
         }
     }
 
-    private static List<String> rawPublishFindings(Path path) {
+    private static List<RawPublishFinding> rawPublishFindings(Path path) {
         String source = read(path);
-        List<String> findings = new ArrayList<>();
+        List<RawPublishFinding> findings = new ArrayList<>();
         String[] lines = source.split("\\R", -1);
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             if (line.contains("rabbitTemplate.convertAndSend(") || line.contains(".convertAndSend(")) {
-                findings.add(relative(path) + ":" + (i + 1) + ":" + line.trim());
+                Matcher call = CONVERT_AND_SEND.matcher(line);
+                String target = call.find() ? normalize(call.group(1)) + "|" + normalize(call.group(2)) : "unknown|unknown";
+                findings.add(new RawPublishFinding(relative(path), enclosingMethod(source, offsetOfLine(lines, i)), target,
+                        i + 1, line.trim()));
             }
         }
         return findings;
     }
 
     private static List<String> unannotatedListenerFindings(Path path) {
-        String source = read(path);
-        Matcher matcher = METHOD_AFTER_RABBIT_LISTENER.matcher(source);
         List<String> findings = new ArrayList<>();
-        while (matcher.find()) {
-            String method = matcher.group(1);
-            String id = relative(path) + ":" + method;
-            if (hasReliableMqConsumeAnnotation(source, matcher.start(), matcher.end())
+        for (ListenerMethod listener : rabbitListenerMethods(path)) {
+            String id = listener.id();
+            if (listener.hasReliableMqConsume()
                     || BEST_EFFORT_LISTENERS_FROM_INVENTORY.contains(id)
                     || MANUAL_ACK_LISTENERS_FROM_INVENTORY.contains(id)) {
                 continue;
             }
-            findings.add(id);
+            findings.add(listener.id());
         }
         return findings;
     }
 
-    private static boolean hasReliableMqConsumeAnnotation(String source, int rabbitListenerStart, int methodDeclarationEnd) {
-        if (source.substring(rabbitListenerStart, methodDeclarationEnd).contains("@ReliableMqConsume")) {
-            return true;
+    private static List<ListenerMethod> rabbitListenerMethods(Path path) {
+        return rabbitListenerMethods(path, read(path));
+    }
+
+    private static List<ListenerMethod> rabbitListenerMethods(Path path, String source) {
+        Matcher matcher = METHOD_DECLARATION.matcher(source);
+        List<ListenerMethod> listeners = new ArrayList<>();
+        while (matcher.find()) {
+            String annotationBlock = annotationBlockBefore(source, matcher.start());
+            if (annotationBlock.contains("@RabbitListener")) {
+                listeners.add(new ListenerMethod(relative(path), matcher.group(1),
+                        annotationBlock.contains("@ReliableMqConsume")
+                                || annotationBlock.contains("@cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume")));
+            }
         }
-        int lineStart = source.lastIndexOf('\n', rabbitListenerStart);
-        int scan = lineStart <= 0 ? 0 : lineStart - 1;
-        while (scan > 0) {
-            int previousLineStart = source.lastIndexOf('\n', scan);
-            int start = previousLineStart < 0 ? 0 : previousLineStart + 1;
-            String line = source.substring(start, scan + 1).trim();
-            if (line.isEmpty()) {
-                scan = previousLineStart - 1;
+        return listeners;
+    }
+
+    private static String annotationBlockBefore(String source, int methodStart) {
+        int cursor = previousNonBlankLineEnd(source, methodStart);
+        if (cursor < 0) {
+            return "";
+        }
+        int blockStart = cursor + 1;
+        boolean sawAnnotation = false;
+        boolean sawCandidateLine = false;
+        while (cursor >= 0) {
+            int lineStart = source.lastIndexOf('\n', cursor);
+            int start = lineStart < 0 ? 0 : lineStart + 1;
+            String line = source.substring(start, cursor + 1).trim();
+            if (line.startsWith("@")) {
+                sawAnnotation = true;
+                sawCandidateLine = true;
+                blockStart = start;
+                cursor = previousNonBlankLineEnd(source, start);
                 continue;
             }
-            if (!line.startsWith("@")) {
-                return false;
+            if (isAnnotationContinuationLine(line)) {
+                sawCandidateLine = true;
+                blockStart = start;
+                cursor = previousNonBlankLineEnd(source, start);
+                continue;
             }
-            if (line.startsWith("@ReliableMqConsume") || line.startsWith("@cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume")) {
-                return true;
+            if (sawCandidateLine && sawAnnotation) {
+                break;
             }
-            scan = previousLineStart - 1;
+            return "";
         }
-        return false;
+        return sawAnnotation ? source.substring(blockStart, methodStart) : "";
+    }
+
+    private static boolean isAnnotationContinuationLine(String line) {
+        return line.startsWith(")")
+                || line.endsWith(",")
+                || line.endsWith("(")
+                || line.contains("=");
+    }
+
+    private static int previousNonBlankLineEnd(String source, int beforeOffset) {
+        int cursor = Math.min(beforeOffset - 1, source.length() - 1);
+        while (cursor >= 0) {
+            int lineEnd = source.lastIndexOf('\n', cursor);
+            int end = lineEnd < 0 ? cursor : lineEnd - 1;
+            int start = source.lastIndexOf('\n', end);
+            start = start < 0 ? 0 : start + 1;
+            if (end >= start && !source.substring(start, end + 1).trim().isEmpty()) {
+                return end;
+            }
+            cursor = start - 2;
+        }
+        return -1;
+    }
+
+    private static String enclosingMethod(String source, int offset) {
+        Matcher matcher = METHOD_DECLARATION.matcher(source.substring(0, Math.min(offset, source.length())));
+        String method = "<class>";
+        while (matcher.find()) {
+            method = matcher.group(1);
+        }
+        return method;
+    }
+
+    private static int offsetOfLine(String[] lines, int lineIndex) {
+        int offset = 0;
+        for (int i = 0; i < lineIndex; i++) {
+            offset += lines[i].length() + 1;
+        }
+        return offset;
+    }
+
+    private static String normalize(String expression) {
+        return expression == null ? "unknown" : expression.replaceAll("\\s+", "");
+    }
+
+    private static String diagnostics(List<RawPublishFinding> findings) {
+        StringBuilder builder = new StringBuilder();
+        for (RawPublishFinding finding : findings) {
+            builder.append(finding.file()).append(':').append(finding.lineNumber()).append(':')
+                    .append(finding.line()).append(" -> ").append(finding.key()).append('\n');
+        }
+        return builder.toString();
     }
 
     private static boolean isTestSource(Path path) {
         return relative(path).contains("/src/test/");
+    }
+
+    private record RawPublishFinding(String file, String method, String target, int lineNumber, String line)
+            implements Comparable<RawPublishFinding> {
+
+        String key() {
+            return file + ":" + method + ":" + target;
+        }
+
+        @Override
+        public int compareTo(RawPublishFinding other) {
+            return key().compareTo(other.key());
+        }
+    }
+
+    private record ListenerMethod(String file, String method, boolean hasReliableMqConsume) {
+
+        String id() {
+            return file + ":" + method;
+        }
     }
 
     private static String read(Path path) {
@@ -190,7 +377,12 @@ class ReliableMqArchitectureContractTest {
     }
 
     private static String relative(Path path) {
-        return nexusRoot().relativize(path).toString().replace('\\', '/');
+        Path normalized = path.toAbsolutePath().normalize();
+        Path root = nexusRoot();
+        if (!normalized.startsWith(root)) {
+            return path.toString().replace('\\', '/');
+        }
+        return root.relativize(normalized).toString().replace('\\', '/');
     }
 
     private static Path nexusRoot() {

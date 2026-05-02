@@ -10,7 +10,7 @@ Classification values:
 - `Reliable Producer Only`: producer already writes durable outbox state, but consumer-side reliability is not yet converted to `@ReliableMqConsume`.
 - `Best-Effort`: loss is acceptable and the path is explicitly allowlisted.
 - `Manual ACK Explicit`: manual acknowledgment code is the reliability boundary; do not convert to first-version `@ReliableMqConsume`.
-- `Domain Outbox Internal`: established domain-specific outbox table drains through RabbitMQ and remains allowlisted.
+- `Domain Outbox Internal`: established domain-specific outbox table drains through RabbitMQ and remains allowlisted. This only exempts the producer drain raw-publish behavior; downstream consumers are still covered by listener idempotency and DLQ/replay audit rules.
 
 ## Business Chains
 

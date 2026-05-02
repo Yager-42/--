@@ -211,7 +211,7 @@ public class ContentRepository implements IContentRepository {
                     if (hot) {
                         postCache.put(postId, copyPost(entity));
                     }
-                    tryExtendHotCacheTtl(postId, entity);
+                    tryExtendHotCacheTtl(postId, entity, hot);
                     return copyPost(entity);
                 }
                 deleteRedisQuietly(redisKey);
@@ -266,7 +266,7 @@ public class ContentRepository implements IContentRepository {
             postCache.put(postId, copyPost(post));
         }
         if (post != null) {
-            tryExtendHotCacheTtl(postId, post);
+            tryExtendHotCacheTtl(postId, post, hot);
         }
         return post == null ? null : copyPost(post);
     }
@@ -360,12 +360,13 @@ public class ContentRepository implements IContentRepository {
 
         ValueOperations<String, String> valueOps = stringRedisTemplate.opsForValue();
         Map<Long, ContentPostEntity> resultById = new HashMap<>();
+        Map<Long, Boolean> hotById = new HashMap<>();
         List<Long> missIds = new ArrayList<>(postIds.size());
         for (Long id : postIds) {
             if (id == null) {
                 continue;
             }
-            boolean hot = isHotKeySafe(hotkeyKey(id));
+            boolean hot = hotById.computeIfAbsent(id, this::recordHotKey);
             if (hot) {
                 ContentPostEntity cached = postCache.getIfPresent(id);
                 if (cached != null) {
@@ -404,7 +405,7 @@ public class ContentRepository implements IContentRepository {
                             continue;
                         }
                         resultById.put(id, copyPost(entity));
-                        if (isHotKeySafe(hotkeyKey(id))) {
+                        if (Boolean.TRUE.equals(hotById.get(id))) {
                             postCache.put(id, copyPost(entity));
                         }
                     }
@@ -417,7 +418,7 @@ public class ContentRepository implements IContentRepository {
 
             if (!dbMissIds.isEmpty()) {
                 Map<Long, ContentPostEntity> rebuilt = singleFlight.execute(listPostsInflightKey(dbMissIds),
-                        () -> rebuildPosts(dbMissIds, valueOps));
+                        () -> rebuildPosts(dbMissIds, valueOps, hotById));
                 if (rebuilt != null && !rebuilt.isEmpty()) {
                     for (Map.Entry<Long, ContentPostEntity> entry : rebuilt.entrySet()) {
                         if (entry.getKey() == null || entry.getValue() == null) {
@@ -434,7 +435,7 @@ public class ContentRepository implements IContentRepository {
             ContentPostEntity entity = resultById.get(id);
             if (entity != null && entity.getStatus() != null && entity.getStatus() == 2) {
                 ordered.add(copyPost(entity));
-                tryExtendHotCacheTtl(id, entity);
+                tryExtendHotCacheTtl(id, entity, Boolean.TRUE.equals(hotById.get(id)));
             }
         }
         return ordered;
@@ -861,8 +862,12 @@ public class ContentRepository implements IContentRepository {
         return POST_REDIS_KEY_PREFIX + postId;
     }
 
-    private Map<Long, ContentPostEntity> rebuildPosts(List<Long> dbMissIds, ValueOperations<String, String> valueOps) {
-        Map<Long, ContentPostEntity> resolved = readPostsFromRedis(dbMissIds, true);
+    private Map<Long, ContentPostEntity> rebuildPosts(
+            List<Long> dbMissIds,
+            ValueOperations<String, String> valueOps,
+            Map<Long, Boolean> hotById
+    ) {
+        Map<Long, ContentPostEntity> resolved = readPostsFromRedis(dbMissIds, true, hotById);
         List<Long> unresolvedIds = new ArrayList<>();
         for (Long id : dbMissIds) {
             if (id == null || resolved.containsKey(id)) {
@@ -896,7 +901,7 @@ public class ContentRepository implements IContentRepository {
             }
             dbHits.put(id, copyPost(entity));
             resolved.put(id, copyPost(entity));
-            if (isHotKeySafe(hotkeyKey(id))) {
+            if (Boolean.TRUE.equals(hotById.get(id))) {
                 postCache.put(id, copyPost(entity));
             }
             try {
@@ -911,7 +916,11 @@ public class ContentRepository implements IContentRepository {
         return resolved;
     }
 
-    private Map<Long, ContentPostEntity> readPostsFromRedis(List<Long> postIds, boolean deleteBrokenKey) {
+    private Map<Long, ContentPostEntity> readPostsFromRedis(
+            List<Long> postIds,
+            boolean deleteBrokenKey,
+            Map<Long, Boolean> hotById
+    ) {
         Map<Long, ContentPostEntity> resolved = new HashMap<>();
         if (postIds == null || postIds.isEmpty()) {
             return resolved;
@@ -951,19 +960,19 @@ public class ContentRepository implements IContentRepository {
                 continue;
             }
             resolved.put(id, copyPost(entity));
-            if (isHotKeySafe(hotkeyKey(id))) {
+            if (Boolean.TRUE.equals(hotById.get(id))) {
                 postCache.put(id, copyPost(entity));
             }
         }
         return resolved;
     }
 
-    private void tryExtendHotCacheTtl(Long postId, ContentPostEntity entity) {
+    private void tryExtendHotCacheTtl(Long postId, ContentPostEntity entity, boolean hot) {
         if (postId == null || entity == null || entity.getPostId() == null) {
             return;
         }
         long targetTtlSeconds = socialCacheHotTtlProperties.getContentPostSeconds();
-        if (targetTtlSeconds <= 0 || !isHotKeySafe(hotkeyKey(postId))) {
+        if (targetTtlSeconds <= 0 || !hot) {
             return;
         }
         String key = postRedisKey(postId);
@@ -1075,6 +1084,10 @@ public class ContentRepository implements IContentRepository {
 
     private String hotkeyKey(Long postId) {
         return HOTKEY_PREFIX + postId;
+    }
+
+    private boolean recordHotKey(Long postId) {
+        return isHotKeySafe(hotkeyKey(postId));
     }
 
     private boolean isHotKeySafe(String hotkey) {

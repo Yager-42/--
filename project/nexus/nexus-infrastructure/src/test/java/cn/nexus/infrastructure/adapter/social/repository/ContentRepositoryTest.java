@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -93,6 +94,30 @@ class ContentRepositoryTest {
     }
 
     @Test
+    void findPost_hotKeyShouldRecordOnlyOncePerLogicalRead() throws Exception {
+        IContentPostDao contentPostDao = Mockito.mock(IContentPostDao.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        RepositoryFixture fixture = newRepositoryFixture(contentPostDao, valueOperations);
+        fixture.properties().setContentPostSeconds(300L);
+
+        String json = new ObjectMapper().writeValueAsString(ContentPostEntity.builder()
+                .postId(101L)
+                .userId(11L)
+                .title("cached")
+                .contentText("body")
+                .status(1)
+                .build());
+        when(valueOperations.get("interact:content:post:101")).thenReturn(json);
+        when(fixture.stringRedisTemplate().getExpire("interact:content:post:101", TimeUnit.SECONDS)).thenReturn(60L);
+        when(fixture.hotKeyStoreBridge().isHotKey("post__101")).thenReturn(true);
+
+        fixture.repository().findPost(101L);
+
+        verify(fixture.hotKeyStoreBridge(), times(1)).isHotKey("post__101");
+    }
+
+    @Test
     void listPostsByIds_shouldFilterNonPublishedEntriesFromSharedPostCache() throws Exception {
         IContentPostDao contentPostDao = Mockito.mock(IContentPostDao.class);
         @SuppressWarnings("unchecked")
@@ -120,6 +145,32 @@ class ContentRepositoryTest {
         assertEquals(1, result.size());
         assertEquals(2L, result.get(0).getPostId());
         verify(contentPostDao, never()).selectByIds(any());
+    }
+
+    @Test
+    void listPostsByIds_hotKeyShouldRecordOncePerUniquePostId() throws Exception {
+        IContentPostDao contentPostDao = Mockito.mock(IContentPostDao.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        RepositoryFixture fixture = newRepositoryFixture(contentPostDao, valueOperations);
+        fixture.properties().setContentPostSeconds(300L);
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        String publishedJson = objectMapper.writeValueAsString(ContentPostEntity.builder()
+                .postId(2L)
+                .userId(20L)
+                .status(2)
+                .contentText("published")
+                .build());
+        when(valueOperations.multiGet(List.of("interact:content:post:2")))
+                .thenReturn(List.of(publishedJson));
+        when(fixture.stringRedisTemplate().getExpire("interact:content:post:2", TimeUnit.SECONDS)).thenReturn(60L);
+        when(fixture.hotKeyStoreBridge().isHotKey("post__2")).thenReturn(true);
+
+        List<ContentPostEntity> result = fixture.repository().listPostsByIds(List.of(2L, 2L));
+
+        assertEquals(2, result.size());
+        verify(fixture.hotKeyStoreBridge(), times(1)).isHotKey("post__2");
     }
 
     @Test

@@ -60,13 +60,12 @@ bash scripts/up-wsl-middleware.sh
 - Redis `6379`
 - RabbitMQ `5672` / 管理台 `15672`（已内置 delayed-message 插件）
 - Zookeeper `2181`
-- Kafka `9092`
 - Cassandra `9042`
 - Elasticsearch `9200`
 - MinIO `9000` / 控制台 `9001`
 - Gorse `8086 / 8087 / 8088 / 8089`
 
-这一步不要再直接用裸的 `docker compose up`。
+推荐使用脚本启动，避免遗漏中间件初始化容器和后续等待步骤。
 
 然后本地启动后端代码时，使用 `wsl` profile：
 
@@ -107,13 +106,6 @@ powershell -ExecutionPolicy Bypass -File scripts\stop-local-all.ps1
 - 关闭 Nacos 配置中心（因为这套 Docker 没起 Nacos）
 - 保留 DashScope 本地降级，并把 Gorse 改成直接连接 Docker 里的容器
 
-如果你之前已经起过 Kafka，中间改了配置后要把 Kafka 重新建一下，不然它还会继续对外广播旧地址：
-
-```bash
-cd /mnt/c/Users/Administrator/Desktop/文档/project
-docker compose -f docker-compose.middleware.yml up -d --force-recreate kafka
-```
-
 如果你之前已经起过 RabbitMQ，或者第一次需要把 delayed-message 插件做进镜像，要重建 RabbitMQ：
 
 ```bash
@@ -128,7 +120,7 @@ cd /mnt/c/Users/Administrator/Desktop/文档/project
 docker compose -f docker-compose.middleware.yml up -d --build
 ```
 
-Hot key detection is now local in the Nexus process and has no dashboard, worker, etcd, or extra database setup.
+热 key 探测现在是 Nexus 进程内的本地能力，不再需要 dashboard、worker、etcd 或额外数据库初始化。
 
 ## 3. 怎么确认“启动成功”（按顺序检查）
 

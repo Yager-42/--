@@ -48,7 +48,7 @@ public class ReliableMqConsumeAspect {
     private String requiredEventId(ProceedingJoinPoint joinPoint, ReliableMqConsume annotation) {
         try {
             return expressionEvaluator.requiredString(joinPoint, annotation.eventId(), "eventId");
-        } catch (IllegalArgumentException e) {
+        } catch (RuntimeException e) {
             throw new ReliableMqPermanentFailureException(
                     "invalid reliable mq consume eventId, consumer=" + annotation.consumerName(), e);
         }
@@ -57,7 +57,7 @@ public class ReliableMqConsumeAspect {
     private Object requiredPayload(ProceedingJoinPoint joinPoint, ReliableMqConsume annotation) {
         try {
             return expressionEvaluator.requiredObject(joinPoint, annotation.payload(), "payload");
-        } catch (IllegalArgumentException e) {
+        } catch (RuntimeException e) {
             throw new ReliableMqPermanentFailureException(
                     "invalid reliable mq consume payload, consumer=" + annotation.consumerName(), e);
         }

@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.mockito.Mockito;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
@@ -32,9 +33,10 @@ class ReliableMqDlqAspectTest {
 
         aspect.around(joinPoint, method.getAnnotation(ReliableMqDlq.class));
 
-        verify(replayService).recordFailure("comment-consumer", "comment.queue", "social.interaction",
+        InOrder inOrder = Mockito.inOrder(replayService, joinPoint);
+        inOrder.verify(replayService).recordFailure("comment-consumer", "comment.queue", "social.interaction",
                 "comment.created", message, ReliableMqDlqAspectTest.class.getName(), "evt-1", "broker failed");
-        verify(joinPoint).proceed();
+        inOrder.verify(joinPoint).proceed();
     }
 
     @Test

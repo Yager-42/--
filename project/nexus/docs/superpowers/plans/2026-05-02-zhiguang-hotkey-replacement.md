@@ -52,7 +52,7 @@
 **Files:**
 - Create: `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/config/HotKeyStoreBridgeTest.java`
 
-- [ ] **Step 1: Write failing detector tests**
+- [x] **Step 1: Write failing detector tests**
 
 Create `HotKeyStoreBridgeTest` with tests for:
 
@@ -74,7 +74,7 @@ Required test method names:
 - `rotateThroughAllSegmentsShouldExpireHeat`
 - `invalidWindowAndSegmentShouldUseSingleSegment`
 
-- [ ] **Step 2: Run detector tests and verify RED**
+- [x] **Step 2: Run detector tests and verify RED**
 
 Run:
 
@@ -88,7 +88,7 @@ Expected: compilation/test failure because `HotKeyStoreBridge` still exposes JD-
 - Modify: `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/config/HotKeyProperties.java`
 - Modify: `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/config/HotKeyStoreBridge.java`
 
-- [ ] **Step 1: Replace `HotKeyProperties` fields**
+- [x] **Step 1: Replace `HotKeyProperties` fields**
 
 Keep `enabled = true`. Remove `appName`, `etcdServer`, `pushPeriodMs`, and `mode`. Add:
 
@@ -100,7 +100,7 @@ Keep `enabled = true`. Remove `appName`, `etcdServer`, `pushPeriodMs`, and `mode
 
 Update class comments to describe local hot key detection, not JD HotKey.
 
-- [ ] **Step 2: Replace `HotKeyStoreBridge` internals**
+- [x] **Step 2: Replace `HotKeyStoreBridge` internals**
 
 Implement:
 
@@ -128,7 +128,7 @@ Rules:
 - invalid `windowSeconds` or `segmentSeconds` values are normalized defensively and never throw during bean construction
 - `rotate` clears exactly the next active segment for every tracked key
 
-- [ ] **Step 3: Run detector tests and verify GREEN**
+- [x] **Step 3: Run detector tests and verify GREEN**
 
 Run:
 
@@ -136,7 +136,7 @@ Run:
 
 Expected: all `HotKeyStoreBridgeTest` tests pass.
 
-- [ ] **Step 4: Commit local detector**
+- [x] **Step 4: Commit local detector**
 
 Run:
 
@@ -151,7 +151,7 @@ Run:
 - Modify: `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/ContentRepository.java`
 - Modify: `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedCardRepository.java`
 
-- [ ] **Step 1: Write failing content repository hot-key test**
+- [x] **Step 1: Write failing content repository hot-key test**
 
 Add a test in `ContentRepositoryTest` that:
 
@@ -164,7 +164,7 @@ Add a test in `ContentRepositoryTest` that:
 
 Name the test `findPost_hotKeyShouldExtendRedisTtlUsingPostHotKey`. Create a local helper record or private factory inside the test class so the test can access the `StringRedisTemplate`, `ValueOperations`, `SocialCacheHotTtlProperties`, and `HotKeyStoreBridge` mocks. Do not change production constructors to make this test easier.
 
-- [ ] **Step 2: Run repository tests and verify RED if helper changes are needed**
+- [x] **Step 2: Run repository tests and verify RED if helper changes are needed**
 
 Run:
 
@@ -172,7 +172,7 @@ Run:
 
 Expected: new test initially fails because the current helper does not expose enough mocks or because TTL extension is not yet asserted.
 
-- [ ] **Step 3: Adjust tests, not production behavior**
+- [x] **Step 3: Adjust tests, not production behavior**
 
 Make test-only helper changes in `ContentRepositoryTest` so the new test can configure:
 
@@ -183,11 +183,11 @@ Make test-only helper changes in `ContentRepositoryTest` so the new test can con
 
 Do not change content/feed repository behavior except warning messages.
 
-- [ ] **Step 4: Remove JD-specific warning text**
+- [x] **Step 4: Remove JD-specific warning text**
 
 In `ContentRepository` and `FeedCardRepository`, replace warning message text `jd-hotkey isHotKey failed` with `hotkey isHotKey failed`. Do not rename `isHotKeySafe`, `hotkeyKey`, or repository constants.
 
-- [ ] **Step 5: Run repository tests and verify GREEN**
+- [x] **Step 5: Run repository tests and verify GREEN**
 
 Run:
 
@@ -195,7 +195,7 @@ Run:
 
 Expected: all repository tests pass.
 
-- [ ] **Step 6: Commit repository boundary updates**
+- [x] **Step 6: Commit repository boundary updates**
 
 Run:
 
@@ -211,13 +211,13 @@ Run:
 - Delete: `project/nexus/nexus-infrastructure/src/main/resources/hotkey-isolated-classpath.txt`
 - Modify: `project/nexus/nexus-infrastructure/pom.xml`
 
-- [ ] **Step 1: Remove the JD Maven dependency**
+- [x] **Step 1: Remove the JD Maven dependency**
 
 Delete the dependency block for:
 
 `io.github.ck-jesse:jd-hotkey-client:2.0.0`
 
-- [ ] **Step 2: Delete JD-only Java/resource files**
+- [x] **Step 2: Delete JD-only Java/resource files**
 
 Delete:
 
@@ -225,7 +225,7 @@ Delete:
 - `HotKeyBridgeServer.java`
 - `hotkey-isolated-classpath.txt`
 
-- [ ] **Step 3: Run active Java artifact search**
+- [x] **Step 3: Run active Java artifact search**
 
 Run:
 
@@ -233,7 +233,7 @@ Run:
 
 Expected: no matches.
 
-- [ ] **Step 4: Run infrastructure tests**
+- [x] **Step 4: Run infrastructure tests**
 
 Run:
 
@@ -241,7 +241,7 @@ Run:
 
 Expected: build succeeds and tests pass.
 
-- [ ] **Step 5: Commit JD Java cleanup**
+- [x] **Step 5: Commit JD Java cleanup**
 
 Run:
 
@@ -258,11 +258,11 @@ Run:
 - Keep: `project/nexus/nexus-app/src/test/resources/application-real-it.yml`
 - Modify: `project/docker-compose.yml`
 
-- [ ] **Step 1: Remove JD hotkey profile fields**
+- [x] **Step 1: Remove JD hotkey profile fields**
 
 In `application-dev.yml`, `application-wsl.yml`, and `application-docker.yml`, remove the JD-only `hotkey` blocks entirely. Rely on `HotKeyProperties` defaults for local detection. Do not add duplicate threshold blocks to profile YAML.
 
-- [ ] **Step 2: Keep real integration test hotkey disabled**
+- [x] **Step 2: Keep real integration test hotkey disabled**
 
 Ensure `application-real-it.yml` still contains:
 
@@ -270,7 +270,7 @@ Ensure `application-real-it.yml` still contains:
 
 No other hotkey fields are required there.
 
-- [ ] **Step 3: Remove backend JD environment variables**
+- [x] **Step 3: Remove backend JD environment variables**
 
 In `project/docker-compose.yml`, remove:
 
@@ -279,7 +279,7 @@ In `project/docker-compose.yml`, remove:
 
 Verify `HOTKEY_PUSH_PERIOD_MS` is absent.
 
-- [ ] **Step 4: Search active config**
+- [x] **Step 4: Search active config**
 
 Run:
 
@@ -287,7 +287,7 @@ Run:
 
 Expected: no matches in active hotkey configuration or deployment instructions.
 
-- [ ] **Step 5: Commit config cleanup**
+- [x] **Step 5: Commit config cleanup**
 
 Run:
 
@@ -307,7 +307,7 @@ Run:
 - Modify: `project/scripts/stop-local-all.ps1`
 - Modify: `project/DEPLOY.md`
 
-- [ ] **Step 1: Remove hotkey services from middleware compose**
+- [x] **Step 1: Remove hotkey services from middleware compose**
 
 In `project/docker-compose.middleware.yml`, remove:
 
@@ -318,7 +318,7 @@ In `project/docker-compose.middleware.yml`, remove:
 
 Do not remove Zookeeper.
 
-- [ ] **Step 2: Remove hotkey schema initialization**
+- [x] **Step 2: Remove hotkey schema initialization**
 
 In `project/docker/mysql/init-extra.sh`, remove:
 
@@ -328,14 +328,14 @@ In `project/docker/mysql/init-extra.sh`, remove:
 
 Keep Gorse database creation and Nexus schema loading.
 
-- [ ] **Step 3: Delete JD HotKey Docker files**
+- [x] **Step 3: Delete JD HotKey Docker files**
 
 Delete:
 
 - `project/docker/hotkey/Dockerfile`
 - `project/docker/hotkey/init/schema.sql`
 
-- [ ] **Step 4: Simplify WSL middleware script**
+- [x] **Step 4: Simplify WSL middleware script**
 
 In `project/scripts/up-wsl-middleware.sh`, remove:
 
@@ -346,7 +346,7 @@ In `project/scripts/up-wsl-middleware.sh`, remove:
 
 The script must parse `--build` and `--remove-orphans`, compute requested services, run compose up for those services, and keep existing waits for `mysql-extra-init` and `rabbitmq-init`.
 
-- [ ] **Step 5: Clean PowerShell local scripts**
+- [x] **Step 5: Clean PowerShell local scripts**
 
 In `project/scripts/start-local-all.ps1`, remove:
 
@@ -356,7 +356,7 @@ In `project/scripts/start-local-all.ps1`, remove:
 
 In `project/scripts/stop-local-all.ps1`, remove the `HotKeyBridgeServer` process shutdown line. Keep frontend, backend, and backend launcher shutdown.
 
-- [ ] **Step 6: Clean deployment documentation**
+- [x] **Step 6: Clean deployment documentation**
 
 In `project/DEPLOY.md`, remove user instructions that describe:
 
@@ -369,7 +369,7 @@ In `project/DEPLOY.md`, remove user instructions that describe:
 
 Add one short deployment note: hot key detection is now local in the Nexus process and has no dashboard, worker, etcd, or extra database setup.
 
-- [ ] **Step 7: Search active runtime environment**
+- [x] **Step 7: Search active runtime environment**
 
 Run:
 
@@ -377,7 +377,7 @@ Run:
 
 Expected: no matches.
 
-- [ ] **Step 8: Commit Docker/script/doc cleanup**
+- [x] **Step 8: Commit Docker/script/doc cleanup**
 
 Run:
 

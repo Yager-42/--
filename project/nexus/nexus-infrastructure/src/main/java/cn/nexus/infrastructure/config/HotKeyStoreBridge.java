@@ -91,10 +91,6 @@ public class HotKeyStoreBridge {
         counters.remove(key);
     }
 
-    public void startClient() {
-        // Compatibility hook for HotKeyClientInitializer. Local detection needs no external client.
-    }
-
     public long rotateDelayMillis() {
         return rotateDelayMillis;
     }

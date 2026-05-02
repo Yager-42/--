@@ -3,6 +3,7 @@ package cn.nexus.trigger.mq.producer;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.trigger.mq.config.ContentScheduleDelayConfig;
 import cn.nexus.trigger.mq.event.ContentScheduleTriggerEvent;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -31,12 +32,13 @@ public class ContentScheduleProducer {
         long safeDelayMs = Math.max(0L, delayMs);
         ContentScheduleTriggerEvent event = new ContentScheduleTriggerEvent();
         event.setTaskId(taskId);
+        // Keep explicit outbox save until @ReliableMqPublish can carry message headers.
         reliableMqOutboxService.save(
                 event.getEventId(),
                 ContentScheduleDelayConfig.EXCHANGE,
                 ContentScheduleDelayConfig.ROUTING_KEY,
                 event,
-                java.util.Map.of("x-delay", safeDelayMs)
+                Map.of("x-delay", safeDelayMs)
         );
     }
 }

@@ -3,11 +3,12 @@ package cn.nexus.trigger.cache;
 import cn.nexus.domain.social.adapter.port.IContentCacheEvictPort;
 import cn.nexus.infrastructure.adapter.social.repository.ContentRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedCardRepository;
-import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqPublish;
 import cn.nexus.trigger.http.social.support.ContentDetailQueryService;
 import cn.nexus.trigger.mq.config.ContentCacheEvictConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -39,7 +40,7 @@ public class ContentCacheEvictPort implements IContentCacheEvictPort {
         return t;
     });
 
-    private final ReliableMqOutboxService reliableMqOutboxService;
+    private final ObjectProvider<ContentCacheEvictPort> selfProvider;
     private final StringRedisTemplate stringRedisTemplate;
     private final ContentRepository contentRepository;
     private final ContentDetailQueryService contentDetailQueryService;
@@ -68,7 +69,14 @@ public class ContentCacheEvictPort implements IContentCacheEvictPort {
 
         // 3. 广播本地失效：让其它节点也尽快把本地缓存清掉，避免“不同节点看到不同内容”。
         ContentCacheEvictEvent event = new ContentCacheEvictEvent(postId);
-        reliableMqOutboxService.save(event.getEventId(), ContentCacheEvictConfig.EXCHANGE, "", event);
+        selfProvider.getObject().publishEvict(event);
+    }
+
+    @ReliableMqPublish(exchange = ContentCacheEvictConfig.EXCHANGE,
+            routingKey = "",
+            eventId = "#event.eventId",
+            payload = "#event")
+    public void publishEvict(ContentCacheEvictEvent event) {
     }
 
     private void deleteRedis(Long postId) {

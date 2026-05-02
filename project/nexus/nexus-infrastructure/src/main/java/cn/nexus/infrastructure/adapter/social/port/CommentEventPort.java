@@ -1,7 +1,7 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.ICommentEventPort;
-import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqPublish;
 import cn.nexus.types.event.interaction.CommentCreatedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -20,15 +20,16 @@ public class CommentEventPort implements ICommentEventPort {
 
     private static final String RK_COMMENT_CREATED = "comment.created";
 
-    private final ReliableMqOutboxService reliableMqOutboxService;
-
     /**
      * 发布评论创建事件。
      *
      * @param event 评论创建事件。类型：{@link CommentCreatedEvent}
      */
     @Override
+    @ReliableMqPublish(exchange = EXCHANGE,
+            routingKey = RK_COMMENT_CREATED,
+            eventId = "#event.eventId",
+            payload = "#event")
     public void publish(CommentCreatedEvent event) {
-        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_COMMENT_CREATED, event);
     }
 }

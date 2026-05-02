@@ -1,7 +1,7 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IInteractionNotifyEventPort;
-import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqPublish;
 import cn.nexus.types.event.interaction.InteractionNotifyEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -20,15 +20,16 @@ public class InteractionNotifyEventPort implements IInteractionNotifyEventPort {
     private static final String EXCHANGE = "social.interaction";
     private static final String RK_INTERACTION_NOTIFY = "interaction.notify";
 
-    private final ReliableMqOutboxService reliableMqOutboxService;
-
     /**
      * 发布事件。
      *
      * @param event 事件对象。类型：{@link InteractionNotifyEvent}
      */
     @Override
+    @ReliableMqPublish(exchange = EXCHANGE,
+            routingKey = RK_INTERACTION_NOTIFY,
+            eventId = "#event.eventId",
+            payload = "#event")
     public void publish(InteractionNotifyEvent event) {
-        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_INTERACTION_NOTIFY, event);
     }
 }

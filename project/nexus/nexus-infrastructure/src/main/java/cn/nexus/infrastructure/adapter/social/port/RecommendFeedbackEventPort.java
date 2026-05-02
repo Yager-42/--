@@ -1,7 +1,7 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IRecommendFeedbackEventPort;
-import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqPublish;
 import cn.nexus.types.event.recommend.RecommendFeedbackEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -19,15 +19,16 @@ public class RecommendFeedbackEventPort implements IRecommendFeedbackEventPort {
     private static final String EXCHANGE = "social.recommend";
     private static final String RK_RECOMMEND_FEEDBACK = "recommend.feedback";
 
-    private final ReliableMqOutboxService reliableMqOutboxService;
-
     /**
      * 发布推荐反馈事件。
      *
      * @param event 推荐反馈事件。类型：{@link RecommendFeedbackEvent}
      */
     @Override
+    @ReliableMqPublish(exchange = EXCHANGE,
+            routingKey = RK_RECOMMEND_FEEDBACK,
+            eventId = "#event.eventId",
+            payload = "#event")
     public void publish(RecommendFeedbackEvent event) {
-        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_RECOMMEND_FEEDBACK, event);
     }
 }

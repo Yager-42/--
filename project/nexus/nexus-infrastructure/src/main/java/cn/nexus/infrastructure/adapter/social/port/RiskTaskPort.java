@@ -1,12 +1,13 @@
 package cn.nexus.infrastructure.adapter.social.port;
 
 import cn.nexus.domain.social.adapter.port.IRiskTaskPort;
-import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqPublish;
 import cn.nexus.types.event.risk.ImageScanRequestedEvent;
 import cn.nexus.types.event.risk.LlmScanRequestedEvent;
 import cn.nexus.types.event.risk.ReviewCaseCreatedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,7 +27,7 @@ public class RiskTaskPort implements IRiskTaskPort {
     private static final String RK_IMAGE_SCAN = "risk.image.scan";
     private static final String RK_REVIEW_CASE = "risk.review.case";
 
-    private final ReliableMqOutboxService reliableMqOutboxService;
+    private final ObjectProvider<RiskTaskPort> selfProvider;
 
     /**
      * 执行 dispatchLlmScan 逻辑。
@@ -38,7 +39,7 @@ public class RiskTaskPort implements IRiskTaskPort {
         if (event == null) {
             return;
         }
-        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_LLM_SCAN, event);
+        selfProvider.getObject().publishLlmScan(event);
         log.debug("risk llm scan dispatched. decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId());
     }
 
@@ -52,7 +53,7 @@ public class RiskTaskPort implements IRiskTaskPort {
         if (event == null) {
             return;
         }
-        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_IMAGE_SCAN, event);
+        selfProvider.getObject().publishImageScan(event);
         log.debug("risk image scan dispatched. decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId());
     }
 
@@ -66,7 +67,28 @@ public class RiskTaskPort implements IRiskTaskPort {
         if (event == null) {
             return;
         }
-        reliableMqOutboxService.save(event.getEventId(), EXCHANGE, RK_REVIEW_CASE, event);
+        selfProvider.getObject().publishReviewCase(event);
         log.debug("risk review case dispatched. caseId={}, decisionId={}", event.getCaseId(), event.getDecisionId());
+    }
+
+    @ReliableMqPublish(exchange = EXCHANGE,
+            routingKey = RK_LLM_SCAN,
+            eventId = "#event.eventId",
+            payload = "#event")
+    public void publishLlmScan(LlmScanRequestedEvent event) {
+    }
+
+    @ReliableMqPublish(exchange = EXCHANGE,
+            routingKey = RK_IMAGE_SCAN,
+            eventId = "#event.eventId",
+            payload = "#event")
+    public void publishImageScan(ImageScanRequestedEvent event) {
+    }
+
+    @ReliableMqPublish(exchange = EXCHANGE,
+            routingKey = RK_REVIEW_CASE,
+            eventId = "#event.eventId",
+            payload = "#event")
+    public void publishReviewCase(ReviewCaseCreatedEvent event) {
     }
 }

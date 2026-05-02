@@ -23,6 +23,7 @@ class StrictZhiguangCounterBoundaryTest {
             Path.of("nexus-infrastructure/src/main/java"),
             Path.of("nexus-infrastructure/src/main/resources/mapper"),
             Path.of("nexus-trigger/src/main/java"),
+            Path.of("nexus-types/src/main/java"),
             Path.of("nexus-app/src/main/java"),
             Path.of("nexus-app/src/main/resources"),
             Path.of("docs/nexus_final_mysql_schema.sql"),
@@ -35,12 +36,23 @@ class StrictZhiguangCounterBoundaryTest {
             ForbiddenPattern.literal("user_counter_repair_outbox"),
             ForbiddenPattern.literal("/interact/reaction"),
             ForbiddenPattern.literal("CommentLikeChangedConsumer"),
+            ForbiddenPattern.literal("CommentLikeChangedEvent"),
             ForbiddenPattern.literal("IReactionCommentLikeChangedMqPort"),
             ForbiddenPattern.literal("ReactionCommentLikeChangedMqPort"),
             ForbiddenPattern.literal("count-redis-module"),
             ForbiddenPattern.literal("interaction_reaction_event_log"),
             ForbiddenPattern.literal("ReactionEventLog"),
             ForbiddenPattern.literal("likeBitmapShardIndex"),
+            ForbiddenPattern.literal("ReactionStateVO"),
+            ForbiddenPattern.literal("ReactionCountDeltaEvent"),
+            ForbiddenPattern.literal("ReactionCountSnapshotEvent"),
+            ForbiddenPattern.literal("comment.like.changed"),
+            ForbiddenPattern.literal("userAggregationBucket"),
+            ForbiddenPattern.literal("likeFactCount"),
+            ForbiddenPattern.literal("writeReplayCheckpoint"),
+            ForbiddenPattern.literal("readReplayCheckpoint"),
+            ForbiddenPattern.literal("count:agg:{user}"),
+            ForbiddenPattern.literal("count:replay"),
             ForbiddenPattern.regex("bm:like:post:[^\\s\"']+:idx"),
             ForbiddenPattern.regex("agg:v1:post:[^\\s\"']+:[0-9]+"),
             ForbiddenPattern.literal("cnt:v1:comment"),
@@ -48,7 +60,8 @@ class StrictZhiguangCounterBoundaryTest {
             ForbiddenPattern.literal("bm:fav:comment"),
             ForbiddenPattern.literal("COMMENT_LIKED"),
             ForbiddenPattern.literal("like_count"),
-            ForbiddenPattern.literal("reply_count"));
+            ForbiddenPattern.literal("reply_count"),
+            ForbiddenPattern.literal("replyCount"));
 
     private static final List<ForbiddenPattern> COMMENT_FIELD_PATTERNS = List.of(
             ForbiddenPattern.regex("\\bprivate\\s+\\w+\\s+likeCount\\b"),
@@ -145,10 +158,25 @@ class StrictZhiguangCounterBoundaryTest {
 
     private static Path projectRoot() {
         Path current = Path.of("").toAbsolutePath().normalize();
-        if (current.getFileName() != null && current.getFileName().toString().equals("nexus-app")) {
-            return current.getParent();
+        while (current != null) {
+            if (isNexusRoot(current)) {
+                return current;
+            }
+            Path nested = current.resolve("project/nexus").normalize();
+            if (isNexusRoot(nested)) {
+                return nested;
+            }
+            current = current.getParent();
         }
-        return current;
+        throw new IllegalStateException("Cannot locate nexus project root from current working directory");
+    }
+
+    private static boolean isNexusRoot(Path candidate) {
+        return Files.isDirectory(candidate.resolve("nexus-api"))
+                && Files.isDirectory(candidate.resolve("nexus-domain"))
+                && Files.isDirectory(candidate.resolve("nexus-infrastructure"))
+                && Files.isDirectory(candidate.resolve("nexus-trigger"))
+                && Files.isDirectory(candidate.resolve("nexus-app"));
     }
 
     private record ForbiddenPattern(String label, Pattern pattern) {

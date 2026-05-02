@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import java.util.concurrent.TimeUnit;
 import org.springframework.data.redis.core.RedisCallback;
-import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -108,17 +107,14 @@ class UserCounterServiceTest {
     }
 
     @Test
-    void incrementLikesReceivedWritesAggregationBucketAndSnapshot() {
+    void incrementLikesReceivedWritesOnlyUserSnapshot() {
         StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
-        @SuppressWarnings("unchecked")
-        HashOperations<String, Object, Object> hashOperations = Mockito.mock(HashOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.execute(any(RedisScript.class), eq(List.of("ucnt:23")), eq("3"), eq("3"), eq("5")))
                 .thenReturn(7L);
 
@@ -127,23 +123,20 @@ class UserCounterServiceTest {
         long updated = service.incrementLikesReceived(23L, 3L);
 
         assertEquals(7L, updated);
-        verify(hashOperations).increment("count:agg:{user}:likesReceived", "23", 3L);
         verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("ucnt:23")), eq("3"), eq("3"), eq("5"));
+        verify(redisTemplate, never()).opsForHash();
         verify(redisTemplate, never()).execute(any(RedisCallback.class));
     }
 
     @Test
-    void incrementFavsReceivedWritesSlotFiveAggregationBucketAndSnapshot() {
+    void incrementFavsReceivedWritesOnlyUserSnapshotSlotFive() {
         StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
         IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
         IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
         IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
-        @SuppressWarnings("unchecked")
-        HashOperations<String, Object, Object> hashOperations = Mockito.mock(HashOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.execute(any(RedisScript.class), eq(List.of("ucnt:23")), eq("4"), eq("2"), eq("5")))
                 .thenReturn(11L);
 
@@ -152,8 +145,8 @@ class UserCounterServiceTest {
         long updated = service.incrementFavsReceived(23L, 2L);
 
         assertEquals(11L, updated);
-        verify(hashOperations).increment("count:agg:{user}:favsReceived", "23", 2L);
         verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("ucnt:23")), eq("4"), eq("2"), eq("5"));
+        verify(redisTemplate, never()).opsForHash();
         verify(redisTemplate, never()).execute(any(RedisCallback.class));
     }
 
@@ -282,5 +275,74 @@ class UserCounterServiceTest {
         assertEquals(6L, counters.getLikesReceived());
         assertEquals(7L, counters.getFavsReceived());
         verify(redisTemplate, Mockito.times(3)).execute(any(RedisCallback.class));
+    }
+
+    @Test
+    void relationCounters_postsSampleMismatch_shouldTriggerRebuild() {
+        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
+        IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        Mockito.doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 99L, 6L, 7L}, 5)))
+                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 4L, 6L, 7L}, 5)))
+                .when(redisTemplate).execute(any(RedisCallback.class));
+        when(valueOperations.setIfAbsent(eq("ucnt:chk:71"), eq("1"), eq(300L), eq(TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE)
+                .thenReturn(Boolean.FALSE);
+        when(relationRepository.countActiveRelationsBySource(71L, 1)).thenReturn(2);
+        when(relationRepository.countFollowerIds(71L)).thenReturn(3);
+        when(contentRepository.countPublishedPostsByUser(71L)).thenReturn(4L);
+
+        UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
+
+        UserRelationCounterVO before = service.readRelationCountersWithVerification(71L);
+        UserRelationCounterVO counters = service.readRelationCountersWithVerification(71L);
+
+        assertEquals(99L, before.getPosts());
+        assertEquals(4L, counters.getPosts());
+        verify(redisTemplate, Mockito.times(3)).execute(any(RedisCallback.class));
+        verify(contentRepository, Mockito.atLeastOnce()).countPublishedPostsByUser(71L);
+    }
+
+    @Test
+    void relationCounters_receivedSampleMismatch_shouldTriggerRebuild() {
+        StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
+        IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
+        IContentRepository contentRepository = Mockito.mock(IContentRepository.class);
+        IObjectCounterService objectCounterService = Mockito.mock(IObjectCounterService.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        Mockito.doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 4L, 99L, 88L}, 5)))
+                .doReturn(CountRedisCodec.toRedisValue(CountRedisCodec.encodeSlots(new long[]{2L, 3L, 4L, 6L, 7L}, 5)))
+                .when(redisTemplate).execute(any(RedisCallback.class));
+        when(valueOperations.setIfAbsent(eq("ucnt:chk:81"), eq("1"), eq(300L), eq(TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE)
+                .thenReturn(Boolean.FALSE);
+        when(relationRepository.countActiveRelationsBySource(81L, 1)).thenReturn(2);
+        when(relationRepository.countFollowerIds(81L)).thenReturn(3);
+        when(contentRepository.countPublishedPostsByUser(81L)).thenReturn(4L);
+        when(contentRepository.listPublishedPostIdsByUser(81L)).thenReturn(List.of(
+                cn.nexus.domain.social.model.entity.ContentPostEntity.builder().postId(801L).build(),
+                cn.nexus.domain.social.model.entity.ContentPostEntity.builder().postId(802L).build()));
+        when(objectCounterService.getPostCounts(801L, List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV)))
+                .thenReturn(Map.of("like", 2L, "fav", 3L));
+        when(objectCounterService.getPostCounts(802L, List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV)))
+                .thenReturn(Map.of("like", 4L, "fav", 4L));
+
+        UserCounterService service = new UserCounterService(redisTemplate, relationRepository, contentRepository, objectCounterService);
+
+        UserRelationCounterVO before = service.readRelationCountersWithVerification(81L);
+        UserRelationCounterVO counters = service.readRelationCountersWithVerification(81L);
+
+        assertEquals(99L, before.getLikesReceived());
+        assertEquals(88L, before.getFavsReceived());
+        assertEquals(6L, counters.getLikesReceived());
+        assertEquals(7L, counters.getFavsReceived());
+        verify(objectCounterService, Mockito.atLeastOnce()).getPostCounts(801L, List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
+        verify(objectCounterService, Mockito.atLeastOnce()).getPostCounts(802L, List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
     }
 }

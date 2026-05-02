@@ -381,6 +381,85 @@ class ContentServiceTest {
     }
 
     @Test
+    void publish_newPublishedPost_shouldApplyPostCounterOnlyAfterCommit() {
+        RLock lock = Mockito.mock(RLock.class);
+        when(redissonClient.getLock(anyString())).thenReturn(lock);
+        when(socialIdPort.nextId()).thenReturn(500L, 501L, 502L);
+        when(socialIdPort.now()).thenReturn(1000L);
+        when(contentPublishAttemptRepository.updateAttemptStatus(
+                eq(500L),
+                eq(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode()),
+                eq(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode()),
+                eq(ContentPublishAttemptTranscodeStatusEnumVO.DONE.getCode()),
+                any(),
+                eq(1),
+                any(),
+                any(),
+                eq(ContentPublishAttemptStatusEnumVO.CREATED.getCode())
+        )).thenReturn(true);
+        Mockito.doAnswer(invocation -> {
+            verify(userCounterService, never()).incrementPosts(any(), anyLong());
+            return null;
+        }).when(contentEventOutboxPort).savePostPublished(eq(101L), eq(11L), eq(1), eq(1000L));
+
+        contentService.publish(101L, 11L, "title", "body", null, null, "PUBLIC", null);
+
+        verify(userCounterService).incrementPosts(11L, 1L);
+    }
+
+    @Test
+    void publish_shouldNotFailCommittedContentWhenPostCounterAfterCommitFails() {
+        RLock lock = Mockito.mock(RLock.class);
+        when(redissonClient.getLock(anyString())).thenReturn(lock);
+        when(socialIdPort.nextId()).thenReturn(500L, 501L, 502L);
+        when(socialIdPort.now()).thenReturn(1000L);
+        when(contentPublishAttemptRepository.updateAttemptStatus(
+                eq(500L),
+                eq(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode()),
+                eq(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode()),
+                eq(ContentPublishAttemptTranscodeStatusEnumVO.DONE.getCode()),
+                any(),
+                eq(1),
+                any(),
+                any(),
+                eq(ContentPublishAttemptStatusEnumVO.CREATED.getCode())
+        )).thenReturn(true);
+        Mockito.doThrow(new IllegalStateException("redis unavailable"))
+                .when(userCounterService).incrementPosts(11L, 1L);
+
+        contentService.publish(101L, 11L, "title", "body", null, null, "PUBLIC", null);
+
+        verify(userCounterService).incrementPosts(11L, 1L);
+        verify(contentEventOutboxPort).savePostPublished(101L, 11L, 1, 1000L);
+    }
+
+    @Test
+    void publish_rollsBackWithoutApplyingPostCounterWhenLaterWriteFails() {
+        RLock lock = Mockito.mock(RLock.class);
+        when(redissonClient.getLock(anyString())).thenReturn(lock);
+        when(socialIdPort.nextId()).thenReturn(500L, 501L, 502L);
+        when(socialIdPort.now()).thenReturn(1000L);
+        when(contentPublishAttemptRepository.updateAttemptStatus(
+                eq(500L),
+                eq(ContentPublishAttemptStatusEnumVO.PUBLISHED.getCode()),
+                eq(ContentPublishAttemptRiskStatusEnumVO.PASSED.getCode()),
+                eq(ContentPublishAttemptTranscodeStatusEnumVO.DONE.getCode()),
+                any(),
+                eq(1),
+                any(),
+                any(),
+                eq(ContentPublishAttemptStatusEnumVO.CREATED.getCode())
+        )).thenReturn(true);
+        Mockito.doThrow(new IllegalStateException("outbox failed"))
+                .when(contentEventOutboxPort).savePostPublished(eq(101L), eq(11L), eq(1), eq(1000L));
+
+        assertThrows(IllegalStateException.class,
+                () -> contentService.publish(101L, 11L, "title", "body", null, null, "PUBLIC", null));
+
+        verify(userCounterService, never()).incrementPosts(any(), anyLong());
+    }
+
+    @Test
     void rollback_shouldDispatchUpdateAfterCommit() {
         RLock lock = Mockito.mock(RLock.class);
         when(redissonClient.getLock(anyString())).thenReturn(lock);
@@ -492,6 +571,27 @@ class ContentServiceTest {
 
         assertEquals("DELETED", result.getStatus());
         verify(userCounterService).incrementPosts(11L, -1L);
+    }
+
+    @Test
+    void delete_rollsBackWithoutDecrementingPostCounterWhenKvDeleteFails() {
+        RLock lock = Mockito.mock(RLock.class);
+        when(redissonClient.getLock(anyString())).thenReturn(lock);
+        when(contentRepository.findPostForUpdate(101L)).thenReturn(ContentPostEntity.builder()
+                .postId(101L)
+                .userId(11L)
+                .status(2)
+                .versionNum(3)
+                .contentUuid("uuid-1")
+                .build());
+        when(socialIdPort.now()).thenReturn(1000L);
+        when(contentRepository.softDeleteIfMatchStatusAndVersion(101L, 2, 3, 1000L)).thenReturn(true);
+        Mockito.doThrow(new IllegalStateException("kv delete failed"))
+                .when(postContentKvPort).delete("uuid-1");
+
+        assertThrows(IllegalStateException.class, () -> contentService.delete(11L, 101L));
+
+        verify(userCounterService, never()).incrementPosts(any(), anyLong());
     }
 
     @Test

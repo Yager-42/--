@@ -1717,8 +1717,6 @@ export async function uploadFile(file: File): Promise<string> {
       "replyToId": 0,
       "content": "string",
       "status": 0,
-      "likeCount": 0,
-      "replyCount": 0,
       "createTime": 0
     },
     "repliesPreview": [
@@ -1759,8 +1757,6 @@ export async function uploadFile(file: File): Promise<string> {
       "replyToId": 0,
       "content": "string",
       "status": 0,
-      "likeCount": 0,
-      "replyCount": 0,
       "createTime": 0
     },
     "repliesPreview": [
@@ -1801,8 +1797,6 @@ export async function uploadFile(file: File): Promise<string> {
       "replyToId": 0,
       "content": "string",
       "status": 0,
-      "likeCount": 0,
-      "replyCount": 0,
       "createTime": 0
     }
   ],
@@ -1860,8 +1854,6 @@ export async function uploadFile(file: File): Promise<string> {
   - `replyToId`: `Long`
   - `content`: `String`
   - `status`: `Integer`
-  - `likeCount`: `Long`
-  - `replyCount`: `Long`
   - `createTime`: `Long`
 
 示例 JSON：
@@ -1877,8 +1869,6 @@ export async function uploadFile(file: File): Promise<string> {
   "replyToId": 0,
   "content": "string",
   "status": 0,
-  "likeCount": 0,
-  "replyCount": 0,
   "createTime": 0
 }
 ```
@@ -1904,6 +1894,9 @@ export async function uploadFile(file: File): Promise<string> {
   - `edited`: `Boolean`
   - `createTime`: `Long`
   - `likeCount`: `Long`
+  - `favoriteCount`: `Long`
+  - `liked`: `Boolean`
+  - `faved`: `Boolean`
 
 示例 JSON：
 ```json
@@ -1924,7 +1917,10 @@ export async function uploadFile(file: File): Promise<string> {
   "versionNum": 0,
   "edited": false,
   "createTime": 0,
-  "likeCount": 0
+  "likeCount": 0,
+  "favoriteCount": 0,
+  "liked": false,
+  "faved": false
 }
 ```
 
@@ -3156,8 +3152,6 @@ export async function uploadFile(file: File): Promise<string> {
     "replyToId": 0,
     "content": "string",
     "status": 0,
-    "likeCount": 0,
-    "replyCount": 0,
     "createTime": 0
   },
   "repliesPreview": [
@@ -3172,8 +3166,6 @@ export async function uploadFile(file: File): Promise<string> {
       "replyToId": 0,
       "content": "string",
       "status": 0,
-      "likeCount": 0,
-      "replyCount": 0,
       "createTime": 0
     }
   ]

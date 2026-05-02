@@ -106,7 +106,7 @@ public class UserCounterService implements IUserCounterService {
                 return zeros();
             }
         }
-        maybeVerifyRelationSlots(userId, state.snapshot());
+        maybeVerifySampledSlots(userId, state.snapshot());
         return toPublicCounters(state.snapshot());
     }
 
@@ -118,10 +118,6 @@ public class UserCounterService implements IUserCounterService {
             return getCount(userId, counterType);
         }
         CountRedisOperations operations = new CountRedisOperations(redisTemplate);
-        String aggregationBucket = CountRedisKeys.userAggregationBucket(counterType);
-        if (aggregationBucket != null) {
-            operations.addAggregationDelta(aggregationBucket, String.valueOf(userId), delta);
-        }
         return operations.incrementSnapshotSlot(
                 CountRedisKeys.userSnapshot(userId),
                 CountRedisSchema.user().slotOf(counterType),
@@ -299,7 +295,7 @@ public class UserCounterService implements IUserCounterService {
         }
     }
 
-    private void maybeVerifyRelationSlots(Long userId, Map<String, Long> snapshot) {
+    private void maybeVerifySampledSlots(Long userId, Map<String, Long> snapshot) {
         if (userId == null || snapshot == null || snapshot.isEmpty()) {
             return;
         }
@@ -314,9 +310,17 @@ public class UserCounterService implements IUserCounterService {
         }
         long following = valueOf(snapshot, UserCounterType.FOLLOWINGS);
         long follower = valueOf(snapshot, UserCounterType.FOLLOWERS);
+        long posts = valueOf(snapshot, UserCounterType.POSTS);
         long truthFollowing = Math.max(0L, relationRepository.countActiveRelationsBySource(userId, 1));
         long truthFollower = Math.max(0L, relationRepository.countFollowerIds(userId));
-        if (following != truthFollowing || follower != truthFollower) {
+        long truthPosts = Math.max(0L, contentRepository.countPublishedPostsByUser(userId));
+        Map<String, Long> received = sumReceivedCountersBestEffort(userId);
+        long likesReceived = valueOf(snapshot, UserCounterType.LIKES_RECEIVED);
+        long favsReceived = valueOf(snapshot, UserCounterType.FAVS_RECEIVED);
+        long truthLikesReceived = value(received, ObjectCounterType.LIKE.getCode());
+        long truthFavsReceived = value(received, ObjectCounterType.FAV.getCode());
+        if (following != truthFollowing || follower != truthFollower || posts != truthPosts
+                || likesReceived != truthLikesReceived || favsReceived != truthFavsReceived) {
             rebuildAllCounters(userId);
             redisTemplate.opsForValue().setIfAbsent(
                     checkKey,

@@ -2,7 +2,6 @@ package cn.nexus.infrastructure.adapter.counter.support;
 
 import cn.nexus.domain.counter.model.valobj.ObjectCounterTarget;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
-import cn.nexus.domain.counter.model.valobj.UserCounterType;
 import cn.nexus.domain.social.model.valobj.ReactionTargetTypeEnumVO;
 
 /**
@@ -47,13 +46,6 @@ public final class CountRedisKeys {
         return "agg:" + CountRedisSchema.SCHEMA_ID + ":active";
     }
 
-    public static String userAggregationBucket(UserCounterType counterType) {
-        if (counterType == null) {
-            return null;
-        }
-        return "count:agg:{user}:" + counterType.getCode();
-    }
-
     public static String bitmapShard(ObjectCounterType counterType, ReactionTargetTypeEnumVO targetType, Long targetId, long shard) {
         if (counterType == null || targetType == null || targetId == null || targetType != ReactionTargetTypeEnumVO.POST) {
             return null;
@@ -62,13 +54,6 @@ public final class CountRedisKeys {
             return null;
         }
         return "bm:" + counterType.getCode() + ":" + lower(targetType) + ":" + targetId + ":" + shard;
-    }
-
-    public static String likeFactCount(ReactionTargetTypeEnumVO targetType, Long targetId) {
-        if (targetType == null || targetId == null) {
-            return null;
-        }
-        return "count:factcnt:" + lower(targetType) + "_like:{" + targetId + "}";
     }
 
     public static String objectRebuildLock(ObjectCounterTarget target) {
@@ -90,6 +75,28 @@ public final class CountRedisKeys {
             return null;
         }
         return "count:rebuild-backoff:object:{post:" + target.getTargetId() + "}";
+    }
+
+    public static String objectRebuildWatermark(ObjectCounterTarget target) {
+        if (target == null || target.getTargetType() != ReactionTargetTypeEnumVO.POST || target.getTargetId() == null) {
+            return null;
+        }
+        return "count:rebuild-watermark:object:{post:" + target.getTargetId() + "}";
+    }
+
+    public static String objectRebuildWatermark(ObjectCounterTarget target, int slot) {
+        String base = objectRebuildWatermark(target);
+        if (base == null || slot < 0) {
+            return null;
+        }
+        return base + ":" + slot;
+    }
+
+    public static String objectCounterSampleCheck(ReactionTargetTypeEnumVO targetType, Long targetId) {
+        if (targetType == null || targetId == null || targetType != ReactionTargetTypeEnumVO.POST) {
+            return null;
+        }
+        return "cnt:chk:post:" + targetId;
     }
 
     public static String userRebuildLock(Long userId) {

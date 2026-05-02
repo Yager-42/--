@@ -12,6 +12,8 @@ import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisOperations;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisSchema;
+import cn.nexus.types.enums.ResponseCode;
+import cn.nexus.types.exception.AppException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
@@ -26,6 +29,7 @@ import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -33,9 +37,56 @@ import org.springframework.stereotype.Service;
 public class ObjectCounterService implements IObjectCounterService {
 
     private static final String POST = "post";
-    private static final long REBUILD_LOCK_SECONDS = 15L;
+    private static final long REBUILD_LOCK_SECONDS = 300L;
+    private static final int ACTION_LOCK_RETRY_ATTEMPTS = 50;
+    private static final long ACTION_LOCK_RETRY_SLEEP_MS = 10L;
     private static final long REBUILD_RATE_LIMIT_SECONDS = 30L;
     private static final long REBUILD_BACKOFF_SECONDS = 120L;
+    private static final long OBJECT_COUNTER_SAMPLE_CHECK_TTL_SECONDS = 300L;
+    private static final DefaultRedisScript<Long> RELEASE_LOCK_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                    + "return redis.call('DEL', KEYS[1]); "
+                    + "else return 0; end",
+            Long.class);
+    private static final DefaultRedisScript<Long> FINALIZE_REBUILD_SCRIPT = new DefaultRedisScript<>(
+            "local slots = tonumber(ARGV[1]); "
+                    + "local watermarkPrefix = ARGV[2]; "
+                    + "local watermark = ARGV[3]; "
+                    + "local clearCount = tonumber(ARGV[4]) or 0; "
+                    + "local width = 4; "
+                    + "local len = slots * width; "
+                    + "local raw = redis.call('GET', KEYS[1]); "
+                    + "if (not raw) or string.len(raw) ~= len then raw = string.rep(string.char(0), len); end; "
+                    + "local writeStart = 5 + clearCount; "
+                    + "local i = writeStart; "
+                    + "while i <= #ARGV do "
+                    + "  local slot = tonumber(ARGV[i]); "
+                    + "  local value = tonumber(ARGV[i + 1]) or 0; "
+                    + "  if value < 0 then value = 0; end; "
+                    + "  if value > 4294967295 then value = 4294967295; end; "
+                    + "  if slot and slot >= 0 and slot < slots then "
+                    + "  local x = value; "
+                    + "  local b4 = x % 256; x = math.floor(x / 256); "
+                    + "  local b3 = x % 256; x = math.floor(x / 256); "
+                    + "  local b2 = x % 256; x = math.floor(x / 256); "
+                    + "  local b1 = x % 256; "
+                    + "  local start = slot * width + 1; "
+                    + "  raw = string.sub(raw, 1, start - 1) "
+                    + "    .. string.char(b1, b2, b3, b4) "
+                    + "    .. string.sub(raw, start + width); "
+                    + "  end; "
+                    + "  i = i + 2; "
+                    + "end; "
+                    + "for j = 1, clearCount do "
+                    + "  local clearSlot = tonumber(ARGV[4 + j]); "
+                    + "  if clearSlot and clearSlot >= 0 and clearSlot < slots then "
+                    + "    redis.call('HDEL', KEYS[2], tostring(clearSlot)); "
+                    + "    redis.call('SET', watermarkPrefix .. ':' .. tostring(clearSlot), watermark); "
+                    + "  end; "
+                    + "end; "
+                    + "redis.call('SET', KEYS[1], raw); "
+                    + "return 1;",
+            Long.class);
 
     private final StringRedisTemplate redisTemplate;
     private final ICounterEventProducer counterEventProducer;
@@ -85,6 +136,9 @@ public class ObjectCounterService implements IObjectCounterService {
         if (malformed) {
             raw = rebuildSnapshotIfPossible(postId, activeMetrics);
             malformed = schema == null || raw.length != schema.totalPayloadBytes();
+        } else {
+            raw = rebuildSnapshotIfSampleMismatch(postId, activeMetrics, raw, schema);
+            malformed = schema == null || raw.length != schema.totalPayloadBytes();
         }
         long[] decoded = malformed ? new long[0] : CountRedisCodec.decodeSlots(raw, schema.slotCount());
         for (ObjectCounterType metric : activeMetrics) {
@@ -119,6 +173,25 @@ public class ObjectCounterService implements IObjectCounterService {
         if (postId == null || userId == null || metric == null) {
             return PostActionResultVO.builder().build();
         }
+        ObjectCounterTarget target = ObjectCounterTarget.builder()
+                .targetType(ReactionTargetTypeEnumVO.POST)
+                .targetId(postId)
+                .build();
+        String lockKey = CountRedisKeys.objectRebuildLock(target);
+        String lockToken = acquireObjectCounterLockWithWait(lockKey, ACTION_LOCK_RETRY_ATTEMPTS, ACTION_LOCK_RETRY_SLEEP_MS);
+        if (lockToken == null) {
+            throw new AppException(ResponseCode.UN_ERROR.getCode(), "object counter lock unavailable");
+        }
+        boolean changed = false;
+        try {
+            changed = mutateBitmapAndPublish(postId, userId, metric, desiredState);
+        } finally {
+            releaseObjectCounterLock(lockKey, lockToken);
+        }
+        return actionSnapshot(postId, userId, changed);
+    }
+
+    private boolean mutateBitmapAndPublish(Long postId, Long userId, ObjectCounterType metric, boolean desiredState) {
         long chunk = userId / CountRedisKeys.CHUNK_SIZE;
         long offset = userId % CountRedisKeys.CHUNK_SIZE;
         String bitmapKey = CountRedisKeys.bitmapShard(metric, ReactionTargetTypeEnumVO.POST, postId, chunk);
@@ -127,13 +200,13 @@ public class ObjectCounterService implements IObjectCounterService {
         if (changed) {
             publishEvents(postId, userId, metric, desiredState ? 1L : -1L);
         }
-        return actionSnapshot(postId, userId, changed);
+        return changed;
     }
 
     private void publishEvents(Long postId, Long userId, ObjectCounterType metric, long delta) {
         CountRedisSchema schema = CountRedisSchema.forObject(ReactionTargetTypeEnumVO.POST);
         int slot = schema == null ? -1 : schema.slotOf(metric);
-        long now = System.currentTimeMillis();
+        long now = redisNowMs();
         counterEventProducer.publish(CounterDeltaEvent.builder()
                 .targetType(POST)
                 .targetId(postId)
@@ -155,7 +228,7 @@ public class ObjectCounterService implements IObjectCounterService {
     }
 
     private PostActionResultVO actionSnapshot(Long postId, Long userId, boolean changed) {
-        Map<String, Long> counts = getPostCounts(postId, List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
+        Map<String, Long> counts = readPostCountsSnapshotOnly(postId, List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
         return PostActionResultVO.builder()
                 .changed(changed)
                 .liked(isPostLiked(postId, userId))
@@ -163,6 +236,23 @@ public class ObjectCounterService implements IObjectCounterService {
                 .likeCount(counts.getOrDefault(ObjectCounterType.LIKE.getCode(), 0L))
                 .favoriteCount(counts.getOrDefault(ObjectCounterType.FAV.getCode(), 0L))
                 .build();
+    }
+
+    private Map<String, Long> readPostCountsSnapshotOnly(Long postId, List<ObjectCounterType> metrics) {
+        Map<String, Long> values = new LinkedHashMap<>();
+        List<ObjectCounterType> activeMetrics = activeMetrics(metrics);
+        if (postId == null || activeMetrics.isEmpty()) {
+            return values;
+        }
+        CountRedisSchema schema = CountRedisSchema.forObject(ReactionTargetTypeEnumVO.POST);
+        byte[] raw = new CountRedisOperations(redisTemplate)
+                .readSnapshotPayload(CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.POST, postId));
+        boolean malformed = schema == null || raw.length != schema.totalPayloadBytes();
+        long[] decoded = malformed ? new long[0] : CountRedisCodec.decodeSlots(raw, schema.slotCount());
+        for (ObjectCounterType metric : activeMetrics) {
+            values.put(metric.getCode(), valueAt(decoded, schema, metric, malformed));
+        }
+        return values;
     }
 
     private boolean readBitmap(ObjectCounterType metric, Long postId, Long userId) {
@@ -184,12 +274,13 @@ public class ObjectCounterService implements IObjectCounterService {
             return new byte[0];
         }
         String lockKey = CountRedisKeys.objectRebuildLock(target);
-        if (lockKey == null || !Boolean.TRUE.equals(redisTemplate.opsForValue()
-                .setIfAbsent(lockKey, "1", REBUILD_LOCK_SECONDS, TimeUnit.SECONDS))) {
+        String lockToken = acquireObjectCounterLock(lockKey);
+        if (lockToken == null) {
             escalateRebuildBackoff(target);
             return new byte[0];
         }
         try {
+            long watermark = redisNowMs();
             CountRedisSchema schema = CountRedisSchema.forObject(ReactionTargetTypeEnumVO.POST);
             if (schema == null) {
                 return new byte[0];
@@ -198,21 +289,89 @@ public class ObjectCounterService implements IObjectCounterService {
             for (String field : schema.orderedFieldNames()) {
                 snapshot.put(field, 0L);
             }
-            for (ObjectCounterType metric : List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV)) {
+            byte[] existing = new CountRedisOperations(redisTemplate)
+                    .readSnapshotPayload(CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.POST, postId));
+            boolean creatingSnapshot = existing.length != schema.totalPayloadBytes();
+            List<ObjectCounterType> rebuildMetrics = creatingSnapshot
+                    ? List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV)
+                    : activeMetrics(requestedMetrics);
+            for (ObjectCounterType metric : rebuildMetrics) {
                 snapshot.put(metric.getCode(), rebuildBitmapCount(metric, postId));
             }
-            byte[] payload = CountRedisCodec.encodeSlots(toSlots(snapshot, schema), schema.slotCount());
-            new CountRedisOperations(redisTemplate).writeSnapshotPayload(
-                    CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.POST, postId), payload);
-            clearAggregationOverlap(postId, requestedMetrics);
+            long[] slots = toSlots(snapshot, schema);
+            byte[] payload = CountRedisCodec.encodeSlots(slots, schema.slotCount());
+            if (!finalizeRebuildSnapshot(postId, target, schema, slots, watermark,
+                    rebuildMetrics, rebuildMetrics)) {
+                throw new IllegalStateException("object counter rebuild finalize failed, postId=" + postId);
+            }
             resetRebuildBackoff(target);
             return payload;
         } catch (Exception e) {
             escalateRebuildBackoff(target);
             return new byte[0];
         } finally {
-            redisTemplate.delete(lockKey);
+            releaseObjectCounterLock(lockKey, lockToken);
         }
+    }
+
+    private byte[] rebuildSnapshotIfSampleMismatch(Long postId, List<ObjectCounterType> metrics,
+                                                   byte[] raw, CountRedisSchema schema) {
+        if (postId == null || schema == null || raw == null || raw.length != schema.totalPayloadBytes()) {
+            return raw == null ? new byte[0] : raw;
+        }
+        String checkKey = CountRedisKeys.objectCounterSampleCheck(ReactionTargetTypeEnumVO.POST, postId);
+        Boolean shouldCheck = checkKey != null && redisTemplate.opsForValue()
+                .setIfAbsent(checkKey, "1", OBJECT_COUNTER_SAMPLE_CHECK_TTL_SECONDS, TimeUnit.SECONDS);
+        if (!Boolean.TRUE.equals(shouldCheck)) {
+            return raw;
+        }
+        long[] decoded = CountRedisCodec.decodeSlots(raw, schema.slotCount());
+        for (ObjectCounterType metric : activeMetrics(metrics)) {
+            int slot = schema.slotOf(metric);
+            if (slot < 0 || slot >= decoded.length) {
+                continue;
+            }
+            long truth = rebuildBitmapCount(metric, postId);
+            if (Math.max(0L, decoded[slot]) != truth) {
+                byte[] rebuilt = rebuildSnapshotIfPossible(postId, activeMetrics(metrics));
+                return rebuilt.length == schema.totalPayloadBytes() ? rebuilt : raw;
+            }
+        }
+        return raw;
+    }
+
+    private String acquireObjectCounterLock(String lockKey) {
+        if (lockKey == null) {
+            return null;
+        }
+        String token = UUID.randomUUID().toString();
+        return Boolean.TRUE.equals(redisTemplate.opsForValue()
+                .setIfAbsent(lockKey, token, REBUILD_LOCK_SECONDS, TimeUnit.SECONDS)) ? token : null;
+    }
+
+    private String acquireObjectCounterLockWithWait(String lockKey, int attempts, long sleepMs) {
+        for (int i = 0; i < Math.max(1, attempts); i++) {
+            String token = acquireObjectCounterLock(lockKey);
+            if (token != null) {
+                return token;
+            }
+            if (sleepMs > 0L && i + 1 < attempts) {
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void releaseObjectCounterLock(String lockKey, String token) {
+        if (lockKey == null || token == null) {
+            return;
+        }
+        redisTemplate.execute(RELEASE_LOCK_SCRIPT, List.of(lockKey), token);
     }
 
     private boolean canAttemptRebuild(ObjectCounterTarget target) {
@@ -269,20 +428,6 @@ public class ObjectCounterService implements IObjectCounterService {
         return keys == null ? Set.of() : keys;
     }
 
-    private void clearAggregationOverlap(Long postId, List<ObjectCounterType> metrics) {
-        String aggregationKey = CountRedisKeys.objectAggregationBucket(ReactionTargetTypeEnumVO.POST, postId);
-        if (aggregationKey == null) {
-            return;
-        }
-        CountRedisSchema schema = CountRedisSchema.forObject(ReactionTargetTypeEnumVO.POST);
-        for (ObjectCounterType metric : activeMetrics(metrics)) {
-            int slot = schema == null ? -1 : schema.slotOf(metric);
-            if (slot >= 0) {
-                redisTemplate.opsForHash().delete(aggregationKey, String.valueOf(slot));
-            }
-        }
-    }
-
     private List<ObjectCounterType> activeMetrics(List<ObjectCounterType> metrics) {
         if (metrics == null || metrics.isEmpty()) {
             return List.of();
@@ -330,6 +475,42 @@ public class ObjectCounterService implements IObjectCounterService {
         }
     }
 
+    private boolean finalizeRebuildSnapshot(Long postId, ObjectCounterTarget target, CountRedisSchema schema,
+                                            long[] slots, long watermark, List<ObjectCounterType> coveredMetrics,
+                                            List<ObjectCounterType> writeMetrics) {
+        String snapshotKey = CountRedisKeys.objectSnapshot(ReactionTargetTypeEnumVO.POST, postId);
+        String aggregationKey = CountRedisKeys.objectAggregationBucket(ReactionTargetTypeEnumVO.POST, postId);
+        String watermarkKey = CountRedisKeys.objectRebuildWatermark(target);
+        if (snapshotKey == null || aggregationKey == null || watermarkKey == null || schema == null || slots == null) {
+            return false;
+        }
+        List<String> args = new ArrayList<>();
+        args.add(String.valueOf(schema.slotCount()));
+        args.add(watermarkKey);
+        args.add(String.valueOf(Math.max(0L, watermark)));
+        List<ObjectCounterType> activeCoveredMetrics = activeMetrics(coveredMetrics);
+        args.add(String.valueOf(activeCoveredMetrics.size()));
+        for (ObjectCounterType metric : activeCoveredMetrics) {
+            int slot = schema.slotOf(metric);
+            if (slot >= 0) {
+                args.add(String.valueOf(slot));
+            }
+        }
+        for (ObjectCounterType metric : activeMetrics(writeMetrics)) {
+            int slot = schema.slotOf(metric);
+            if (slot >= 0) {
+                args.add(String.valueOf(slot));
+                long value = slot < slots.length ? slots[slot] : 0L;
+                args.add(String.valueOf(Math.max(0L, value)));
+            }
+        }
+        Long result = redisTemplate.execute(
+                FINALIZE_REBUILD_SCRIPT,
+                List.of(snapshotKey, aggregationKey),
+                args.toArray());
+        return result != null && result == 1L;
+    }
+
     private long parseLong(String raw) {
         if (raw == null || raw.isBlank()) {
             return 0L;
@@ -339,5 +520,15 @@ public class ObjectCounterService implements IObjectCounterService {
         } catch (NumberFormatException ignored) {
             return 0L;
         }
+    }
+
+    private long redisNowMs() {
+        Long now = redisTemplate.execute((RedisCallback<Long>) connection -> {
+            if (connection == null || connection.serverCommands() == null) {
+                return null;
+            }
+            return connection.serverCommands().time(TimeUnit.MILLISECONDS);
+        });
+        return now == null || now <= 0L ? System.currentTimeMillis() : now;
     }
 }

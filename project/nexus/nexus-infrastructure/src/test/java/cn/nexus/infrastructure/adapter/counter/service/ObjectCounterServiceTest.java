@@ -16,6 +16,7 @@ import cn.nexus.domain.counter.model.event.CounterDeltaEvent;
 import cn.nexus.domain.counter.model.valobj.ObjectCounterType;
 import cn.nexus.domain.social.model.valobj.PostActionResultVO;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisCodec;
+import cn.nexus.types.exception.AppException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +26,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisServerCommands;
 import org.springframework.data.redis.connection.RedisStringCommands;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
@@ -42,9 +44,7 @@ class ObjectCounterServiceTest {
                 .thenReturn(Boolean.TRUE);
         when(fixture.valueOperations.getBit("bm:like:post:42:0", 7L)).thenReturn(Boolean.TRUE);
         when(fixture.valueOperations.getBit("bm:fav:post:42:0", 7L)).thenReturn(Boolean.TRUE);
-        when(fixture.redisTemplate.execute(any(RedisCallback.class)))
-                .thenReturn(snapshotPayload(4L, 2L))
-                .thenReturn(snapshotPayload(4L, 2L));
+        fixture.stubRedisCallbacks(snapshotPayload(4L, 2L), snapshotPayload(4L, 2L));
 
         PostActionResultVO first = fixture.service.likePost(42L, 7L);
         PostActionResultVO duplicate = fixture.service.likePost(42L, 7L);
@@ -60,12 +60,104 @@ class ObjectCounterServiceTest {
     }
 
     @Test
+    void postActionMutatesBitmapAndPublishesDeltaOnlyWhileHoldingObjectOrderingLock() {
+        Fixture fixture = new Fixture();
+        when(fixture.valueOperations.setBit("bm:like:post:42:0", 7L, true)).thenReturn(Boolean.FALSE);
+        fixture.stubRedisCallbacks(snapshotPayload(4L, 2L));
+
+        fixture.service.likePost(42L, 7L);
+
+        org.mockito.InOrder inOrder = Mockito.inOrder(fixture.valueOperations, fixture.counterEventProducer);
+        inOrder.verify(fixture.valueOperations).setIfAbsent(
+                eq("count:rebuild-lock:object:{post:42}"),
+                Mockito.anyString(),
+                anyLong(),
+                eq(java.util.concurrent.TimeUnit.SECONDS));
+        inOrder.verify(fixture.valueOperations).setBit("bm:like:post:42:0", 7L, true);
+        inOrder.verify(fixture.counterEventProducer).publish(any());
+        verify(fixture.redisTemplate).execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("count:rebuild-lock:object:{post:42}")),
+                Mockito.anyString());
+    }
+
+    @Test
+    void postActionShouldWaitForObjectOrderingLockBeforeBitmapMutationAndDeltaEvent() {
+        Fixture fixture = new Fixture();
+        when(fixture.valueOperations.setIfAbsent(
+                eq("count:rebuild-lock:object:{post:42}"),
+                Mockito.anyString(),
+                anyLong(),
+                eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.FALSE)
+                .thenReturn(Boolean.TRUE);
+        when(fixture.valueOperations.setBit("bm:like:post:42:0", 7L, true)).thenReturn(Boolean.FALSE);
+        when(fixture.valueOperations.getBit("bm:like:post:42:0", 7L)).thenReturn(Boolean.TRUE);
+        fixture.stubRedisCallbacks(snapshotPayload(4L, 2L));
+
+        PostActionResultVO result = fixture.service.likePost(42L, 7L);
+
+        assertTrue(result.isChanged());
+        verify(fixture.valueOperations, Mockito.times(2)).setIfAbsent(
+                eq("count:rebuild-lock:object:{post:42}"),
+                Mockito.anyString(),
+                anyLong(),
+                eq(java.util.concurrent.TimeUnit.SECONDS));
+        org.mockito.InOrder inOrder = Mockito.inOrder(fixture.valueOperations);
+        inOrder.verify(fixture.valueOperations, Mockito.times(2)).setIfAbsent(
+                eq("count:rebuild-lock:object:{post:42}"),
+                Mockito.anyString(),
+                anyLong(),
+                eq(java.util.concurrent.TimeUnit.SECONDS));
+        inOrder.verify(fixture.valueOperations).setBit("bm:like:post:42:0", 7L, true);
+        verify(fixture.valueOperations).setBit("bm:like:post:42:0", 7L, true);
+        verify(fixture.counterEventProducer).publish(any());
+        verify(fixture.applicationEventPublisher).publishEvent(any(cn.nexus.domain.counter.model.event.CounterEvent.class));
+    }
+
+    @Test
+    void postActionShouldFailInsteadOfReturningChangedFalseWhenObjectOrderingLockUnavailable() {
+        Fixture fixture = new Fixture();
+        when(fixture.valueOperations.setIfAbsent(
+                eq("count:rebuild-lock:object:{post:42}"),
+                Mockito.anyString(),
+                anyLong(),
+                eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.FALSE);
+
+        org.junit.jupiter.api.Assertions.assertThrows(AppException.class, () -> fixture.service.likePost(42L, 7L));
+
+        verify(fixture.valueOperations, never()).setBit(Mockito.anyString(), anyLong(), Mockito.anyBoolean());
+        verify(fixture.counterEventProducer, never()).publish(any());
+        verify(fixture.applicationEventPublisher, never()).publishEvent(any(cn.nexus.domain.counter.model.event.CounterEvent.class));
+    }
+
+    @Test
+    void actionSnapshotDoesNotRebuildMissingObjectSnapshotAfterBitmapWrite() {
+        Fixture fixture = new Fixture();
+        when(fixture.valueOperations.setBit("bm:like:post:42:0", 7L, true)).thenReturn(Boolean.FALSE);
+        when(fixture.valueOperations.getBit("bm:like:post:42:0", 7L)).thenReturn(Boolean.TRUE);
+        when(fixture.valueOperations.getBit("bm:fav:post:42:0", 7L)).thenReturn(Boolean.FALSE);
+        fixture.stubRedisCallbacks((byte[]) null);
+
+        PostActionResultVO result = fixture.service.likePost(42L, 7L);
+
+        assertTrue(result.isChanged());
+        assertTrue(result.isLiked());
+        assertFalse(result.isFaved());
+        assertEquals(0L, result.getLikeCount());
+        assertEquals(0L, result.getFavoriteCount());
+        verify(fixture.valueOperations, never()).setIfAbsent(eq("count:rate-limit:object:{post:42}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS));
+        verify(fixture.hashOperations, never()).delete(eq("agg:v1:post:42"), any());
+    }
+
+    @Test
     void unlikeEmitsNegativeDeltaOnlyWhenBitmapWasSet() {
         Fixture fixture = new Fixture();
         when(fixture.valueOperations.setBit("bm:like:post:42:0", 7L, false))
                 .thenReturn(Boolean.TRUE)
                 .thenReturn(Boolean.FALSE);
-        when(fixture.redisTemplate.execute(any(RedisCallback.class))).thenReturn(snapshotPayload(3L, 0L));
+        fixture.stubRedisCallbacks(snapshotPayload(3L, 0L), snapshotPayload(3L, 0L));
 
         PostActionResultVO first = fixture.service.unlikePost(42L, 7L);
         PostActionResultVO duplicate = fixture.service.unlikePost(42L, 7L);
@@ -80,9 +172,7 @@ class ObjectCounterServiceTest {
         Fixture fixture = new Fixture();
         when(fixture.valueOperations.setBit("bm:fav:post:42:0", 7L, true)).thenReturn(Boolean.FALSE);
         when(fixture.valueOperations.setBit("bm:fav:post:42:0", 7L, false)).thenReturn(Boolean.TRUE);
-        when(fixture.redisTemplate.execute(any(RedisCallback.class)))
-                .thenReturn(snapshotPayload(1L, 5L))
-                .thenReturn(snapshotPayload(1L, 4L));
+        fixture.stubRedisCallbacks(snapshotPayload(1L, 5L), snapshotPayload(1L, 4L));
 
         PostActionResultVO fav = fixture.service.favPost(42L, 7L);
         PostActionResultVO unfav = fixture.service.unfavPost(42L, 7L);
@@ -127,14 +217,14 @@ class ObjectCounterServiceTest {
     }
 
     @Test
-    void getPostCountsRebuildsMalformedSnapshotFromBitmapShardsAndClearsActiveAggFields() {
+    void getPostCountsRebuildsMalformedSnapshotAndFinalizesSnapshotAggAndWatermarkAtomically() {
         Fixture fixture = new Fixture();
         Cursor<byte[]> likeCursor = cursorOf("bm:like:post:42:0", "bm:like:post:42:3");
         Cursor<byte[]> favCursor = cursorOf("bm:fav:post:42:0");
         when(fixture.valueOperations.get("count:rebuild-backoff:object:{post:42}")).thenReturn(null);
         when(fixture.valueOperations.setIfAbsent(eq("count:rate-limit:object:{post:42}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
-        when(fixture.valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{post:42}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+        when(fixture.valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{post:42}"), Mockito.anyString(), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
                 .thenReturn(Boolean.TRUE);
         RedisConnection connection = Mockito.mock(RedisConnection.class);
         RedisStringCommands stringCommands = Mockito.mock(RedisStringCommands.class);
@@ -143,17 +233,151 @@ class ObjectCounterServiceTest {
         when(connection.scan(any(ScanOptions.class))).thenReturn(likeCursor).thenReturn(favCursor);
         when(stringCommands.bitCount(any())).thenReturn(4L).thenReturn(3L).thenReturn(2L);
         when(stringCommands.set(any(), any())).thenReturn(Boolean.TRUE);
+        when(fixture.redisTemplate.execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("cnt:v1:post:42", "agg:v1:post:42")),
+                eq("5"),
+                eq("count:rebuild-watermark:object:{post:42}"),
+                eq("1000"),
+                eq("2"),
+                eq("1"),
+                eq("2"),
+                eq("1"),
+                eq("7"),
+                eq("2"),
+                eq("2")))
+                .thenReturn(1L);
         when(fixture.redisTemplate.execute(any(RedisCallback.class))).thenAnswer(invocation -> {
             RedisCallback<?> callback = invocation.getArgument(0);
-            return callback.doInRedis(connection);
+            Object result = callback.doInRedis(connection);
+            return result == null ? 1000L : result;
         });
 
         Map<String, Long> values = fixture.service.getPostCounts(42L, List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
 
         assertEquals(7L, values.get("like"));
         assertEquals(2L, values.get("fav"));
-        verify(fixture.hashOperations).delete("agg:v1:post:42", "1");
-        verify(fixture.hashOperations).delete("agg:v1:post:42", "2");
+        verify(fixture.redisTemplate).execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("cnt:v1:post:42", "agg:v1:post:42")),
+                eq("5"),
+                eq("count:rebuild-watermark:object:{post:42}"),
+                eq("1000"),
+                eq("2"),
+                eq("1"),
+                eq("2"),
+                eq("1"),
+                eq("7"),
+                eq("2"),
+                eq("2"));
+        verify(fixture.hashOperations, never()).delete(eq("agg:v1:post:42"), any());
+        verify(fixture.valueOperations, never()).set(eq("count:rebuild-watermark:object:{post:42}"), any());
+    }
+
+    @Test
+    void getPostCountsRebuildClearsOnlyRequestedActiveAggFieldsWhenSingleMetricRequested() {
+        Fixture fixture = new Fixture();
+        Cursor<byte[]> likeSampleCursor = cursorOf("bm:like:post:42:0");
+        Cursor<byte[]> likeRebuildCursor = cursorOf("bm:like:post:42:0");
+        when(fixture.valueOperations.setIfAbsent(eq("cnt:chk:post:42"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        when(fixture.valueOperations.get("count:rebuild-backoff:object:{post:42}")).thenReturn(null);
+        when(fixture.valueOperations.setIfAbsent(eq("count:rate-limit:object:{post:42}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        when(fixture.valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{post:42}"), Mockito.anyString(), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        RedisConnection connection = Mockito.mock(RedisConnection.class);
+        RedisStringCommands stringCommands = Mockito.mock(RedisStringCommands.class);
+        when(connection.stringCommands()).thenReturn(stringCommands);
+        when(stringCommands.get(any())).thenReturn(snapshotPayload(1L, 9L)).thenReturn(snapshotPayload(1L, 9L));
+        when(connection.scan(any(ScanOptions.class))).thenReturn(likeSampleCursor).thenReturn(likeRebuildCursor);
+        when(stringCommands.bitCount(any())).thenReturn(4L).thenReturn(4L);
+        when(stringCommands.set(any(), any())).thenReturn(Boolean.TRUE);
+        when(fixture.redisTemplate.execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("cnt:v1:post:42", "agg:v1:post:42")),
+                eq("5"),
+                eq("count:rebuild-watermark:object:{post:42}"),
+                eq("1000"),
+                eq("1"),
+                eq("1"),
+                eq("1"),
+                eq("4")))
+                .thenReturn(1L);
+        when(fixture.redisTemplate.execute(any(RedisCallback.class))).thenAnswer(invocation -> {
+            RedisCallback<?> callback = invocation.getArgument(0);
+            Object result = callback.doInRedis(connection);
+            return result == null ? 1000L : result;
+        });
+
+        Map<String, Long> values = fixture.service.getPostCounts(42L, List.of(ObjectCounterType.LIKE));
+
+        assertEquals(4L, values.get("like"));
+        verify(fixture.redisTemplate).execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("cnt:v1:post:42", "agg:v1:post:42")),
+                eq("5"),
+                eq("count:rebuild-watermark:object:{post:42}"),
+                eq("1000"),
+                eq("1"),
+                eq("1"),
+                eq("1"),
+                eq("4"));
+        verify(fixture.hashOperations, never()).delete(eq("agg:v1:post:42"), any());
+    }
+
+    @Test
+    void getPostCountsRebuildsAllActiveBitmapTruthWhenCreatingSnapshotForSingleMetricRead() {
+        Fixture fixture = new Fixture();
+        Cursor<byte[]> likeCursor = cursorOf("bm:like:post:42:0");
+        Cursor<byte[]> favCursor = cursorOf("bm:fav:post:42:0");
+        when(fixture.valueOperations.get("count:rebuild-backoff:object:{post:42}")).thenReturn(null);
+        when(fixture.valueOperations.setIfAbsent(eq("count:rate-limit:object:{post:42}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        when(fixture.valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{post:42}"), Mockito.anyString(), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        RedisConnection connection = Mockito.mock(RedisConnection.class);
+        RedisStringCommands stringCommands = Mockito.mock(RedisStringCommands.class);
+        when(connection.stringCommands()).thenReturn(stringCommands);
+        when(stringCommands.get(any())).thenReturn(new byte[]{1, 2, 3});
+        when(connection.scan(any(ScanOptions.class))).thenReturn(likeCursor).thenReturn(favCursor);
+        when(stringCommands.bitCount(any())).thenReturn(4L).thenReturn(9L);
+        when(fixture.redisTemplate.execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("cnt:v1:post:42", "agg:v1:post:42")),
+                eq("5"),
+                eq("count:rebuild-watermark:object:{post:42}"),
+                eq("1000"),
+                eq("2"),
+                eq("1"),
+                eq("2"),
+                eq("1"),
+                eq("4"),
+                eq("2"),
+                eq("9")))
+                .thenReturn(1L);
+        when(fixture.redisTemplate.execute(any(RedisCallback.class))).thenAnswer(invocation -> {
+            RedisCallback<?> callback = invocation.getArgument(0);
+            Object result = callback.doInRedis(connection);
+            return result == null ? 1000L : result;
+        });
+
+        Map<String, Long> values = fixture.service.getPostCounts(42L, List.of(ObjectCounterType.LIKE));
+
+        assertEquals(4L, values.get("like"));
+        verify(fixture.redisTemplate).execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("cnt:v1:post:42", "agg:v1:post:42")),
+                eq("5"),
+                eq("count:rebuild-watermark:object:{post:42}"),
+                eq("1000"),
+                eq("2"),
+                eq("1"),
+                eq("2"),
+                eq("1"),
+                eq("4"),
+                eq("2"),
+                eq("9"));
     }
 
     @Test
@@ -172,6 +396,54 @@ class ObjectCounterServiceTest {
         assertEquals(0L, values.get(12L).get("like"));
         assertEquals(0L, values.get(12L).get("fav"));
         verify(fixture.valueOperations, never()).setIfAbsent(eq("count:rate-limit:object:{post:12}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    @Test
+    void getPostCountsSampleMismatchShouldRebuildFromBitmapTruth() {
+        Fixture fixture = new Fixture();
+        Cursor<byte[]> likeSampleCursor = cursorOf("bm:like:post:42:0");
+        Cursor<byte[]> likeRebuildCursor = cursorOf("bm:like:post:42:0");
+        Cursor<byte[]> favRebuildCursor = cursorOf("bm:fav:post:42:0");
+        when(fixture.valueOperations.setIfAbsent(eq("cnt:chk:post:42"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        when(fixture.valueOperations.get("count:rebuild-backoff:object:{post:42}")).thenReturn(null);
+        when(fixture.valueOperations.setIfAbsent(eq("count:rate-limit:object:{post:42}"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        when(fixture.valueOperations.setIfAbsent(eq("count:rebuild-lock:object:{post:42}"), Mockito.anyString(), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS)))
+                .thenReturn(Boolean.TRUE);
+        RedisConnection connection = Mockito.mock(RedisConnection.class);
+        RedisServerCommands serverCommands = Mockito.mock(RedisServerCommands.class);
+        RedisStringCommands stringCommands = Mockito.mock(RedisStringCommands.class);
+        when(connection.serverCommands()).thenReturn(serverCommands);
+        when(connection.stringCommands()).thenReturn(stringCommands);
+        when(serverCommands.time(java.util.concurrent.TimeUnit.MILLISECONDS)).thenReturn(1000L);
+        when(stringCommands.get(any())).thenReturn(snapshotPayload(1L, 0L)).thenReturn(snapshotPayload(2L, 0L));
+        when(connection.scan(any(ScanOptions.class))).thenReturn(likeSampleCursor).thenReturn(likeRebuildCursor).thenReturn(favRebuildCursor);
+        when(stringCommands.bitCount(any())).thenReturn(2L).thenReturn(2L).thenReturn(0L);
+        when(fixture.redisTemplate.execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("cnt:v1:post:42", "agg:v1:post:42")),
+                eq("5"),
+                eq("count:rebuild-watermark:object:{post:42}"),
+                eq("1000"),
+                eq("2"),
+                eq("1"),
+                eq("2"),
+                eq("1"),
+                eq("2"),
+                eq("2"),
+                eq("0")))
+                .thenReturn(1L);
+        when(fixture.redisTemplate.execute(any(RedisCallback.class))).thenAnswer(invocation -> {
+            RedisCallback<?> callback = invocation.getArgument(0);
+            return callback.doInRedis(connection);
+        });
+
+        Map<String, Long> values = fixture.service.getPostCounts(42L, List.of(ObjectCounterType.LIKE, ObjectCounterType.FAV));
+
+        assertEquals(2L, values.get("like"));
+        assertEquals(0L, values.get("fav"));
+        verify(fixture.valueOperations).setIfAbsent(eq("cnt:chk:post:42"), eq("1"), anyLong(), eq(java.util.concurrent.TimeUnit.SECONDS));
     }
 
     private static byte[] snapshotPayload(long like, long fav) {
@@ -213,11 +485,39 @@ class ObjectCounterServiceTest {
         private final ICounterEventProducer counterEventProducer = Mockito.mock(ICounterEventProducer.class);
         private final ApplicationEventPublisher applicationEventPublisher = Mockito.mock(ApplicationEventPublisher.class);
         private final ObjectCounterService service = new ObjectCounterService(redisTemplate, counterEventProducer, applicationEventPublisher);
+        private int snapshotIndex;
 
         private Fixture() {
             assertNotNull(service);
             when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+            when(valueOperations.setIfAbsent(
+                    Mockito.startsWith("count:rebuild-lock:object:{post:"),
+                    Mockito.anyString(),
+                    anyLong(),
+                    eq(java.util.concurrent.TimeUnit.SECONDS)))
+                    .thenReturn(Boolean.TRUE);
+        }
+
+        private void stubRedisCallbacks(byte[]... snapshots) {
+            RedisConnection connection = Mockito.mock(RedisConnection.class);
+            RedisServerCommands serverCommands = Mockito.mock(RedisServerCommands.class);
+            RedisStringCommands stringCommands = Mockito.mock(RedisStringCommands.class);
+            when(connection.serverCommands()).thenReturn(serverCommands);
+            when(connection.stringCommands()).thenReturn(stringCommands);
+            when(serverCommands.time(java.util.concurrent.TimeUnit.MILLISECONDS)).thenReturn(1000L, 1001L, 1002L, 1003L);
+            when(stringCommands.get(any())).thenAnswer(invocation -> {
+                if (snapshots == null || snapshots.length == 0) {
+                    return null;
+                }
+                int index = Math.min(snapshotIndex, snapshots.length - 1);
+                snapshotIndex++;
+                return snapshots[index];
+            });
+            when(redisTemplate.execute(any(RedisCallback.class))).thenAnswer(invocation -> {
+                RedisCallback<?> callback = invocation.getArgument(0);
+                return callback.doInRedis(connection);
+            });
         }
     }
 }

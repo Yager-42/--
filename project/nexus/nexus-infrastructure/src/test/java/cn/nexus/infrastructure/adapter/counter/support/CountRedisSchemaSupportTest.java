@@ -71,6 +71,10 @@ class CountRedisSchemaSupportTest {
                 CountRedisKeys.objectAggregationBucket(ReactionTargetTypeEnumVO.POST, 42L));
         assertTrue(Arrays.stream(CountRedisKeys.class.getDeclaredMethods())
                 .noneMatch(method -> method.getName().equals("objectAggregationBucket") && method.getParameterCount() == 3));
+        assertTrue(Arrays.stream(CountRedisKeys.class.getDeclaredMethods())
+                .noneMatch(method -> method.getName().equals("userAggregationBucket")));
+        assertTrue(Arrays.stream(CountRedisKeys.class.getDeclaredMethods())
+                .noneMatch(method -> method.getName().equals("likeFactCount")));
         assertEquals("bm:like:post:42:0",
                 CountRedisKeys.bitmapShard(ObjectCounterType.LIKE, ReactionTargetTypeEnumVO.POST, 42L, 0));
         assertEquals("bm:fav:post:42:3",
@@ -80,6 +84,8 @@ class CountRedisSchemaSupportTest {
         assertEquals("uf:flws:7", CountRedisKeys.relationFollowings(7L));
         assertEquals("uf:fans:7", CountRedisKeys.relationFollowers(7L));
         assertEquals("ucnt:chk:7", CountRedisKeys.userCounterSampleCheck(7L));
+        assertEquals("cnt:chk:post:42", CountRedisKeys.objectCounterSampleCheck(ReactionTargetTypeEnumVO.POST, 42L));
+        assertNull(CountRedisKeys.objectCounterSampleCheck(ReactionTargetTypeEnumVO.COMMENT, 42L));
     }
 
     @Test

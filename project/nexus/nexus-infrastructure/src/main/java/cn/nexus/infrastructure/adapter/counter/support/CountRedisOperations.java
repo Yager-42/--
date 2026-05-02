@@ -128,14 +128,6 @@ public class CountRedisOperations {
         return normalized;
     }
 
-    public void writeReplayCheckpoint(String checkpointKey, long checkpoint) {
-        redisTemplate.opsForValue().set(checkpointKey, String.valueOf(Math.max(0L, checkpoint)));
-    }
-
-    public long readReplayCheckpoint(String checkpointKey) {
-        return clampNonNegative(parseLong(redisTemplate.opsForValue().get(checkpointKey)));
-    }
-
     public boolean tryAcquireRebuildLock(String key, long ttlSeconds) {
         return Boolean.TRUE.equals(redisTemplate.opsForValue()
                 .setIfAbsent(key, "1", Math.max(1L, ttlSeconds), TimeUnit.SECONDS));

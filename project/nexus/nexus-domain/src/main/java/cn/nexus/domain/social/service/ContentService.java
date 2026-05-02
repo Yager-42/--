@@ -1354,7 +1354,24 @@ public class ContentService implements IContentService {
         if (authorId == null || delta == 0L) {
             return;
         }
-        userCounterService.incrementPosts(authorId, delta);
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            incrementPostsBestEffort(authorId, delta);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                incrementPostsBestEffort(authorId, delta);
+            }
+        });
+    }
+
+    private void incrementPostsBestEffort(Long authorId, long delta) {
+        try {
+            userCounterService.incrementPosts(authorId, delta);
+        } catch (RuntimeException e) {
+            log.warn("post counter delta apply failed authorId={}, delta={}", authorId, delta, e);
+        }
     }
 
     private void dispatchUpdateAfterCommit(Long postId, Long operatorId, Integer versionNum) {

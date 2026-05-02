@@ -2,7 +2,9 @@
 
 ## Status
 
-Approved direction for implementation planning.
+Approved direction for implementation planning. This revision is intentionally
+strict: implementation plans must treat the rules below as constraints, not as
+suggestions.
 
 ## Decision
 
@@ -14,7 +16,7 @@ Nexus will complete a full RabbitMQ reliability remediation by standardizing eve
 - `ReliableMqDlqRecorder`
 - `reliableMqListenerContainerFactory`
 
-The remediation will add a thin annotation and AOP layer to remove repeated boilerplate. The AOP layer will standardize shell behavior only. It will not own business routing decisions, retry policy decisions, or business state transitions.
+The remediation will add a thin annotation and AOP layer to remove repeated boilerplate. The AOP layer will standardize shell behavior only. It will not own business routing decisions, retry policy decisions, acknowledgment decisions, or business state transitions.
 
 The implementation target is:
 
@@ -29,19 +31,23 @@ The implementation target is:
 - Convert all current RabbitMQ producer chains to durable outbox publishing unless the chain is explicitly marked best-effort in this design.
 - Convert all side-effecting consumers to a common idempotent consume wrapper.
 - Convert all DLQ consumers to durable replay record writers.
-- Preserve existing queue, exchange, and routing contracts unless a specific chain already uses an incorrect route.
+- Preserve existing queue, exchange, and routing contracts. Any route correction must be listed in the chain inventory with the old route, new route, reason, and regression test.
 - Keep retry and replay timing centralized in `ReliableMqPolicy`.
 - Reduce repeated `save/start/markDone/markFail/record` code through annotations and aspects.
-- Keep business code readable: consumer methods should show business work, while annotations show MQ reliability metadata.
+- Keep business code readable: consumer methods must show business work, while annotations show MQ reliability metadata.
 
 ## Non-Goals
 
 - Replacing RabbitMQ with Kafka or another broker.
 - Building a generic event bus abstraction above RabbitMQ.
 - Moving business state-machine behavior into aspects.
+- Moving manual RabbitMQ acknowledgment handling into the first version of the
+  consume aspect.
 - Making all optional cache invalidation or analytics signals transactional if they are explicitly classified as best-effort.
 - Changing existing retry backoff constants outside `ReliableMqPolicy`.
 - Removing existing outbox tables, replay tables, or consumer record tables.
+- Migrating established domain-specific outbox tables into the generic reliable
+  MQ outbox in this remediation.
 
 ## Current Project Context
 
@@ -54,6 +60,8 @@ Nexus already has the core reliable MQ pieces:
 - `ReliableMqListenerContainerConfig` applies stateless retry and sends exhausted failures to DLQ.
 
 Many consumers already use `reliableMqListenerContainerFactory`, and many DLQ consumers already call `ReliableMqDlqRecorder`. The remaining issue is inconsistent adoption and duplicated wiring code.
+
+`ReliableMqReplayJob` already exists and calls `ReliableMqReplayService.replayReady(...)`. Implementation must wire DLQ records into that existing replay flow rather than creating a second replay scheduler.
 
 ## Architecture
 
@@ -87,6 +95,8 @@ The annotation layer removes repeated code such as:
 - calling `markFail(...)` before rethrow
 - calling `ReliableMqDlqRecorder.record(...)`
 
+The annotation layer must live under the `cn.nexus` package scanned by `nexus-app`. The module that owns the aspect classes must declare `spring-boot-starter-aop`. Annotation-only modules do not need the AOP dependency.
+
 ### Layer 3: Business Adapters
 
 Business classes keep explicit ownership of:
@@ -103,25 +113,33 @@ Business classes keep explicit ownership of:
 
 This keeps route and business semantics visible during code review.
 
+## Binding Implementation Rules
+
+These rules exist to prevent implementation drift.
+
+1. A method annotated with a reliable MQ annotation must be invoked through a Spring proxy. Self-invocation, private methods, package-private helper methods, and direct `new` instances are not valid reliable MQ entry points.
+2. Reliable producer methods must be public methods on Spring beans. If a consumer needs to emit derived messages, it must call a separate producer bean through the proxy.
+3. Reliable consume annotations apply only to listener methods managed by Spring. The implementation must verify that the aspect runs around the actual `@RabbitListener` invocation path.
+4. The first version of `@ReliableMqConsume` is for auto-ack listener containers such as `reliableMqListenerContainerFactory`. Manual-ack consumers remain explicitly coded in this remediation.
+5. Aspects must fail closed. If expression evaluation, event id extraction, payload extraction, or metadata validation fails, the aspect throws and records no fake success state.
+6. No aspect may silently downgrade a required reliable chain to best-effort.
+7. No implementation task may introduce a new raw `rabbitTemplate.convertAndSend(...)` call outside approved publisher infrastructure or an explicitly documented best-effort class.
+8. A reliable chain is complete only when producer durability, consumer retry, consumer idempotency, DLQ recording, and replay routing are all accounted for or explicitly exempted by chain classification.
+
 ## Producer Design
 
 ### Annotation
 
-`@ReliableMqPublish` will be applied to producer methods that currently exist to publish one MQ event.
+`@ReliableMqPublish` will be applied to public producer methods that currently exist to publish one MQ event. The annotation must declare exchange, routing key, event id expression, and payload expression.
 
-Conceptual shape:
+The producer method body is allowed to do argument normalization or validation. It must not call RabbitMQ directly. The aspect stores the payload with `ReliableMqOutboxService.save(...)`.
 
-```java
-@ReliableMqPublish(
-        exchange = "social.interaction",
-        routingKey = "comment.created",
-        eventId = "#event.eventId",
-        payload = "#event")
-public void publish(CommentCreatedEvent event) {
-}
-```
+If validation is required for business correctness, validation must happen before outbox insertion. The implementation must choose one of two explicit forms per method:
 
-The method body may be empty or may validate arguments before the aspect runs. The aspect stores the payload with `ReliableMqOutboxService.save(...)`.
+- validate in the producer method body before the aspect publishes
+- move validation into a dedicated validator called by the aspect before save
+
+An empty producer method is allowed only when all validation is covered by the event id and payload extraction rules and by upstream domain validation.
 
 ### Transaction Boundary
 
@@ -129,7 +147,7 @@ If the producer method runs inside an active Spring transaction, outbox insertio
 
 If no active transaction exists, the outbox insert commits immediately. This preserves reliability for scheduled producers and infrastructure producers that are not part of a domain transaction.
 
-The aspect may register an after-commit hook to opportunistically call the outbox publisher, but durable retry does not depend on that hook. `ReliableMqOutboxRetryJob` remains the final delivery driver.
+This remediation will not add after-commit opportunistic publishing to the aspect. `ReliableMqOutboxRetryJob` remains the only generic outbox delivery driver. Adding after-commit publishing requires a separate design because it changes latency and failure-observation behavior.
 
 ### Event Id
 
@@ -142,6 +160,18 @@ Allowed sources:
 - explicit method argument
 
 Missing event id is a programming error. The aspect must throw and prevent outbox insertion.
+
+The same real-world event must produce the same event id across retries. Event ids must not use random UUIDs generated at publish time unless the UUID was already persisted as part of the business event before the publish method is called.
+
+Derived messages must use deterministic child ids. For example, fanout slice tasks must derive child ids from the parent event id plus stable slice coordinates, not from current time or runtime sequence counters.
+
+### Payload and Type Rules
+
+The payload stored in outbox must be the exact object intended for RabbitMQ conversion. The implementation must not store a wrapper payload unless all consumers and DLQ replay metadata are changed consistently.
+
+Outbox publishing must preserve message type information required by Spring AMQP conversion. If the current `ReliableMqOutboxService` already sets type headers through message conversion, implementation must keep that behavior verified by tests.
+
+Payload objects used by reliable MQ must be JSON-serializable by the application's configured `ObjectMapper`. If an event uses `Instant` or other Java time fields, tests must cover serialization and replay deserialization.
 
 ### Producer Scope
 
@@ -162,25 +192,21 @@ The full remediation will review and align at least these producer families:
 
 Kafka counter producers are outside this RabbitMQ remediation.
 
+### Existing Domain Outbox Rule
+
+`ContentEventOutboxPort` and `UserEventOutboxPort` are established domain-specific outbox implementations. Their internal raw RabbitMQ publish calls are allowed only inside their outbox draining methods.
+
+This remediation must not migrate those domain-specific tables to `ReliableMqOutboxService`. Their public save methods can receive clearer classification and tests, but their table schemas must remain separate.
+
+### Producer Invocation Rule
+
+Consumers that emit downstream messages must not rely on calling an annotated method in the same class, because Spring AOP will not intercept self-invocation. The implementation must use a separate producer Spring bean for downstream emissions. Direct `ReliableMqOutboxService` use inside a consumer is allowed only when the implementation plan records why a separate producer bean would add no stable abstraction.
+
 ## Consumer Design
 
 ### Annotation
 
-`@ReliableMqConsume` will be applied to side-effecting `@RabbitListener` methods.
-
-Conceptual shape:
-
-```java
-@RabbitListener(queues = FeedRecommendFeedbackMqConfig.QUEUE,
-        containerFactory = "reliableMqListenerContainerFactory")
-@ReliableMqConsume(
-        consumerName = "FeedRecommendFeedbackConsumer",
-        eventId = "#event.eventId",
-        payload = "#event")
-public void onMessage(RecommendFeedbackEvent event) {
-    recommendationPort.insertFeedback(...);
-}
-```
+`@ReliableMqConsume` will be applied to side-effecting `@RabbitListener` methods that use auto-ack retry containers. The annotation must declare consumer name, event id expression, and payload expression.
 
 The aspect handles:
 
@@ -192,17 +218,41 @@ The aspect handles:
 - `markFail(...)`
 - rethrowing retryable failures so the Rabbit listener container can retry and eventually dead-letter
 
+The aspect must never acknowledge messages directly. It relies on the listener container's existing success and failure behavior.
+
 ### Validation
 
 Validation stays in the consumer method or a small helper called by that method.
 
-Invalid messages that can never succeed should throw an unretryable exception. The listener container must not keep retrying malformed payloads. The exact exception class will be standardized during implementation so all consumers use one permanent-failure signal.
+Invalid messages that can never succeed must throw one standardized permanent-failure exception. The implementation plan must define this exception before converting consumers.
+
+Permanent failures still must be visible. Converted consumers must reject permanent failures into DLQ so `ReliableMqDlqRecorder` can create durable replay or parking records. They must not silently log and ack permanent failures.
 
 ### Idempotency Rule
 
 Every consumer that writes a database row, changes Redis state, emits a downstream MQ message, calls an external dependency, or changes user-visible state must use `@ReliableMqConsume`.
 
-Consumers that only log, metrics-only consumers, or pure in-memory cache listeners may be explicitly classified as best-effort. That classification must be visible in code and in the implementation plan.
+Consumers that only log, metrics-only consumers, or pure in-memory cache listeners can be explicitly classified as best-effort. That classification must be visible in code and in the implementation plan.
+
+`consumerName` must be stable and unique per logical consumer. Renaming a consumer name changes idempotency identity and must be treated as a migration decision.
+
+`markDone(...)` must happen only after all side effects owned by that consumer method have completed successfully. If the method emits a downstream reliable message, that downstream message must already be durably saved before `markDone(...)`.
+
+`markFail(...)` must happen before rethrow for retryable failures. The original exception must remain the cause so retry and DLQ behavior remains observable.
+
+### Manual ACK Consumers
+
+`RelationCounterProjectConsumer` uses `relationManualAckListenerContainerFactory` and explicit `Channel` acknowledgments. It is excluded from first-version `@ReliableMqConsume`.
+
+Manual-ack consumers must still satisfy the same reliability outcome:
+
+- durable idempotency before side effects
+- ack only after durable success or duplicate-done detection
+- requeue only for in-progress duplicate windows
+- reject/dead-letter after retryable failure is marked failed
+- no swallowed retryable failures
+
+`@ReliableMqManualConsume` is outside this remediation. Adding it requires a separate design with explicit ack/nack rules.
 
 ### Consumer Scope
 
@@ -230,21 +280,11 @@ The full remediation will review and align these current consumer families:
 
 `@ReliableMqDlq` will be applied to DLQ listener methods that receive `Message`.
 
-Conceptual shape:
-
-```java
-@RabbitListener(queues = FeedFanoutConfig.DLQ_POST_PUBLISHED)
-@ReliableMqDlq(
-        consumerName = "FeedFanoutDispatcherConsumer",
-        originalQueue = FeedFanoutConfig.QUEUE,
-        originalExchange = FeedFanoutConfig.EXCHANGE,
-        originalRoutingKey = FeedFanoutConfig.POST_PUBLISHED_ROUTING_KEY,
-        fallbackPayloadType = "cn.nexus.types.event.PostPublishedEvent")
-public void onMessage(Message message) {
-}
-```
-
 The aspect delegates to `ReliableMqDlqRecorder.record(...)`.
+
+The annotation must declare consumer name, original queue, original exchange, original routing key, and fallback payload type. These values must point to the queue and route that should receive replay, not to the DLQ itself.
+
+DLQ listener methods must be empty unless they add business-specific alerting. They must not parse and mutate business state.
 
 ### Replay Behavior
 
@@ -266,9 +306,13 @@ Every DLQ queue created for the full remediation must either:
 
 The default is automatic replay. Manual-only parking requires a specific reason in the implementation plan.
 
+`ReliableMqReplayJob` is the scheduler for automatic replay. Implementation must not create one replay job per business domain in this remediation.
+
+Replay must publish to original exchange and original routing key. Replaying directly to a queue is not allowed unless the original chain already uses default exchange routing and the implementation documents that route explicitly.
+
 ## AOP Boundary Rules
 
-The aspect layer may do:
+The aspect layer is allowed to:
 
 - read annotation metadata
 - evaluate simple Spring Expression Language fields against method arguments
@@ -286,6 +330,26 @@ The aspect layer must not do:
 - implement custom retry loops
 - acknowledge RabbitMQ messages manually
 - create in-memory de-duplication
+
+### Spring AOP Constraints
+
+Spring proxy semantics are part of this design:
+
+- annotations on private methods do not count
+- annotations on methods called from the same class do not count
+- annotations on constructors do not count
+- annotations on non-Spring objects do not count
+- final classes or final methods must not be used if they prevent proxying
+
+The implementation plan must include tests or architecture checks that prove annotated producer and consumer methods are Spring-proxied.
+
+### Aspect Ordering
+
+Producer aspect ordering must preserve transaction correctness. If a producer method is also transactional, the outbox insert must occur inside the intended transaction.
+
+Consumer aspect ordering must preserve listener retry behavior. The consume aspect must wrap business code and rethrow failures so the listener container retry interceptor still sees the failure.
+
+The implementation plan must state the chosen `@Order` values or ordering mechanism for the MQ aspects relative to transaction advice and listener retry advice.
 
 ## Error Handling
 
@@ -306,9 +370,21 @@ Consumer errors:
 
 DLQ errors:
 
-- missing replay event id is a DLQ recording failure and should be logged loudly
+- missing replay event id is a DLQ recording failure and must be logged at error level
 - duplicate replay records are ignored by durable uniqueness
 - replay exhaustion results in `FINAL_FAILED`
+
+## Transaction and Side-Effect Rules
+
+The reliable MQ aspect must not create a false atomicity guarantee. It guarantees durable messaging state around a method invocation; it does not make remote calls, Redis writes, and RabbitMQ publishes globally transactional.
+
+Rules:
+
+- database writes and outbox writes that belong to the same business action must share the same Spring transaction when the caller already has a transaction
+- consumer idempotency records and local database side effects must share a transaction when both side effects use the same database
+- external calls inside consumers must be either idempotent by business key or protected by durable local state before invocation
+- downstream reliable MQ emissions from consumers must be saved before the consumer is marked done
+- direct downstream RabbitMQ emissions from consumers are forbidden unless explicitly classified best-effort
 
 ## Chain Classification
 
@@ -326,11 +402,33 @@ Allowed when the downstream consumer is already idempotent through its own durab
 
 This category requires explicit justification.
 
+Domain-specific outbox implementations such as content and user outboxes can be classified here only for their producer side. Their downstream consumers still need reliable consume classification unless already covered by another durable idempotency mechanism.
+
 ### Best-Effort
 
 Allowed only for chains where losing one message cannot create long-lived business inconsistency or user-visible errors.
 
 Best-effort chains must be explicitly annotated or documented. Silent direct `rabbitTemplate.convertAndSend(...)` is not allowed.
+
+Best-effort classification must include the reason loss is acceptable and the expected user-visible impact of message loss. "Low probability" is not a valid reason.
+
+## Chain Inventory Rules
+
+The implementation plan must produce a chain inventory table before code conversion. Each RabbitMQ chain must have:
+
+- producer class and method
+- exchange and routing key
+- payload type
+- event id source
+- consumer class and method
+- listener container factory
+- idempotency mechanism
+- DLQ queue
+- replay route
+- chain classification
+- allowed raw publish status
+
+The inventory is complete only when every `@RabbitListener` and every `rabbitTemplate.convertAndSend(...)` call is either covered, explicitly exempted, or identified as non-RabbitMQ infrastructure.
 
 ## Testing Strategy
 
@@ -344,6 +442,9 @@ Add tests for the new aspects:
 - consumer aspect marks done after success
 - consumer aspect marks fail and rethrows after business failure
 - DLQ aspect records original queue, exchange, routing key, payload type, event id, and error text
+- annotated methods are invoked through Spring proxies
+- self-invoked annotated methods are not used as reliable MQ entry points
+- manual-ack consumers are not accidentally wrapped by the auto-ack consume aspect
 
 ### Chain Tests
 
@@ -362,27 +463,34 @@ Allowed raw publish locations initially include:
 
 - `ReliableMqOutboxService`
 - `ReliableMqReplayService`
+- domain-specific outbox drain methods such as `ContentEventOutboxPort.tryPublishPending(...)` internals
+- domain-specific outbox drain methods such as `UserEventOutboxPort.tryPublishPending(...)` internals
 - test fixtures
 
 Any other raw publish must be justified in the allowlist.
 
+Add a second static or architecture test that scans `@RabbitListener` methods and verifies side-effecting listeners are either annotated with `@ReliableMqConsume`, covered by explicit manual-ack reliability code, or documented as best-effort.
+
 ## Rollout Plan
 
-Implementation should land in small reviewable batches:
+Implementation must land in small reviewable batches:
 
 1. Add annotation types, aspects, AOP dependency, and unit tests.
-2. Convert producers that already call `ReliableMqOutboxService.save(...)`.
-3. Convert side-effecting consumers that already use `ReliableMqConsumerRecordService`.
-4. Convert DLQ consumers that already use `ReliableMqDlqRecorder`.
-5. Convert remaining raw RabbitMQ producers to reliable outbox or explicit best-effort.
-6. Convert remaining consumers to reliable consume or explicit best-effort.
-7. Add static regression tests and final chain inventory.
+2. Produce the full RabbitMQ chain inventory and classification table.
+3. Convert producers that already call `ReliableMqOutboxService.save(...)`.
+4. Convert side-effecting auto-ack consumers that already use `ReliableMqConsumerRecordService`.
+5. Convert DLQ consumers that already use `ReliableMqDlqRecorder`.
+6. Convert downstream publishes inside consumers by extracting producer beans or explicitly using the reliable outbox service.
+7. Convert remaining raw RabbitMQ producers to reliable outbox or explicit best-effort.
+8. Convert remaining auto-ack consumers to reliable consume or explicit best-effort.
+9. Keep manual-ack consumers explicitly coded and add tests proving they meet the manual-ack reliability rules.
+10. Add static regression tests and final chain inventory.
 
 Each batch must keep the application compiling.
 
 ## Operational Expectations
 
-Operators should be able to inspect:
+Operators must be able to inspect:
 
 - outbox backlog by status and `nextRetryAt`
 - replay backlog by status and `nextRetryAt`
@@ -391,6 +499,17 @@ Operators should be able to inspect:
 
 This design does not require a new admin UI. SQL inspection and existing logs are sufficient for this remediation.
 
+## Explicitly Rejected Interpretations
+
+- "AOP means producers no longer need stable event ids" is rejected.
+- "AOP means consumers can catch and log failures" is rejected.
+- "DLQ recording alone is enough without replay route correctness" is rejected.
+- "A raw publish is acceptable because it is inside a consumer" is rejected.
+- "Manual ack consumers can be auto-converted by the first consume aspect" is rejected.
+- "Existing domain outbox tables should be collapsed into the generic outbox as part of this remediation" is rejected.
+- "A best-effort chain can be declared because the failure probability is low" is rejected.
+- "An annotation on a method is sufficient even if Spring AOP cannot intercept the call" is rejected.
+
 ## Open Decisions Resolved
 
 - Use AOP: yes, for repeated shell behavior only.
@@ -398,3 +517,6 @@ This design does not require a new admin UI. SQL inspection and existing logs ar
 - Core reliability state remains in existing services and tables.
 - Retry timing remains centralized in `ReliableMqPolicy`.
 - Kafka counter messaging remains outside this RabbitMQ-focused change.
+- Existing generic replay job remains the replay scheduler.
+- First-version consume AOP excludes manual-ack consumers.
+- Domain-specific content and user outbox tables are preserved.

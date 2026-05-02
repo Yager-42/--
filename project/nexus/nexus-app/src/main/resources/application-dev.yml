@@ -52,11 +52,6 @@ server:
     max-connections: 8192
     connection-timeout: 20s
 
-hotkey:
-  appName: nexus
-  etcdServer: http://127.0.0.1:2379
-  pushPeriodMs: 500
-
 mybatis:
   mapper-locations: classpath*:mapper/**/*.xml
   configuration:

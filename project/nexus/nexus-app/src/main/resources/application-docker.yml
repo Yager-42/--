@@ -42,11 +42,6 @@ spring:
     init:
       mode: never
 
-hotkey:
-  appName: ${HOTKEY_APP_NAME:}
-  etcdServer: ${HOTKEY_ETCD_SERVER:}
-  pushPeriodMs: ${HOTKEY_PUSH_PERIOD_MS:500}
-
 mybatis:
   mapper-locations: classpath*:mapper/**/*.xml
   configuration:

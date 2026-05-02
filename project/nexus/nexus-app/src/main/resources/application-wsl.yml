@@ -17,12 +17,6 @@ spring:
       config:
         enabled: false
 
-hotkey:
-  enabled: true
-  appName: nexus
-  mode: isolated
-  etcdServer: http://127.0.0.1:2379
-
 feed:
   recommend:
     baseUrl: http://127.0.0.1:8087

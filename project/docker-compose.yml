@@ -202,8 +202,6 @@ services:
       MINIO_MEDIA_BUCKET: nexus
       LEAF_SNOWFLAKE_ZK_ADDRESS: zookeeper:2181
       LEAF_SNOWFLAKE_PORT: "2222"
-      HOTKEY_APP_NAME: ""
-      HOTKEY_ETCD_SERVER: ""
       FEED_RECOMMEND_BASE_URL: ""
     ports:
       - "8080:8080"

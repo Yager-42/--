@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.amqp.ImmediateRequeueAmqpException;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -37,6 +38,22 @@ class ReliableMqConsumeAspectTest {
 
         verify(joinPoint, never()).proceed();
         verify(consumerRecordService, never()).markDone(Mockito.any(), Mockito.any());
+    }
+
+    @Test
+    void around_shouldRequeueInProgressWithoutInvokingBusinessMethod() throws Throwable {
+        ConsumeEvent event = new ConsumeEvent("evt-1", "hello");
+        Method method = ConsumeFixture.class.getMethod("consume", ConsumeEvent.class);
+        ProceedingJoinPoint joinPoint = joinPoint(method, new ConsumeFixture(), new Object[] {event}, null);
+        when(consumerRecordService.startManual(Mockito.eq("evt-1"), Mockito.eq("comment-consumer"), Mockito.anyString()))
+                .thenReturn(StartResult.IN_PROGRESS);
+
+        assertThrows(ImmediateRequeueAmqpException.class,
+                () -> aspect.around(joinPoint, method.getAnnotation(ReliableMqConsume.class)));
+
+        verify(joinPoint, never()).proceed();
+        verify(consumerRecordService, never()).markDone(Mockito.any(), Mockito.any());
+        verify(consumerRecordService, never()).markFail(Mockito.any(), Mockito.any(), Mockito.any());
     }
 
     @Test

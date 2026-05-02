@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
+import org.springframework.amqp.ImmediateRequeueAmqpException;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -28,8 +29,13 @@ public class ReliableMqConsumeAspect {
         Object payload = requiredPayload(joinPoint, annotation);
         String payloadJson = toJson(payload);
         StartResult startResult = consumerRecordService.startManual(eventId, annotation.consumerName(), payloadJson);
-        if (startResult == StartResult.DUPLICATE_DONE || startResult == StartResult.IN_PROGRESS) {
+        if (startResult == StartResult.DUPLICATE_DONE) {
             return null;
+        }
+        if (startResult == StartResult.IN_PROGRESS) {
+            throw new ImmediateRequeueAmqpException(
+                    "requeue in-progress reliable mq consume eventId=" + eventId
+                            + ", consumer=" + annotation.consumerName());
         }
         if (startResult == StartResult.INVALID) {
             throw new ReliableMqPermanentFailureException(

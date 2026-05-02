@@ -46,7 +46,7 @@ public class ContentScheduleConsumer {
         String lockVal = java.util.UUID.randomUUID().toString();
         Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(lockKey, lockVal, java.time.Duration.ofSeconds(60));
         if (Boolean.FALSE.equals(locked)) {
-            throw new ReliableMqPermanentFailureException("content schedule lock exists");
+            throw new IllegalStateException("content schedule lock exists");
         }
         try {
             // 3. 执行定时发布：由领域服务做状态机推进、重试计数与失败原因落库。

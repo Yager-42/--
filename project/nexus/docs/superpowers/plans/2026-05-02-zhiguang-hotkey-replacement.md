@@ -28,11 +28,24 @@
 - Modify `project/nexus/nexus-app/src/main/resources/application-docker.yml`: remove JD hotkey properties.
 - Keep `project/nexus/nexus-app/src/test/resources/application-real-it.yml`: `hotkey.enabled: false` remains valid.
 - Modify `project/docker-compose.yml`: remove JD-only backend `HOTKEY_*` environment variables.
-- Modify `project/docker-compose.middleware.yml`: remove JD HotKey worker/dashboard services and JD-only `etcd` service if no remaining active service uses it.
+- Modify `project/docker-compose.middleware.yml`: remove JD HotKey worker/dashboard services and the JD-only `etcd` service plus `etcd-data` volume.
 - Modify `project/docker/mysql/init-extra.sh`: remove `hotkey_db` creation and schema loading.
 - Delete `project/docker/hotkey/Dockerfile`.
 - Delete `project/docker/hotkey/init/schema.sql`.
 - Modify `project/scripts/up-wsl-middleware.sh`: remove hotkey worker/dashboard branching and `HOTKEY_PUBLIC_IP`.
+- Modify `project/scripts/start-local-all.ps1`: remove HotKey Dashboard/etcd readiness checks and final HotKey URL output that only supported JD HotKey.
+- Modify `project/scripts/stop-local-all.ps1`: remove `HotKeyBridgeServer` helper shutdown.
+- Modify `project/DEPLOY.md`: remove JD HotKey dashboard/worker/etcd instructions and describe hot key detection as local, in-process behavior with no user-facing service.
+
+## Execution Rules
+
+- Do not change content/feed repository behavior except JD-specific warning text.
+- Do not change Redis key names, Redis TTL constants, Caffeine cache sizes, single-flight behavior, or repository constructor signatures.
+- Do not add Redis, MySQL, RabbitMQ, Kafka, HTTP, helper process, dashboard, or admin API support for hot key detection.
+- Do not keep JD HotKey behind a feature flag.
+- Do not use broad delete commands. Delete only the files named in this plan.
+- Keep unrelated working-tree changes untouched, especially existing `zhiguang_be` changes.
+- Stop and inspect if a verification search matches an active runtime file not listed in this plan.
 
 ## Task 1: Detector Tests First
 
@@ -51,6 +64,15 @@ Create `HotKeyStoreBridgeTest` with tests for:
 - invalid window/segment values still produce a working single-segment detector
 
 Use package `cn.nexus.infrastructure.config`. Instantiate `HotKeyProperties`, set test thresholds, then instantiate `new HotKeyStoreBridge(properties)`.
+
+Required test method names:
+
+- `disabledDetectorShouldStayCold`
+- `blankKeyShouldStayCold`
+- `isHotKeyShouldRecordAndExposeLevels`
+- `heatLevelResetAndRotateShouldNotRecordAccess`
+- `rotateThroughAllSegmentsShouldExpireHeat`
+- `invalidWindowAndSegmentShouldUseSingleSegment`
 
 - [ ] **Step 2: Run detector tests and verify RED**
 
@@ -84,7 +106,7 @@ Implement:
 
 - enum `Level { NONE, LOW, MEDIUM, HIGH }`
 - constructor injection of `HotKeyProperties`
-- per-key segmented in-memory counters using JDK concurrency primitives
+- per-key segmented in-memory counters using only JDK concurrency primitives
 - `boolean isHotKey(String key)` as record-and-check
 - `int heat(String key)`
 - `Level level(String key)`
@@ -99,6 +121,12 @@ Rules:
 - no helper classpath handling
 - blank/disabled returns cold without recording
 - only `isHotKey` increments heat
+- `heat`, `level`, `rotate`, and `reset` never increment heat
+- all thresholds use `HotKeyProperties`
+- hot means `heat >= levelLow`
+- levels check high before medium before low
+- invalid `windowSeconds` or `segmentSeconds` values are normalized defensively and never throw during bean construction
+- `rotate` clears exactly the next active segment for every tracked key
 
 - [ ] **Step 3: Run detector tests and verify GREEN**
 
@@ -127,14 +155,14 @@ Run:
 
 Add a test in `ContentRepositoryTest` that:
 
-- uses `newRepository` with `SocialCacheHotTtlProperties.contentPostSeconds = 300`
+- creates a local repository instance with `SocialCacheHotTtlProperties.contentPostSeconds = 300`
 - stubs Redis JSON for `interact:content:post:101`
 - stubs `stringRedisTemplate.getExpire("interact:content:post:101", TimeUnit.SECONDS)` to `60L`
 - stubs `hotKeyStoreBridge.isHotKey("post__101")` to `true`
 - calls `findPost(101L)`
 - verifies `stringRedisTemplate.expire("interact:content:post:101", 300L, TimeUnit.SECONDS)`
 
-If the existing helper does not expose the `HotKeyStoreBridge` mock or properties, split helper creation locally inside the test rather than changing production constructors.
+Name the test `findPost_hotKeyShouldExtendRedisTtlUsingPostHotKey`. Create a local helper record or private factory inside the test class so the test can access the `StringRedisTemplate`, `ValueOperations`, `SocialCacheHotTtlProperties`, and `HotKeyStoreBridge` mocks. Do not change production constructors to make this test easier.
 
 - [ ] **Step 2: Run repository tests and verify RED if helper changes are needed**
 
@@ -142,7 +170,7 @@ Run:
 
 `mvn -f project/nexus/pom.xml -pl nexus-infrastructure -Dtest=ContentRepositoryTest,FeedCardRepositoryTest test`
 
-Expected: new test initially fails until the test helper gives the test access to configure hot TTL and mock hot-key behavior.
+Expected: new test initially fails because the current helper does not expose enough mocks or because TTL extension is not yet asserted.
 
 - [ ] **Step 3: Adjust tests, not production behavior**
 
@@ -232,12 +260,7 @@ Run:
 
 - [ ] **Step 1: Remove JD hotkey profile fields**
 
-In `application-dev.yml`, `application-wsl.yml`, and `application-docker.yml`, replace JD-only hotkey blocks with either:
-
-- no `hotkey` block, relying on defaults, or
-- a local detector block using only `enabled`, `windowSeconds`, `segmentSeconds`, `levelLow`, `levelMedium`, and `levelHigh`.
-
-Prefer relying on defaults unless the file already needs `hotkey.enabled`.
+In `application-dev.yml`, `application-wsl.yml`, and `application-docker.yml`, remove the JD-only `hotkey` blocks entirely. Rely on `HotKeyProperties` defaults for local detection. Do not add duplicate threshold blocks to profile YAML.
 
 - [ ] **Step 2: Keep real integration test hotkey disabled**
 
@@ -254,15 +277,15 @@ In `project/docker-compose.yml`, remove:
 - `HOTKEY_APP_NAME`
 - `HOTKEY_ETCD_SERVER`
 
-Also remove `HOTKEY_PUSH_PERIOD_MS` if present.
+Verify `HOTKEY_PUSH_PERIOD_MS` is absent.
 
 - [ ] **Step 4: Search active config**
 
 Run:
 
-`rg -n "appName|etcdServer|pushPeriodMs|mode: isolated|HOTKEY_APP_NAME|HOTKEY_ETCD_SERVER|HOTKEY_PUSH_PERIOD_MS" project/nexus/nexus-app/src/main/resources project/nexus/nexus-app/src/test/resources project/docker-compose.yml`
+`rg -n "appName|etcdServer|pushPeriodMs|mode: isolated|HOTKEY_APP_NAME|HOTKEY_ETCD_SERVER|HOTKEY_PUSH_PERIOD_MS" project/nexus/nexus-app/src/main/resources project/nexus/nexus-app/src/test/resources project/docker-compose.yml project/scripts/start-local-all.ps1 project/DEPLOY.md`
 
-Expected: no matches except unrelated non-hotkey words if any.
+Expected: no matches in active hotkey configuration or deployment instructions.
 
 - [ ] **Step 5: Commit config cleanup**
 
@@ -272,7 +295,7 @@ Run:
 
 `git commit -m "chore: remove jd hotkey configuration"`
 
-## Task 6: Active Docker And Script Cleanup
+## Task 6: Active Docker, Script, And Deployment Cleanup
 
 **Files:**
 - Modify: `project/docker-compose.middleware.yml`
@@ -280,6 +303,9 @@ Run:
 - Delete: `project/docker/hotkey/Dockerfile`
 - Delete: `project/docker/hotkey/init/schema.sql`
 - Modify: `project/scripts/up-wsl-middleware.sh`
+- Modify: `project/scripts/start-local-all.ps1`
+- Modify: `project/scripts/stop-local-all.ps1`
+- Modify: `project/DEPLOY.md`
 
 - [ ] **Step 1: Remove hotkey services from middleware compose**
 
@@ -287,8 +313,8 @@ In `project/docker-compose.middleware.yml`, remove:
 
 - `hotkey-worker`
 - `hotkey-dashboard`
-- `etcd` only if it is not referenced by any remaining active service in that compose file
-- `etcd-data` volume only if `etcd` is removed
+- `etcd`
+- `etcd-data`
 
 Do not remove Zookeeper.
 
@@ -320,19 +346,42 @@ In `project/scripts/up-wsl-middleware.sh`, remove:
 
 The script must parse `--build` and `--remove-orphans`, compute requested services, run compose up for those services, and keep existing waits for `mysql-extra-init` and `rabbitmq-init`.
 
-- [ ] **Step 5: Search active runtime environment**
+- [ ] **Step 5: Clean PowerShell local scripts**
+
+In `project/scripts/start-local-all.ps1`, remove:
+
+- `etcd` port readiness checks
+- `HotKey Dashboard` port readiness checks
+- final `HotKey: http://localhost:9901` output
+
+In `project/scripts/stop-local-all.ps1`, remove the `HotKeyBridgeServer` process shutdown line. Keep frontend, backend, and backend launcher shutdown.
+
+- [ ] **Step 6: Clean deployment documentation**
+
+In `project/DEPLOY.md`, remove user instructions that describe:
+
+- HotKey Dashboard URL, ports, accounts, or health checks
+- etcd as a HotKey dependency
+- `HOTKEY_PUBLIC_IP`
+- `docker/hotkey/Dockerfile`
+- `/jd/workers`
+- backend log expectation `hotkey client started`
+
+Add one short deployment note: hot key detection is now local in the Nexus process and has no dashboard, worker, etcd, or extra database setup.
+
+- [ ] **Step 7: Search active runtime environment**
 
 Run:
 
-`rg -n "hotkey-worker|hotkey-dashboard|HOTKEY_PUBLIC_IP|HOTKEY_SERVICES|hotkey_db|hk_user|hotkey-schema|l2cache-jd-hotkey|jd-hotkey" project/docker-compose.middleware.yml project/docker/mysql/init-extra.sh project/docker project/scripts/up-wsl-middleware.sh`
+`rg -n "hotkey-worker|hotkey-dashboard|HOTKEY_PUBLIC_IP|HOTKEY_SERVICES|hotkey_db|hk_user|hotkey-schema|l2cache-jd-hotkey|jd-hotkey|HotKeyBridgeServer|HotKey Dashboard|/jd/workers|hotkey client started" project/docker-compose.middleware.yml project/docker/mysql/init-extra.sh project/docker project/scripts project/DEPLOY.md`
 
 Expected: no matches.
 
-- [ ] **Step 6: Commit Docker/script cleanup**
+- [ ] **Step 8: Commit Docker/script/doc cleanup**
 
 Run:
 
-`git add project/docker-compose.middleware.yml project/docker/mysql/init-extra.sh project/scripts/up-wsl-middleware.sh project/docker/hotkey`
+`git add project/docker-compose.middleware.yml project/docker/mysql/init-extra.sh project/scripts/up-wsl-middleware.sh project/scripts/start-local-all.ps1 project/scripts/stop-local-all.ps1 project/DEPLOY.md project/docker/hotkey`
 
 `git commit -m "chore: remove jd hotkey middleware"`
 
@@ -361,7 +410,7 @@ Expected: build succeeds and tests pass.
 
 Run:
 
-`rg -n "com\\.jd\\.platform\\.hotkey|jd-hotkey|hotkey-isolated-classpath|HotKeyBridgeServer|HotKeyClientInitializer|HOTKEY_APP_NAME|HOTKEY_ETCD_SERVER|HOTKEY_PUSH_PERIOD_MS|hotkey-worker|hotkey-dashboard|hotkey_db|hotkey-schema" project/nexus/nexus-infrastructure project/nexus/nexus-app/src/main/resources project/nexus/nexus-app/src/test/resources project/docker-compose.yml project/docker-compose.middleware.yml project/docker project/scripts/up-wsl-middleware.sh`
+`rg -n "com\\.jd\\.platform\\.hotkey|jd-hotkey|hotkey-isolated-classpath|HotKeyBridgeServer|HotKeyClientInitializer|HOTKEY_APP_NAME|HOTKEY_ETCD_SERVER|HOTKEY_PUSH_PERIOD_MS|HOTKEY_PUBLIC_IP|HOTKEY_SERVICES|hotkey-worker|hotkey-dashboard|hotkey_db|hotkey-schema|HotKey Dashboard|/jd/workers|hotkey client started" project/nexus/nexus-infrastructure project/nexus/nexus-app/src/main/resources project/nexus/nexus-app/src/test/resources project/docker-compose.yml project/docker-compose.middleware.yml project/docker project/scripts project/DEPLOY.md`
 
 Expected: no matches.
 
@@ -369,7 +418,7 @@ Expected: no matches.
 
 Run:
 
-`rg -n "jd-hotkey|HOTKEY_APP_NAME|HOTKEY_ETCD_SERVER|hotkey-worker|hotkey-dashboard|hotkey_db" project`
+`rg -n "jd-hotkey|HOTKEY_APP_NAME|HOTKEY_ETCD_SERVER|HOTKEY_PUBLIC_IP|HOTKEY_SERVICES|hotkey-worker|hotkey-dashboard|hotkey_db|HotKey Dashboard|/jd/workers" project`
 
 Expected: matches are limited to historical docs/specs/plans outside active runtime paths. If active runtime files still match, fix them before completion.
 
@@ -389,7 +438,7 @@ Spec coverage:
 - Repository API preservation and key names: Task 3.
 - JD Java artifact removal: Task 4.
 - Profile and compose env cleanup: Task 5.
-- Worker/dashboard/schema/script cleanup: Task 6.
+- Worker/dashboard/schema/script/deployment cleanup: Task 6.
 - Acceptance verification: Task 7.
 
 No broad architecture changes are planned. The implementation keeps content/feed repositories on `HotKeyStoreBridge#isHotKey`, keeps cache key names stable, and does not introduce distributed/network hotness tracking.

@@ -25,16 +25,17 @@ Create:
 - `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqPublishAspectTest.java`
 - `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqConsumeAspectTest.java`
 - `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqDlqAspectTest.java`
+- `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqAopWiringTest.java`
 - `project/nexus/nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
 - `project/nexus/docs/operations/reliable-mq-chain-inventory.md`
 
 Modify:
 
 - `project/nexus/nexus-infrastructure/pom.xml`: add `spring-boot-starter-aop`.
-- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/ReliableMqMessageSupport.java`: reuse serialization and event id helpers if needed.
+- `project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/ReliableMqMessageSupport.java`: reuse serialization and event id helpers from aspects instead of duplicating JSON/event-id parsing.
 - Producer ports already using `ReliableMqOutboxService`: `CommentEventPort`, `InteractionNotifyEventPort`, `RecommendFeedbackEventPort`, `RiskTaskPort`, `ContentScheduleProducer`, `ContentCacheEvictPort`.
-- Auto-ack consumers already using `ReliableMqConsumerRecordService`: feed, recommendation, risk, summary, schedule, search CDC, interaction notify consumers.
-- DLQ consumers already using `ReliableMqDlqRecorder`: all `*DlqConsumer` and `ContentScheduleDLQConsumer`.
+- Auto-ack consumers already using `ReliableMqConsumerRecordService`: feed, recommendation, risk, summary, schedule, interaction notify consumers. Search CDC must stay inventory-driven until its listener container retry/DLQ behavior is proven equivalent to the reliable container.
+- DLQ consumers already using `ReliableMqDlqRecorder`: `FeedRecommendItemDeleteDlqConsumer`, `RelationBlockDlqConsumer`, `InteractionNotifyDlqConsumer`, `RiskLlmScanDlqConsumer`, `FeedFanoutTaskDlqConsumer`, `RiskImageScanDlqConsumer`, `FeedRecommendItemUpsertDlqConsumer`, `RelationFollowDlqConsumer`, `FeedRecommendFeedbackADlqConsumer`, `FeedFanoutDispatcherDlqConsumer`, `FeedRecommendFeedbackDlqConsumer`, `ContentScheduleDLQConsumer`, `PostSummaryGenerateDlqConsumer`.
 - Remaining raw RabbitMQ publishers: `ContentDispatchPort`, `ReactionNotifyMqPort`, `ReactionRecommendFeedbackMqPort`, `RiskProducer`, downstream publishes inside `FeedFanoutDispatcherConsumer`, `RiskImageScanConsumer`, `RiskLlmScanConsumer`, `SearchIndexCdcRawPublisher`, `RelationEventPort`.
 - Manual-ack consumer: `RelationCounterProjectConsumer` test coverage only, no AOP conversion.
 
@@ -42,6 +43,18 @@ Do not modify:
 
 - `ContentEventOutboxPort` and `UserEventOutboxPort` table semantics. Their internal drain publishes remain allowlisted domain outbox internals.
 - Kafka counter producer and Kafka consumers.
+
+## Non-Negotiable Implementation Constraints
+
+- Do not change database schemas in this remediation.
+- Do not migrate `ContentEventOutboxPort` or `UserEventOutboxPort` to `ReliableMqOutboxService`.
+- Do not add after-commit opportunistic publishing to the new publish aspect.
+- Do not convert manual-ack consumers to `@ReliableMqConsume`.
+- Do not introduce new raw RabbitMQ publishes outside the final architecture allowlist.
+- Do not leave an architecture test disabled at the end of Task 10.
+- Do not use broad `git add project/nexus` or whole-module staging in any task.
+- Do not commit a red test state. Task 2 audit-mode architecture test can be committed only when it is enabled and passing by asserting the current finding count.
+- Every step with an expected failure is a RED verification step only. The same task must turn that command green before its commit step.
 
 ## Chain Inventory Baseline
 
@@ -81,6 +94,7 @@ Initial chains to inventory:
 - Test: `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqPublishAspectTest.java`
 - Test: `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqConsumeAspectTest.java`
 - Test: `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqDlqAspectTest.java`
+- Test: `project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqAopWiringTest.java`
 
 - [ ] **Step 1: Write failing publish aspect tests**
 
@@ -95,6 +109,24 @@ Run:
 `mvn -pl nexus-infrastructure -Dtest=ReliableMqPublishAspectTest test`
 
 Expected: compilation fails because annotation/aspect classes do not exist.
+
+Do not commit at this point.
+
+- [ ] **Step 1.5: Write failing AOP wiring tests**
+
+Create `ReliableMqAopWiringTest` with a minimal Spring test configuration. The tests must assert:
+
+- A Spring bean public method annotated with `@ReliableMqPublish` is proxied and triggers `ReliableMqOutboxService.save(...)`.
+- A direct self-invocation method that calls another annotated method in the same class does not count as a reliable publish entry point and is rejected by an architecture assertion.
+- A method annotated with both `@Transactional` and `@ReliableMqPublish` calls `ReliableMqOutboxService.save(...)` while `TransactionSynchronizationManager.isActualTransactionActive()` is true.
+
+Run:
+
+`mvn -pl nexus-infrastructure -Dtest=ReliableMqAopWiringTest test`
+
+Expected: compilation fails because annotation/aspect classes do not exist.
+
+Do not commit at this point.
 
 - [ ] **Step 2: Write failing consume aspect tests**
 
@@ -111,13 +143,15 @@ Run:
 
 Expected: compilation fails because annotation/aspect classes do not exist.
 
+Do not commit at this point.
+
 - [ ] **Step 3: Write failing DLQ aspect tests**
 
 Create `ReliableMqDlqAspectTest` with tests that assert:
 
 - A method annotated with `@ReliableMqDlq` delegates to `ReliableMqReplayService.recordFailure(...)`.
 - The original queue/exchange/routingKey values passed are the replay target, not the DLQ queue.
-- The DLQ method body is invoked only for optional alerting after durable recording succeeds.
+- The DLQ method body is invoked only for explicit alerting after durable recording succeeds.
 
 Run:
 
@@ -125,13 +159,15 @@ Run:
 
 Expected: compilation fails because annotation/aspect classes do not exist.
 
+Do not commit at this point.
+
 - [ ] **Step 4: Implement annotations and permanent failure exception**
 
 Add annotations with runtime retention and method target:
 
 - `ReliableMqPublish`: `exchange`, `routingKey`, `eventId`, `payload`
 - `ReliableMqConsume`: `consumerName`, `eventId`, `payload`
-- `ReliableMqDlq`: `consumerName`, `originalQueue`, `originalExchange`, `originalRoutingKey`, `fallbackPayloadType`, optional `eventId`, optional `lastError`
+- `ReliableMqDlq`: `consumerName`, `originalQueue`, `originalExchange`, `originalRoutingKey`, `fallbackPayloadType`, `eventId` defaulting to empty string, `lastError` defaulting to empty string
 
 Add `ReliableMqPermanentFailureException extends RuntimeException`.
 
@@ -153,7 +189,9 @@ Implement `ReliableMqPublishAspect`:
 - Evaluate event id and payload after successful method execution.
 - Call `ReliableMqOutboxService.save(eventId, exchange, routingKey, payload)`.
 - Do not call `publishReady`.
-- Use explicit `@Order` and document the value in code comment.
+- Use explicit `@Order`.
+- Choose ordering so `ReliableMqOutboxService.save(...)` runs inside an active transaction when the annotated method is transactional.
+- Keep a test in `ReliableMqAopWiringTest` proving the transaction is active at `save(...)` time.
 
 - [ ] **Step 7: Implement consume aspect**
 
@@ -172,8 +210,8 @@ Implement `ReliableMqConsumeAspect`:
 Implement `ReliableMqDlqAspect`:
 
 - Require the intercepted method to have an `org.springframework.amqp.core.Message` argument.
-- Evaluate optional event id and last error expressions when present.
-- Call `ReliableMqReplayService.recordFailure(...)` before optional method body alerting.
+- Evaluate event id and last error expressions only when their annotation values are nonblank.
+- Call `ReliableMqReplayService.recordFailure(...)` before explicit method body alerting.
 - Rethrow recording failures.
 
 - [ ] **Step 9: Add AOP dependency**
@@ -184,7 +222,7 @@ Add `spring-boot-starter-aop` to `nexus-infrastructure/pom.xml`, because the asp
 
 Run:
 
-`mvn -pl nexus-infrastructure -Dtest=ReliableMqPublishAspectTest,ReliableMqConsumeAspectTest,ReliableMqDlqAspectTest test`
+`mvn -pl nexus-infrastructure -Dtest=ReliableMqPublishAspectTest,ReliableMqConsumeAspectTest,ReliableMqDlqAspectTest,ReliableMqAopWiringTest test`
 
 Expected: all tests pass.
 
@@ -192,7 +230,7 @@ Expected: all tests pass.
 
 Run:
 
-`git add project/nexus/nexus-infrastructure/pom.xml project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop`
+`git add project/nexus/nexus-infrastructure/pom.xml project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/annotation/ReliableMqPublish.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/annotation/ReliableMqConsume.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/annotation/ReliableMqDlq.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/exception/ReliableMqPermanentFailureException.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqExpressionEvaluator.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqPublishAspect.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqConsumeAspect.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqDlqAspect.java project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqPublishAspectTest.java project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqConsumeAspectTest.java project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqDlqAspectTest.java project/nexus/nexus-infrastructure/src/test/java/cn/nexus/infrastructure/mq/reliable/aop/ReliableMqAopWiringTest.java`
 
 `git commit -m "feat: add reliable mq annotation aspects"`
 
@@ -206,17 +244,18 @@ Run:
 
 - [ ] **Step 1: Write failing architecture tests**
 
-Create `ReliableMqArchitectureContractTest` with tests that scan Java source files under `project/nexus` and assert:
+Create `ReliableMqArchitectureContractTest` with tests that scan Java source files under `project/nexus` and report:
 
 - Raw `rabbitTemplate.convertAndSend(` or `.convertAndSend(` is not present outside allowlisted files.
 - Allowlisted files initially include `ReliableMqOutboxService.java`, `ReliableMqReplayService.java`, `ContentEventOutboxPort.java`, `UserEventOutboxPort.java`, and test files.
 - `@RabbitListener` methods in known side-effecting consumers are either annotated with `@ReliableMqConsume`, are manual-ack `RelationCounterProjectConsumer`, or are listed as best-effort in the inventory.
+- The initial version runs in audit mode by asserting the exact current finding count. It must remain enabled.
 
 Run:
 
 `mvn -pl nexus-app -Dtest=ReliableMqArchitectureContractTest test`
 
-Expected: fail because raw publishers and unannotated listeners still exist.
+Expected: pass in audit mode while printing or asserting the current finding list.
 
 - [ ] **Step 2: Create chain inventory**
 
@@ -253,7 +292,7 @@ Run:
 
 `mvn -pl nexus-app -Dtest=ReliableMqArchitectureContractTest test`
 
-Expected: fail with current raw publish and unannotated listener findings. Keep the test committed only if it can be temporarily disabled with a clear `@Disabled("enabled after migration tasks")`. Prefer committing it enabled in the final migration task.
+Expected: pass in audit mode with the current raw publish and unannotated listener findings represented as expected counts. Task 10 will change audit mode to enforcement mode with zero unexpected findings.
 
 - [ ] **Step 5: Commit inventory**
 
@@ -278,13 +317,15 @@ Run:
 
 - [ ] **Step 1: Write or update producer tests**
 
-For each listed producer, write or update a unit test that calls the public publish method through the Spring bean or aspect test harness and verifies `ReliableMqOutboxService.save(...)` receives the same exchange, routing key, event id, and payload as before.
+For each listed producer, write or update a unit test that calls the public publish method through a Spring proxy or the aspect test harness and verifies `ReliableMqOutboxService.save(...)` receives the same exchange, routing key, event id, and payload as before.
 
 Run:
 
 `mvn -pl nexus-infrastructure,nexus-trigger -Dtest=CommentEventPortTest,InteractionNotifyEventPortTest,RecommendFeedbackEventPortTest,RiskTaskPortTest,ContentScheduleProducerTest,ContentCacheEvictPortTest test`
 
-Expected: missing tests or failures until conversion is complete.
+Expected: newly created tests fail until conversion is complete. If a listed test class does not exist yet, create it in this step instead of relying on Maven to skip it.
+
+Do not commit at this point.
 
 - [ ] **Step 2: Convert producer methods**
 
@@ -306,9 +347,13 @@ Expected: all producer tests pass.
 
 - [ ] **Step 4: Commit**
 
+Run `git status --short` first. Stage only files changed for Task 3.
+
 Run:
 
-`git add project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/cache project/nexus/**/src/test/java`
+`git add project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/CommentEventPort.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/InteractionNotifyEventPort.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RecommendFeedbackEventPort.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RiskTaskPort.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/ContentScheduleProducer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/cache/ContentCacheEvictPort.java`
+
+Also add only the producer test files created or modified in this task. Do not stage unrelated test files.
 
 `git commit -m "refactor: annotate reliable mq producers"`
 
@@ -329,12 +374,13 @@ Run:
 - `PostSummaryGenerateConsumer.java`
 - `RiskImageScanConsumer.java`
 - `RiskLlmScanConsumer.java`
-- `SearchIndexCdcConsumer.java`
 - Test: add or update matching consumer tests.
+
+Do not convert `SearchIndexCdcConsumer` in this task unless `SearchIndexMqConfig.searchIndexListenerContainerFactory` is first proven to have equivalent retry and DLQ behavior to `reliableMqListenerContainerFactory`. If not proven, leave it for Task 8 chain classification.
 
 - [ ] **Step 1: Write failing representative consumer tests**
 
-For at least `FeedRecommendFeedbackConsumer`, `FeedFanoutDispatcherConsumer`, and `RiskImageScanConsumer`, write tests that assert:
+Create or update tests for `FeedRecommendFeedbackConsumer`, `FeedFanoutDispatcherConsumer`, and `RiskImageScanConsumer` that assert:
 
 - duplicate done does not invoke business dependency
 - started success invokes business dependency and marks done
@@ -347,11 +393,14 @@ Run:
 
 Expected: fail until annotations/aspect are applied and old manual idempotency code is removed.
 
+Do not commit at this point.
+
 - [ ] **Step 2: Convert consumer methods**
 
 For each listed consumer:
 
 - Add `@ReliableMqConsume(consumerName=..., eventId=..., payload=...)` to the `@RabbitListener` method.
+- Confirm the listener uses `containerFactory = "reliableMqListenerContainerFactory"` before annotating.
 - Remove direct `ReliableMqConsumerRecordService` and `ObjectMapper` fields when only used for boilerplate.
 - Keep payload validation and business logic in the method.
 - Throw `ReliableMqPermanentFailureException` for permanent invalid payloads.
@@ -359,7 +408,7 @@ For each listed consumer:
 
 - [ ] **Step 3: Preserve downstream emission rules**
 
-Where a consumer emits downstream MQ messages, do not leave raw RabbitMQ publish in place unless this task explicitly records a follow-up in the inventory. Prefer extracting the emission to a producer bean in Task 6.
+Where a consumer emits downstream MQ messages, leave a temporary raw publish only when the inventory row marks it `Task 6 pending`. Do not add new raw publishes in this task.
 
 - [ ] **Step 4: Run consumer tests**
 
@@ -373,7 +422,9 @@ Expected: all representative tests pass.
 
 Run:
 
-`git add project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer project/nexus/nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer`
+`git add project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackAConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentScheduleConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/PostSummaryGenerateConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanConsumer.java`
+
+Also add only the consumer test files created or modified in this task.
 
 `git commit -m "refactor: annotate reliable mq consumers"`
 
@@ -382,9 +433,20 @@ Run:
 ### Task 5: Convert DLQ Consumers to `@ReliableMqDlq`
 
 **Files:**
-- Modify all DLQ consumers under `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/*DlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RelationBlockDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RelationFollowDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackADlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherDlqConsumer.java`
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackDlqConsumer.java`
 - Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentScheduleDLQConsumer.java`
-- Optional delete dependency: `ReliableMqDlqRecorder` injection from converted classes.
+- Modify: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/PostSummaryGenerateDlqConsumer.java`
+- Delete dependency from converted classes: remove `ReliableMqDlqRecorder` injection where annotation recording fully replaces it.
 - Test: add or update DLQ consumer tests.
 
 - [ ] **Step 1: Write failing DLQ conversion tests**
@@ -403,6 +465,8 @@ Run:
 
 Expected: fail until conversion is complete.
 
+Do not commit at this point.
+
 - [ ] **Step 2: Convert DLQ listeners**
 
 For each DLQ consumer:
@@ -411,6 +475,8 @@ For each DLQ consumer:
 - Remove direct `ReliableMqDlqRecorder` field where no alerting remains.
 - Keep only alert logging that is business-specific.
 - Do not mutate business state.
+- Verify `originalQueue`, `originalExchange`, and `originalRoutingKey` match the replay target in the corresponding config class.
+- For `RelationFollowDlqConsumer` and `RelationBlockDlqConsumer`, confirm replay routes back to the relation projection queue and not to a DLQ queue.
 
 - [ ] **Step 3: Run DLQ tests**
 
@@ -424,7 +490,9 @@ Expected: all DLQ tests pass.
 
 Run:
 
-`git add project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer project/nexus/nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer`
+`git add project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RelationBlockDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RelationFollowDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackADlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackDlqConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentScheduleDLQConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/PostSummaryGenerateDlqConsumer.java`
+
+Also add only the DLQ test files created or modified in this task.
 
 `git commit -m "refactor: annotate reliable mq dlq listeners"`
 
@@ -437,7 +505,9 @@ Run:
 - Modify: `RiskImageScanConsumer.java`
 - Modify: `RiskLlmScanConsumer.java`
 - Modify: `SearchIndexCdcRawPublisher.java`
-- Create producer beans as needed under `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/`
+- Create: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/FeedFanoutTaskProducer.java`
+- Create: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskScanCompletedProducer.java`
+- Create: `project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/SearchIndexCdcEventProducer.java`
 - Test matching consumer and producer tests.
 
 - [ ] **Step 1: Write failing downstream publish tests**
@@ -446,13 +516,15 @@ Add tests proving downstream publish is durable:
 
 - `FeedFanoutDispatcherConsumer` creates `FeedFanoutTask` messages through a producer bean using deterministic child event id.
 - `RiskImageScanConsumer` and `RiskLlmScanConsumer` save scan completed messages through reliable publishing.
-- `SearchIndexCdcRawPublisher` saves translated events through reliable publishing.
+- `SearchIndexCdcRawPublisher` saves translated events through reliable publishing and updates the existing `SearchIndexCdcRawPublisherTest` so it no longer verifies raw `RabbitTemplate.convertAndSend(...)`.
 
 Run:
 
 `mvn -pl nexus-trigger -Dtest=FeedFanoutDispatcherConsumerTest,RiskImageScanConsumerTest,RiskLlmScanConsumerTest,SearchIndexCdcRawPublisherTest test`
 
 Expected: fail while raw `rabbitTemplate.convertAndSend(...)` remains.
+
+Do not commit at this point.
 
 - [ ] **Step 2: Extract producer beans**
 
@@ -464,9 +536,13 @@ Create producer beans for downstream emissions:
 
 Annotate their public methods with `@ReliableMqPublish`.
 
+Each producer method must receive the already constructed event object. It must not regenerate event ids.
+
 - [ ] **Step 3: Update consumers**
 
 Replace raw `RabbitTemplate` usage in the listed consumers with producer bean calls. Ensure the producer bean is injected and invoked through Spring proxy.
+
+For `FeedFanoutDispatcherConsumer`, keep child event id generation in the dispatcher because it owns slice coordinates. The new producer only persists the provided `FeedFanoutTask`.
 
 - [ ] **Step 4: Run downstream publish tests**
 
@@ -480,7 +556,9 @@ Expected: all tests pass.
 
 Run:
 
-`git add project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer project/nexus/nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer`
+`git add project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanConsumer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcRawPublisher.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/FeedFanoutTaskProducer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskScanCompletedProducer.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/SearchIndexCdcEventProducer.java`
+
+Also add only the downstream publish test files created or modified in this task.
 
 `git commit -m "refactor: route consumer mq emissions through outbox"`
 
@@ -489,7 +567,7 @@ Run:
 ### Task 7: Convert Remaining Raw RabbitMQ Producers or Classify Best-Effort
 
 **Files:**
-- Modify: `ContentDispatchPort.java`
+- Modify or classify: `ContentDispatchPort.java`
 - Modify: `ReactionNotifyMqPort.java`
 - Modify: `ReactionRecommendFeedbackMqPort.java`
 - Modify: `RiskProducer.java`
@@ -507,6 +585,8 @@ Run:
 
 Expected: fail listing the remaining raw producers.
 
+Do not commit at this point.
+
 - [ ] **Step 2: Convert or classify each producer**
 
 For each file:
@@ -514,6 +594,8 @@ For each file:
 - If the chain is required, convert to `@ReliableMqPublish` or an explicit `ReliableMqOutboxService.save(...)` call with recorded reason.
 - If the chain is best-effort, add it to the inventory with loss impact and allowlist it in architecture test.
 - Preserve `ContentEventOutboxPort` and `UserEventOutboxPort` as domain outbox internals.
+- For `ContentDispatchPort`, first determine whether any active domain service still uses it instead of `ContentEventOutboxPort`. If unused, remove the bean or classify it as dead code in the inventory rather than adding another publish path.
+- For `RelationEventPort`, keep relation projection manual-ack semantics and convert only the producer-side durability.
 
 - [ ] **Step 3: Run producer and architecture tests**
 
@@ -521,13 +603,15 @@ Run:
 
 `mvn -pl nexus-infrastructure,nexus-trigger,nexus-app -Dtest=ReliableMqArchitectureContractTest,ReactionNotifyMqPortTest,ReactionRecommendFeedbackMqPortTest,RiskProducerTest,RelationEventPortTest test`
 
-Expected: all tests pass or only missing optional per-class tests are replaced by architecture coverage.
+Expected: all existing and newly created tests pass. If a per-class producer test is not created, the architecture test must explicitly cover that producer's raw publish removal or best-effort classification.
 
 - [ ] **Step 4: Commit**
 
 Run:
 
-`git add project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer project/nexus/docs/operations/reliable-mq-chain-inventory.md project/nexus/nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
+`git add project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ContentDispatchPort.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionNotifyMqPort.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionRecommendFeedbackMqPort.java project/nexus/nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationEventPort.java project/nexus/nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java project/nexus/docs/operations/reliable-mq-chain-inventory.md project/nexus/nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
+
+Also add only the producer tests created or modified in this task.
 
 `git commit -m "refactor: close raw rabbitmq producer gaps"`
 
@@ -536,25 +620,27 @@ Run:
 ### Task 8: Finalize Auto-ACK Consumer Coverage
 
 **Files:**
-- Modify any remaining auto-ack `@RabbitListener` classes not handled earlier.
+- Modify only auto-ack `@RabbitListener` classes reported by `ReliableMqArchitectureContractTest` after Tasks 1-7.
 - Update: `project/nexus/docs/operations/reliable-mq-chain-inventory.md`
 - Test: `ReliableMqArchitectureContractTest`
 
-- [ ] **Step 1: Run listener architecture test**
+- [ ] **Step 1: Run listener architecture test in enforcement mode**
 
 Run:
 
 `mvn -pl nexus-app -Dtest=ReliableMqArchitectureContractTest test`
 
-Expected: fail if any side-effecting auto-ack listener lacks `@ReliableMqConsume`.
+Expected: pass only when every side-effecting auto-ack listener is annotated with `@ReliableMqConsume`, covered by manual-ack explicit rules, or listed as best-effort in the inventory. If it fails, continue with Step 2 and do not commit.
 
 - [ ] **Step 2: Convert remaining auto-ack consumers**
 
-For each failure:
+For each listener coverage finding from `ReliableMqArchitectureContractTest`:
 
 - Add `@ReliableMqConsume`, or
 - classify as best-effort in inventory and architecture allowlist, or
 - document as manual-ack explicit if it uses manual ack.
+- For listeners using `searchIndexListenerContainerFactory`, either prove that factory has retry and DLQ behavior equivalent to `reliableMqListenerContainerFactory`, or classify and fix the container before adding `@ReliableMqConsume`.
+- Do not change listeners that are not reported by the architecture test and not listed in the chain inventory.
 
 - [ ] **Step 3: Run listener architecture test again**
 
@@ -568,7 +654,9 @@ Expected: pass.
 
 Run:
 
-`git add project/nexus project/nexus/docs/operations/reliable-mq-chain-inventory.md`
+`git add project/nexus/docs/operations/reliable-mq-chain-inventory.md project/nexus/nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
+
+Also add only the remaining listener source and test files changed in Task 8. Do not stage unrelated consumer files.
 
 `git commit -m "test: enforce reliable mq listener coverage"`
 
@@ -594,6 +682,8 @@ Run:
 `mvn -pl nexus-trigger -Dtest=RelationCounterProjectConsumerTest test`
 
 Expected: fail if current code does not expose test seams or misses required behavior.
+
+Do not commit at this point.
 
 - [ ] **Step 2: Fix only required manual ack behavior**
 
@@ -623,9 +713,9 @@ Run:
 - Update: `project/nexus/docs/operations/reliable-mq-chain-inventory.md`
 - Update: `project/nexus/nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
 
-- [ ] **Step 1: Remove temporary disables**
+- [ ] **Step 1: Verify architecture test is in enforcement mode**
 
-If `ReliableMqArchitectureContractTest` was committed with `@Disabled`, remove it.
+`ReliableMqArchitectureContractTest` must remain enabled. It must assert zero unexpected raw publish and listener coverage findings outside the final allowlist.
 
 - [ ] **Step 2: Verify inventory has no unclassified rows**
 
@@ -655,9 +745,13 @@ Expected: pass.
 
 - [ ] **Step 5: Commit final closure**
 
+Run `git status --short` first. Stage only files changed for Task 10.
+
 Run:
 
-`git add project/nexus`
+`git add project/nexus/docs/operations/reliable-mq-chain-inventory.md project/nexus/nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
+
+Also add only the final closure source and test files changed in Task 10. Do not stage entire modules.
 
 `git commit -m "test: close reliable mq remediation coverage"`
 

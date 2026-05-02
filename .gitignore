@@ -8,6 +8,7 @@
 .codex/tools/
 .codex/tmp/
 .gitconfig-codex
+.worktrees/
 META-INF/
 
 project/nexus-frontend/node_modules

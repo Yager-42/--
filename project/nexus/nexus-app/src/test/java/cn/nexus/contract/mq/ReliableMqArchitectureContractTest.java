@@ -31,13 +31,27 @@ class ReliableMqArchitectureContractTest {
     );
 
     private static final Set<String> BEST_EFFORT_LISTENERS_FROM_INVENTORY = Set.of(
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentCreatedConsumer.java:onMessage",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentCacheEvictConsumer.java:onMessage"
+    );
+
+    private static final Set<String> DOMAIN_INBOX_LISTENERS_FROM_INVENTORY = Set.of(
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyConsumer.java:onMessage"
     );
 
     private static final Set<String> MANUAL_ACK_LISTENERS_FROM_INVENTORY = Set.of(
             "nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationCounterProjectConsumer.java:onFollow",
             "nexus-trigger/src/main/java/cn/nexus/trigger/listener/social/RelationCounterProjectConsumer.java:onBlock"
     );
+
+    private static final Set<String> SEARCH_PROJECTION_LISTENERS_FROM_INVENTORY = Set.of(
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java:onUserNicknameChanged"
+    );
+
+    private static final Set<String> TRANSLATOR_LISTENERS_FROM_INVENTORY = Set.of(
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcRawPublisher.java:onRaw"
+    );
+
     private static final Set<String> METHOD_DECLARATION_EXCLUDED_NAMES = Set.of(
             "if", "for", "while", "switch", "catch", "try", "do", "synchronized"
     );
@@ -98,13 +112,7 @@ class ReliableMqArchitectureContractTest {
 
     private static final List<String> EXPECTED_RAW_PUBLISH_FINDING_KEYS = List.of();
 
-    private static final List<String> EXPECTED_UNANNOTATED_LISTENER_FINDINGS = List.of(
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentCreatedConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcConsumer.java:onPostChanged",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcRawPublisher.java:onRaw",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java:onUserNicknameChanged"
-    );
+    private static final List<String> EXPECTED_UNANNOTATED_LISTENER_FINDINGS = List.of();
 
     private static final Pattern METHOD_DECLARATION = Pattern.compile(
             "^\\s*(?:(?:public|private|protected)\\s+)?(?:static\\s+)?[^\\n=;]+?\\s+(\\w+)\\s*\\([^\\n;]*\\)\\s*(?:throws\\s+[^\\n{]+)?\\s*\\{?\\s*$",
@@ -112,7 +120,7 @@ class ReliableMqArchitectureContractTest {
     private static final Pattern CONVERT_AND_SEND_START = Pattern.compile("(?:\\w+\\.)?convertAndSend\\s*\\(");
 
     @Test
-    void rawRabbitTemplatePublishesRemainAtCurrentAuditBaseline() throws IOException {
+    void rawRabbitTemplatePublishesHaveNoUnexpectedFindings() throws IOException {
         List<RawPublishFinding> findings = javaSources().stream()
                 .filter(path -> !isTestSource(path))
                 .flatMap(path -> rawPublishFindings(path).stream())
@@ -125,7 +133,7 @@ class ReliableMqArchitectureContractTest {
     }
 
     @Test
-    void sideEffectingRabbitListenersRemainAtCurrentAuditBaseline() throws IOException {
+    void sideEffectingRabbitListenersHaveNoUnexpectedUnannotatedFindings() throws IOException {
         List<String> findings = javaSources().stream()
                 .filter(path -> SIDE_EFFECTING_LISTENER_FILES.contains(relative(path)))
                 .flatMap(path -> unannotatedListenerFindings(path).stream())
@@ -242,7 +250,12 @@ class ReliableMqArchitectureContractTest {
             String id = listener.id();
             if (listener.hasReliableMqConsume()
                     || BEST_EFFORT_LISTENERS_FROM_INVENTORY.contains(id)
+                    || DOMAIN_INBOX_LISTENERS_FROM_INVENTORY.contains(id)
                     || MANUAL_ACK_LISTENERS_FROM_INVENTORY.contains(id)) {
+                continue;
+            }
+            if (SEARCH_PROJECTION_LISTENERS_FROM_INVENTORY.contains(id)
+                    || TRANSLATOR_LISTENERS_FROM_INVENTORY.contains(id)) {
                 continue;
             }
             findings.add(listener.id());

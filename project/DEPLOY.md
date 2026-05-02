@@ -15,8 +15,6 @@
 - Elasticsearch：`http://localhost:9200`
 - Gorse API：`http://localhost:8087`
 - Gorse 管理台：`http://localhost:8088`
-- HotKey Dashboard：`http://localhost:9901`
-- etcd：`http://localhost:2379`
 
 ## 1. 前置条件（必须）
 
@@ -66,14 +64,9 @@ bash scripts/up-wsl-middleware.sh
 - Cassandra `9042`
 - Elasticsearch `9200`
 - MinIO `9000` / 控制台 `9001`
-- etcd `2379`
 - Gorse `8086 / 8087 / 8088 / 8089`
-- HotKey worker `11111 / 9902`
-- HotKey dashboard `9901`
 
 这一步不要再直接用裸的 `docker compose up`。
-原因很简单：HotKey worker 需要把“Windows 本地代码也能访问”的地址写进 etcd。
-脚本会自动读取当前 WSL IP，并把它注入到 HotKey worker，避免 worker 继续往 etcd 里登记 `172.18.x.x` 这种 Docker 内网地址。
 
 然后本地启动后端代码时，使用 `wsl` profile：
 
@@ -112,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File scripts\stop-local-all.ps1
 
 - 继续复用 `dev` 里的本地端口（`127.0.0.1` / `localhost`）
 - 关闭 Nacos 配置中心（因为这套 Docker 没起 Nacos）
-- 保留 DashScope 本地降级，但把 Gorse 和 HotKey 改成直接连接 Docker 里的容器
+- 保留 DashScope 本地降级，并把 Gorse 改成直接连接 Docker 里的容器
 
 如果你之前已经起过 Kafka，中间改了配置后要把 Kafka 重新建一下，不然它还会继续对外广播旧地址：
 
@@ -128,15 +121,14 @@ cd /mnt/c/Users/Administrator/Desktop/文档/project
 docker compose -f docker-compose.middleware.yml up -d --build --force-recreate rabbitmq
 ```
 
-如果你第一次接入 HotKey，或者改了 `docker/hotkey/Dockerfile`，继续用 `--build` 就行，Compose 会自动重建 HotKey worker / dashboard 镜像。
-
-如果你确实要手工执行 Compose，也可以先自己导出变量，再运行：
+如果你确实要手工执行 Compose，可以运行：
 
 ```bash
 cd /mnt/c/Users/Administrator/Desktop/文档/project
-export HOTKEY_PUBLIC_IP="$(hostname -I | awk '{print $1}')"
 docker compose -f docker-compose.middleware.yml up -d --build
 ```
+
+Hot key detection is now local in the Nexus process and has no dashboard, worker, etcd, or extra database setup.
 
 ## 3. 怎么确认“启动成功”（按顺序检查）
 
@@ -184,28 +176,10 @@ docker compose -f docker-compose.middleware.yml ps
 - MinIO 控制台：`http://localhost:9001`
 - Gorse API：`http://localhost:8087`
 - Gorse 管理台：`http://localhost:8088`
-- HotKey Dashboard：`http://localhost:9901`
-- etcd：`http://localhost:2379`
-
-如果你要确认 HotKey 已经“真的接通”，再多看一步 etcd 里的 worker 地址：
-
-```bash
-cd /mnt/c/Users/Administrator/Desktop/文档/project
-docker exec project-etcd-1 etcdctl --endpoints=http://127.0.0.1:2379 get --prefix /jd/workers
-```
-
-正常结果里，`nexus` worker 的地址应该是当前 WSL IP，例如 `172.20.x.x:11111`。
-如果你看到的还是 `172.18.x.x:11111`，说明它还是 Docker 内网地址，本地 Windows 后端连不上，需要重新执行一次 `bash scripts/up-wsl-middleware.sh`。
 
 3) 再看本地后端健康检查：
 
 - `http://localhost:8080/api/v1/health`
-- 后端启动日志里应看到 `hotkey client started`
-
-4) HotKey Dashboard 默认账号：
-
-- 超级管理员：`admin / 123456`
-- 预置的 `nexus` 应用管理员：`nexus / 123456`
 
 ## 4. 数据初始化说明（你一般不需要手动做）
 
@@ -281,4 +255,3 @@ docker compose logs -f backend
 
 这份 Compose 是“本地/演示环境”配置，默认密码都是弱口令（例如 `root/root`、`guest/guest`）。
 如果要上公网或给多人用，必须改密码、收紧端口暴露、加鉴权与备份策略。
-

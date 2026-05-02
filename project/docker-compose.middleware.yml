@@ -33,7 +33,6 @@ services:
       - ./docker/mysql/init-extra.sh:/init-extra.sh:ro
       - ./nexus/docs/nexus_final_mysql_schema.sql:/schema/nexus-final-schema.sql:ro
       - ./nexus/docs/migrations/20260409_01_drop_legacy_reaction_tables.sql:/schema/20260409_01_drop_legacy_reaction_tables.sql:ro
-      - ./docker/hotkey/init/schema.sql:/schema/hotkey-schema.sql:ro
     entrypoint: ["bash", "/init-extra.sh"]
     restart: "no"
 
@@ -185,69 +184,6 @@ services:
     volumes:
       - zookeeper-data:/var/lib/zookeeper/data
 
-
-  etcd:
-    image: quay.io/coreos/etcd:v3.5.15
-    restart: unless-stopped
-    command: >
-      /usr/local/bin/etcd
-      --name etcd
-      --data-dir /etcd-data
-      --listen-client-urls http://0.0.0.0:2379
-      --advertise-client-urls http://etcd:2379
-      --listen-peer-urls http://0.0.0.0:2380
-      --initial-advertise-peer-urls http://etcd:2380
-      --initial-cluster etcd=http://etcd:2380
-    ports:
-      - "2379:2379"
-    volumes:
-      - etcd-data:/etcd-data
-
-  hotkey-worker:
-    build:
-      context: .
-      dockerfile: docker/hotkey/Dockerfile
-      target: worker
-      additional_contexts:
-        hotkeysrc: ../.codex/tmp/l2cache-2.0.0
-    image: nexus-hotkey-worker:2.0.0
-    restart: unless-stopped
-    depends_on:
-      mysql-extra-init:
-        condition: service_completed_successfully
-      etcd:
-        condition: service_started
-    environment:
-      etcdServer: http://etcd:2379
-      workerPath: nexus
-      nettyPort: "11111"
-      JAVA_TOOL_OPTIONS: -Dlocal.address=${HOTKEY_PUBLIC_IP:-}
-    ports:
-      - "11111:11111"
-      - "9902:9902"
-
-  hotkey-dashboard:
-    build:
-      context: .
-      dockerfile: docker/hotkey/Dockerfile
-      target: dashboard
-      additional_contexts:
-        hotkeysrc: ../.codex/tmp/l2cache-2.0.0
-    image: nexus-hotkey-dashboard:2.0.0
-    restart: unless-stopped
-    depends_on:
-      mysql-extra-init:
-        condition: service_completed_successfully
-      etcd:
-        condition: service_started
-    environment:
-      MYSQL_HOST: mysql
-      MYSQL_USER: root
-      MYSQL_PASS: root
-      etcdServer: http://etcd:2379
-    ports:
-      - "9901:9901"
-
   cassandra:
     image: cassandra:4.1
     restart: unless-stopped
@@ -319,7 +255,6 @@ services:
 
 volumes:
   mysql-data:
-  etcd-data:
   redis-data:
   gorse-log:
   gorse-master-data:

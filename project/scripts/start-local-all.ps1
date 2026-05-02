@@ -440,9 +440,7 @@ foreach ($service in @(
     @{ Name = 'Cassandra'; Port = 9042 },
     @{ Name = 'Elasticsearch'; Port = 9200 },
     @{ Name = 'MinIO'; Port = 9000 },
-    @{ Name = 'etcd'; Port = 2379 },
-    @{ Name = 'Gorse API'; Port = 8087 },
-    @{ Name = 'HotKey Dashboard'; Port = 9901 }
+    @{ Name = 'Gorse API'; Port = 8087 }
 )) {
     Wait-ForWslTcpPort -Name $service.Name -Port $service.Port
 }
@@ -455,9 +453,7 @@ foreach ($service in @(
     @{ Name = 'Cassandra'; Port = 9042 },
     @{ Name = 'Elasticsearch'; Port = 9200 },
     @{ Name = 'MinIO'; Port = 9000 },
-    @{ Name = 'etcd'; Port = 2379 },
-    @{ Name = 'Gorse API'; Port = 8087 },
-    @{ Name = 'HotKey Dashboard'; Port = 9901 }
+    @{ Name = 'Gorse API'; Port = 8087 }
 )) {
     Wait-ForTcpPort -Name $service.Name -Port $service.Port
 }
@@ -486,8 +482,6 @@ Write-Host 'All services are ready.'
 Write-Host 'Frontend:  http://localhost:3000'
 Write-Host 'Backend:   http://localhost:8080/api/v1/health'
 Write-Host 'Gorse:     http://localhost:8088'
-Write-Host 'HotKey:    http://localhost:9901'
 Write-Host "Backend logs:  $backendStdOutLog , $backendStdErrLog"
 Write-Host "Frontend logs: $frontendStdOutLog , $frontendStdErrLog"
-
 

@@ -87,7 +87,6 @@ function Stop-ProcessesByPattern {
 
 Stop-ProcessIfMatch -Port 3000 -Patterns @('*vite.js*', '*nexus-frontend*') -Name 'Frontend'
 Stop-ProcessIfMatch -Port 8080 -Patterns @('*cn.nexus.Application*', '*nexus-app*') -Name 'Backend'
-Stop-ProcessesByPattern -Pattern '*HotKeyBridgeServer*' -Name 'HotKey helper'
 Stop-ProcessesByPattern -Pattern '*nexus-app\pom.xml*spring-boot:run*' -Name 'Backend launcher'
 
 Write-Step 'Stopping WSL middleware.'

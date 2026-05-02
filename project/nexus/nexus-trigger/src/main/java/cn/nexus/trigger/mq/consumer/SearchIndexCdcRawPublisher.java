@@ -1,6 +1,7 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.trigger.mq.config.SearchIndexCdcMqConfig;
+import cn.nexus.trigger.mq.producer.SearchIndexCdcEventProducer;
 import cn.nexus.types.event.search.PostChangedCdcEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,7 +16,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -30,14 +30,8 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class SearchIndexCdcRawPublisher {
 
-    private final RabbitTemplate rabbitTemplate;
+    private final SearchIndexCdcEventProducer searchIndexCdcEventProducer;
     private final ObjectMapper objectMapper;
-
-    @Value("${search.index.cdc.publish.exchange:" + SearchIndexCdcMqConfig.EXCHANGE + "}")
-    private String publishExchange;
-
-    @Value("${search.index.cdc.publish.routingKey:" + SearchIndexCdcMqConfig.ROUTING_KEY + "}")
-    private String publishRoutingKey;
 
     @Value("${search.index.cdc.filter.schema:nexus_social}")
     private String filterSchema;
@@ -91,7 +85,7 @@ public class SearchIndexCdcRawPublisher {
             event.setPostId(postId);
             event.setEventId(prefix + ":" + postId);
 
-            rabbitTemplate.convertAndSend(publishExchange, publishRoutingKey, event);
+            searchIndexCdcEventProducer.publish(event);
             published++;
         }
 

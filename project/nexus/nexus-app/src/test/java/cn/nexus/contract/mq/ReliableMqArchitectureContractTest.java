@@ -100,10 +100,6 @@ class ReliableMqArchitectureContractTest {
             "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionNotifyMqPort.java:publish:EXCHANGE|ROUTING_KEY",
             "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/ReactionRecommendFeedbackMqPort.java:publish:EXCHANGE|ROUTING_KEY",
             "nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/port/RelationEventPort.java:publishCounterProjection:RelationCounterRouting.EXCHANGE|routingKey",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java:dispatch:FeedFanoutConfig.EXCHANGE|FeedFanoutConfig.TASK_ROUTING_KEY",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanConsumer.java:publishCompleted:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_SCAN_COMPLETED",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanConsumer.java:publishCompleted:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_SCAN_COMPLETED",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcRawPublisher.java:onRaw:publishExchange|publishRoutingKey",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendImageScan:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_IMAGE_SCAN",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendLlmScan:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_LLM_SCAN",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/producer/RiskProducer.java:sendReviewCase:RiskMqConfig.EXCHANGE|RiskMqConfig.RK_REVIEW_CASE"

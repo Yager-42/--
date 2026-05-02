@@ -7,6 +7,7 @@ import cn.nexus.domain.social.service.risk.RiskAsyncService;
 import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume;
 import cn.nexus.infrastructure.mq.reliable.exception.ReliableMqPermanentFailureException;
 import cn.nexus.trigger.mq.config.RiskMqConfig;
+import cn.nexus.trigger.mq.producer.RiskScanCompletedProducer;
 import cn.nexus.types.event.risk.ScanCompletedEvent;
 import cn.nexus.types.event.risk.LlmScanRequestedEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,7 +18,6 @@ import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -55,7 +55,7 @@ public class RiskLlmScanConsumer {
     private final IRiskLlmPort llmPort;
     private final RiskAsyncService riskAsyncService;
     private final ObjectMapper objectMapper;
-    private final RabbitTemplate rabbitTemplate;
+    private final RiskScanCompletedProducer riskScanCompletedProducer;
 
     @Value("${risk.llm.budgetPerMinute:200}")
     private long budgetPerMinute;
@@ -259,23 +259,21 @@ public class RiskLlmScanConsumer {
     }
 
     private void publishCompleted(LlmScanRequestedEvent req, RiskLlmResultVO result) {
-        if (req == null || req.getDecisionId() == null || rabbitTemplate == null) {
+        if (req == null || req.getDecisionId() == null) {
             return;
         }
-        try {
-            ScanCompletedEvent evt = new ScanCompletedEvent();
-            evt.setDecisionId(req.getDecisionId());
-            evt.setTaskId(req.getTaskId());
-            evt.setContentType(result == null ? null : result.getContentType());
-            evt.setResult(result == null ? null : result.getResult());
-            evt.setReasonCode(result == null ? null : result.getReasonCode());
-            evt.setConfidence(result == null ? null : result.getConfidence());
-            evt.setRiskTags(result == null ? null : result.getRiskTags());
-            evt.setPromptVersion(result == null ? null : result.getPromptVersion());
-            evt.setModel(result == null ? null : result.getModel());
-            rabbitTemplate.convertAndSend(RiskMqConfig.EXCHANGE, RiskMqConfig.RK_SCAN_COMPLETED, evt);
-        } catch (Exception ignored) {
-        }
+        ScanCompletedEvent evt = new ScanCompletedEvent();
+        evt.setEventId(req.getEventId() + ":completed");
+        evt.setDecisionId(req.getDecisionId());
+        evt.setTaskId(req.getTaskId());
+        evt.setContentType(result == null ? null : result.getContentType());
+        evt.setResult(result == null ? null : result.getResult());
+        evt.setReasonCode(result == null ? null : result.getReasonCode());
+        evt.setConfidence(result == null ? null : result.getConfidence());
+        evt.setRiskTags(result == null ? null : result.getRiskTags());
+        evt.setPromptVersion(result == null ? null : result.getPromptVersion());
+        evt.setModel(result == null ? null : result.getModel());
+        riskScanCompletedProducer.publish(evt);
     }
 
     private String firstUrl(List<String> urls) {

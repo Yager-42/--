@@ -11,12 +11,12 @@ import cn.nexus.domain.social.service.FeedAuthorCategoryStateMachine;
 import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume;
 import cn.nexus.infrastructure.mq.reliable.exception.ReliableMqPermanentFailureException;
 import cn.nexus.trigger.mq.config.FeedFanoutConfig;
+import cn.nexus.trigger.mq.producer.FeedFanoutTaskProducer;
 import cn.nexus.types.event.FeedFanoutTask;
 import cn.nexus.types.event.PostPublishedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class FeedFanoutDispatcherConsumer {
 
-    private final RabbitTemplate rabbitTemplate;
+    private final FeedFanoutTaskProducer feedFanoutTaskProducer;
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedOutboxRepository feedOutboxRepository;
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
@@ -113,7 +113,7 @@ public class FeedFanoutDispatcherConsumer {
             int offset = i * pageSize;
             String taskEventId = (event.getEventId() == null ? "feed-fanout" : event.getEventId()) + ":" + offset + ":" + pageSize;
             FeedFanoutTask task = new FeedFanoutTask(taskEventId, postId, authorId, publishTimeMs, offset, pageSize);
-            rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, FeedFanoutConfig.TASK_ROUTING_KEY, task);
+            feedFanoutTaskProducer.publish(task);
         }
         log.info("feed fanout dispatched, postId={}, authorId={}, totalFollowers={}, slices={}, pageSize={}",
                 postId, authorId, followerCount, slices, pageSize);

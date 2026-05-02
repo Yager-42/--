@@ -11,14 +11,16 @@ import cn.nexus.domain.social.service.FeedAuthorCategoryStateMachine;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService.StartResult;
 import cn.nexus.infrastructure.mq.reliable.exception.ReliableMqPermanentFailureException;
+import cn.nexus.trigger.mq.producer.FeedFanoutTaskProducer;
 import cn.nexus.types.event.PostPublishedEvent;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -59,6 +61,39 @@ class FeedFanoutDispatcherConsumerTest {
     }
 
     @Test
+    void onMessage_shouldPublishFanoutTasksThroughProducerWithDeterministicChildEventIds() throws Throwable {
+        Fixture fixture = new Fixture();
+        PostPublishedEvent event = validEvent("evt-fanout-4");
+        when(fixture.consumerRecordService.startManual(Mockito.eq("evt-fanout-4"),
+                Mockito.eq("FeedFanoutDispatcherConsumer"), Mockito.anyString()))
+                .thenReturn(StartResult.STARTED);
+        when(fixture.feedAuthorCategoryRepository.getCategory(11L))
+                .thenReturn(FeedAuthorCategoryEnumVO.NORMAL.getCode());
+        when(fixture.relationRepository.countFollowerIds(11L)).thenReturn(401);
+
+        fixture.invokeThroughAspect(event);
+
+        verify(fixture.feedFanoutTaskProducer).publish(argThat(task ->
+                task != null
+                        && "evt-fanout-4:0:200".equals(task.eventId())
+                        && Long.valueOf(22L).equals(task.postId())
+                        && Long.valueOf(11L).equals(task.authorId())
+                        && Long.valueOf(33L).equals(task.publishTimeMs())
+                        && Integer.valueOf(0).equals(task.offset())
+                        && Integer.valueOf(200).equals(task.limit())));
+        verify(fixture.feedFanoutTaskProducer).publish(argThat(task ->
+                task != null
+                        && "evt-fanout-4:200:200".equals(task.eventId())
+                        && Integer.valueOf(200).equals(task.offset())
+                        && Integer.valueOf(200).equals(task.limit())));
+        verify(fixture.feedFanoutTaskProducer).publish(argThat(task ->
+                task != null
+                        && "evt-fanout-4:400:200".equals(task.eventId())
+                        && Integer.valueOf(400).equals(task.offset())
+                        && Integer.valueOf(200).equals(task.limit())));
+    }
+
+    @Test
     void onMessage_businessFailureMarksFailAndRethrows() throws Throwable {
         Fixture fixture = new Fixture();
         PostPublishedEvent event = validEvent("evt-fanout-3");
@@ -96,7 +131,7 @@ class FeedFanoutDispatcherConsumerTest {
     }
 
     private static final class Fixture {
-        private final RabbitTemplate rabbitTemplate = Mockito.mock(RabbitTemplate.class);
+        private final FeedFanoutTaskProducer feedFanoutTaskProducer = Mockito.mock(FeedFanoutTaskProducer.class);
         private final IFeedTimelineRepository feedTimelineRepository = Mockito.mock(IFeedTimelineRepository.class);
         private final IFeedOutboxRepository feedOutboxRepository = Mockito.mock(IFeedOutboxRepository.class);
         private final IFeedBigVPoolRepository feedBigVPoolRepository = Mockito.mock(IFeedBigVPoolRepository.class);
@@ -106,7 +141,7 @@ class FeedFanoutDispatcherConsumerTest {
         private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine = Mockito.mock(FeedAuthorCategoryStateMachine.class);
         private final ReliableMqConsumerRecordService consumerRecordService = Mockito.mock(ReliableMqConsumerRecordService.class);
         private final FeedFanoutDispatcherConsumer consumer = new FeedFanoutDispatcherConsumer(
-                rabbitTemplate,
+                feedFanoutTaskProducer,
                 feedTimelineRepository,
                 feedOutboxRepository,
                 feedBigVPoolRepository,
@@ -114,6 +149,10 @@ class FeedFanoutDispatcherConsumerTest {
                 relationRepository,
                 feedAuthorCategoryRepository,
                 feedAuthorCategoryStateMachine);
+
+        private Fixture() {
+            ReflectionTestUtils.setField(consumer, "batchSize", 200);
+        }
 
         private void invokeThroughAspect(PostPublishedEvent event) throws Throwable {
             ProceedingJoinPoint joinPoint = ReliableConsumerAspectTestSupport.joinPoint(

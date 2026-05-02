@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 
 @Aspect
 @Component
-@Order(ReliableMqAopOrder.RELIABLE_MQ_ASPECT_ORDER)
+@Order(ReliableMqAopOrder.DLQ_ASPECT_ORDER)
 @RequiredArgsConstructor
 public class ReliableMqDlqAspect {
 

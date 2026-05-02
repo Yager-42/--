@@ -8,7 +8,6 @@ import static org.mockito.Mockito.when;
 
 import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
 import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqPublish;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
@@ -20,7 +19,7 @@ class ReliableMqPublishAspectTest {
     private final ReliableMqOutboxService outboxService = Mockito.mock(ReliableMqOutboxService.class);
     private final ReliableMqPublishAspect aspect = new ReliableMqPublishAspect(
             outboxService,
-            new ReliableMqExpressionEvaluator(new ObjectMapper()));
+            new ReliableMqExpressionEvaluator());
 
     @Test
     void around_shouldSaveOutboxAfterSuccessfulMethod() throws Throwable {

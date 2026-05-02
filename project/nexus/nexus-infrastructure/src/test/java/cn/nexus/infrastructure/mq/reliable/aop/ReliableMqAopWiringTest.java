@@ -16,7 +16,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.mockito.Mockito;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.asm.ClassReader;
@@ -62,7 +64,13 @@ class ReliableMqAopWiringTest {
     private AtomicBoolean transactionActiveAtSave;
 
     @Autowired
-    private List<Boolean> consumeTransactionStates;
+    private List<String> consumeEvents;
+
+    @BeforeEach
+    void setUp() {
+        consumeEvents.clear();
+        transactionActiveAtSave.set(false);
+    }
 
     @Test
     void publicAnnotatedSpringBeanMethod_shouldBeProxiedAndSaveOutbox() {
@@ -91,7 +99,7 @@ class ReliableMqAopWiringTest {
     }
 
     @Test
-    void transactionalConsumeMethod_shouldKeepIdempotencyAndBusinessInsideActiveTransaction() {
+    void transactionalConsumeMethod_shouldRunBusinessInTransactionAndMarkDoneAfterReturn() {
         ConsumeEvent event = new ConsumeEvent("evt-3", "hello");
 
         transactionalConsumerBean.consumeInTransaction(event);
@@ -99,7 +107,27 @@ class ReliableMqAopWiringTest {
         verify(consumerRecordService).startManual(Mockito.eq("evt-3"), Mockito.eq("comment-consumer"),
                 Mockito.anyString());
         verify(consumerRecordService).markDone("evt-3", "comment-consumer");
-        org.junit.jupiter.api.Assertions.assertEquals(List.of(true, true, true), consumeTransactionStates);
+        InOrder inOrder = Mockito.inOrder(consumerRecordService);
+        inOrder.verify(consumerRecordService).startManual(Mockito.eq("evt-3"), Mockito.eq("comment-consumer"),
+                Mockito.anyString());
+        inOrder.verify(consumerRecordService).markDone("evt-3", "comment-consumer");
+        org.junit.jupiter.api.Assertions.assertEquals(List.of("start:false", "body:true", "commit:true", "done:false"),
+                consumeEvents);
+    }
+
+    @Test
+    void transactionalConsumeFailure_shouldRollbackThenMarkFailOutsideActiveTransaction() {
+        ConsumeEvent event = new ConsumeEvent("evt-4", "boom");
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> transactionalConsumerBean.consumeAndFailInTransaction(event));
+
+        org.junit.jupiter.api.Assertions.assertEquals("consumer failed", thrown.getMessage());
+        verify(consumerRecordService).startManual(Mockito.eq("evt-4"), Mockito.eq("comment-consumer"),
+                Mockito.anyString());
+        verify(consumerRecordService).markFail("evt-4", "comment-consumer", "consumer failed");
+        org.junit.jupiter.api.Assertions.assertEquals(List.of("start:false", "body:true", "rollback:true", "fail:false"),
+                consumeEvents);
     }
 
     @Test
@@ -111,8 +139,12 @@ class ReliableMqAopWiringTest {
         org.junit.jupiter.api.Assertions.assertNotNull(annotation);
         org.junit.jupiter.api.Assertions.assertEquals(ReliableMqAopOrder.TRANSACTION_ADVISOR_ORDER,
                 annotation.order());
-        org.junit.jupiter.api.Assertions.assertTrue(
-                ReliableMqAopOrder.TRANSACTION_ADVISOR_ORDER < ReliableMqAopOrder.RELIABLE_MQ_ASPECT_ORDER);
+        org.junit.jupiter.api.Assertions.assertTrue(ReliableMqAopOrder.CONSUME_ASPECT_ORDER
+                < ReliableMqAopOrder.TRANSACTION_ADVISOR_ORDER);
+        org.junit.jupiter.api.Assertions.assertTrue(ReliableMqAopOrder.TRANSACTION_ADVISOR_ORDER
+                < ReliableMqAopOrder.PUBLISH_ASPECT_ORDER);
+        org.junit.jupiter.api.Assertions.assertTrue(ReliableMqAopOrder.DLQ_ASPECT_ORDER
+                < ReliableMqAopOrder.TRANSACTION_ADVISOR_ORDER);
     }
 
     private static void assertNoSelfInvocationOfReliablePublish(Class<?> type) throws Exception {
@@ -153,8 +185,8 @@ class ReliableMqAopWiringTest {
         }
 
         @Bean
-        ReliableMqExpressionEvaluator reliableMqExpressionEvaluator(ObjectMapper objectMapper) {
-            return new ReliableMqExpressionEvaluator(objectMapper);
+        ReliableMqExpressionEvaluator reliableMqExpressionEvaluator() {
+            return new ReliableMqExpressionEvaluator();
         }
 
         @Bean
@@ -181,18 +213,23 @@ class ReliableMqAopWiringTest {
         }
 
         @Bean
-        ReliableMqConsumerRecordService reliableMqConsumerRecordService(List<Boolean> consumeTransactionStates) {
+        ReliableMqConsumerRecordService reliableMqConsumerRecordService(List<String> consumeEvents) {
             ReliableMqConsumerRecordService consumerRecordService = Mockito.mock(ReliableMqConsumerRecordService.class);
-            Mockito.when(consumerRecordService.startManual(Mockito.eq("evt-3"), Mockito.eq("comment-consumer"),
+            Mockito.when(consumerRecordService.startManual(Mockito.matches("evt-[34]"), Mockito.eq("comment-consumer"),
                             Mockito.anyString()))
                     .thenAnswer(invocation -> {
-                        consumeTransactionStates.add(TransactionSynchronizationManager.isActualTransactionActive());
+                        consumeEvents.add("start:" + TransactionSynchronizationManager.isActualTransactionActive());
                         return StartResult.STARTED;
                     });
             Mockito.doAnswer(invocation -> {
-                consumeTransactionStates.add(TransactionSynchronizationManager.isActualTransactionActive());
+                consumeEvents.add("done:" + TransactionSynchronizationManager.isActualTransactionActive());
                 return null;
-            }).when(consumerRecordService).markDone(Mockito.eq("evt-3"), Mockito.eq("comment-consumer"));
+            }).when(consumerRecordService).markDone(Mockito.anyString(), Mockito.eq("comment-consumer"));
+            Mockito.doAnswer(invocation -> {
+                consumeEvents.add("fail:" + TransactionSynchronizationManager.isActualTransactionActive());
+                return null;
+            }).when(consumerRecordService).markFail(Mockito.anyString(), Mockito.eq("comment-consumer"),
+                    Mockito.anyString());
             return consumerRecordService;
         }
 
@@ -202,12 +239,12 @@ class ReliableMqAopWiringTest {
         }
 
         @Bean
-        List<Boolean> consumeTransactionStates() {
+        List<String> consumeEvents() {
             return new ArrayList<>();
         }
 
         @Bean
-        org.springframework.transaction.PlatformTransactionManager transactionManager() {
+        org.springframework.transaction.PlatformTransactionManager transactionManager(List<String> consumeEvents) {
             return new AbstractPlatformTransactionManager() {
                 @Override
                 protected Object doGetTransaction() throws TransactionException {
@@ -220,10 +257,12 @@ class ReliableMqAopWiringTest {
 
                 @Override
                 protected void doCommit(DefaultTransactionStatus status) throws TransactionException {
+                    consumeEvents.add("commit:" + TransactionSynchronizationManager.isActualTransactionActive());
                 }
 
                 @Override
                 protected void doRollback(DefaultTransactionStatus status) throws TransactionException {
+                    consumeEvents.add("rollback:" + TransactionSynchronizationManager.isActualTransactionActive());
                 }
             };
         }
@@ -239,8 +278,8 @@ class ReliableMqAopWiringTest {
         }
 
         @Bean
-        TransactionalConsumerBean transactionalConsumerBean(List<Boolean> consumeTransactionStates) {
-            return new TransactionalConsumerBean(consumeTransactionStates);
+        TransactionalConsumerBean transactionalConsumerBean(List<String> consumeEvents) {
+            return new TransactionalConsumerBean(consumeEvents);
         }
     }
 
@@ -264,16 +303,23 @@ class ReliableMqAopWiringTest {
     }
 
     static class TransactionalConsumerBean {
-        private final List<Boolean> consumeTransactionStates;
+        private final List<String> consumeEvents;
 
-        TransactionalConsumerBean(List<Boolean> consumeTransactionStates) {
-            this.consumeTransactionStates = consumeTransactionStates;
+        TransactionalConsumerBean(List<String> consumeEvents) {
+            this.consumeEvents = consumeEvents;
         }
 
         @Transactional
         @ReliableMqConsume(consumerName = "comment-consumer", eventId = "#event.eventId", payload = "#event")
         public void consumeInTransaction(ConsumeEvent event) {
-            consumeTransactionStates.add(TransactionSynchronizationManager.isActualTransactionActive());
+            consumeEvents.add("body:" + TransactionSynchronizationManager.isActualTransactionActive());
+        }
+
+        @Transactional
+        @ReliableMqConsume(consumerName = "comment-consumer", eventId = "#event.eventId", payload = "#event")
+        public void consumeAndFailInTransaction(ConsumeEvent event) {
+            consumeEvents.add("body:" + TransactionSynchronizationManager.isActualTransactionActive());
+            throw new IllegalStateException("consumer failed");
         }
     }
 

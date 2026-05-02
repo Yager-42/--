@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 @Aspect
 @Component
-@Order(ReliableMqAopOrder.RELIABLE_MQ_ASPECT_ORDER)
+@Order(ReliableMqAopOrder.PUBLISH_ASPECT_ORDER)
 @RequiredArgsConstructor
 public class ReliableMqPublishAspect {
 

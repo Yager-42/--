@@ -1,8 +1,6 @@
 package cn.nexus.infrastructure.mq.reliable.aop;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
-import java.util.Objects;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.context.expression.MethodBasedEvaluationContext;
@@ -18,8 +16,7 @@ public class ReliableMqExpressionEvaluator {
     private final ExpressionParser parser = new SpelExpressionParser();
     private final ParameterNameDiscoverer parameterNameDiscoverer = new DefaultParameterNameDiscoverer();
 
-    public ReliableMqExpressionEvaluator(ObjectMapper objectMapper) {
-        Objects.requireNonNull(objectMapper, "objectMapper");
+    public ReliableMqExpressionEvaluator() {
     }
 
     public String requiredString(ProceedingJoinPoint joinPoint, String expression, String name) {

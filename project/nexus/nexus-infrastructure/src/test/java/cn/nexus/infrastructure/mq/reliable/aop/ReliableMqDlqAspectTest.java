@@ -7,7 +7,6 @@ import static org.mockito.Mockito.when;
 
 import cn.nexus.infrastructure.mq.reliable.ReliableMqReplayService;
 import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqDlq;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -23,7 +22,7 @@ class ReliableMqDlqAspectTest {
     private final ReliableMqReplayService replayService = Mockito.mock(ReliableMqReplayService.class);
     private final ReliableMqDlqAspect aspect = new ReliableMqDlqAspect(
             replayService,
-            new ReliableMqExpressionEvaluator(new ObjectMapper()));
+            new ReliableMqExpressionEvaluator());
 
     @Test
     void around_shouldRecordFailureBeforeInvokingExplicitAlertingBody() throws Throwable {

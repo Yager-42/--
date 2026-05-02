@@ -22,7 +22,7 @@ class ReliableMqConsumeAspectTest {
     private final ReliableMqConsumerRecordService consumerRecordService = Mockito.mock(ReliableMqConsumerRecordService.class);
     private final ReliableMqConsumeAspect aspect = new ReliableMqConsumeAspect(
             consumerRecordService,
-            new ReliableMqExpressionEvaluator(new ObjectMapper()),
+            new ReliableMqExpressionEvaluator(),
             new ObjectMapper());
 
     @Test

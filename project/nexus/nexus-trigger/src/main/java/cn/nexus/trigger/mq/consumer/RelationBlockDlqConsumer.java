@@ -1,29 +1,21 @@
 package cn.nexus.trigger.mq.consumer;
 
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqDlq;
 import cn.nexus.trigger.mq.config.RelationMqConfig;
-import cn.nexus.trigger.mq.support.ReliableMqDlqRecorder;
-import lombok.RequiredArgsConstructor;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
 @Component
-@RequiredArgsConstructor
 public class RelationBlockDlqConsumer {
 
-    private final ReliableMqDlqRecorder reliableMqDlqRecorder;
-
     @RabbitListener(queues = RelationMqConfig.DLQ_BLOCK)
+    @ReliableMqDlq(consumerName = "RelationCounterProjectConsumer",
+            originalQueue = RelationMqConfig.Q_BLOCK,
+            originalExchange = RelationMqConfig.EXCHANGE,
+            originalRoutingKey = RelationMqConfig.RK_BLOCK,
+            fallbackPayloadType = "cn.nexus.types.event.relation.RelationCounterProjectEvent",
+            lastError = "'relation block projection dead-lettered'")
     public void onMessage(Message message) {
-        reliableMqDlqRecorder.record(
-                message,
-                "RelationCounterProjectConsumer",
-                RelationMqConfig.Q_BLOCK,
-                RelationMqConfig.EXCHANGE,
-                RelationMqConfig.RK_BLOCK,
-                "cn.nexus.types.event.relation.RelationCounterProjectEvent",
-                null,
-                "relation block projection dead-lettered"
-        );
     }
 }

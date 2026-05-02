@@ -2,9 +2,8 @@ package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.social.model.entity.ContentScheduleEntity;
 import cn.nexus.domain.social.service.IContentService;
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqDlq;
 import cn.nexus.trigger.mq.config.ContentScheduleDelayConfig;
-import cn.nexus.trigger.mq.event.ContentScheduleTriggerEvent;
-import cn.nexus.trigger.mq.support.ReliableMqDlqRecorder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -25,7 +24,6 @@ import org.springframework.stereotype.Component;
 public class ContentScheduleDLQConsumer {
 
     private final IContentService contentService;
-    private final ReliableMqDlqRecorder reliableMqDlqRecorder;
     private final ObjectMapper objectMapper;
 
     /**
@@ -34,19 +32,13 @@ public class ContentScheduleDLQConsumer {
      * @param message 死信消息 {@link Message}
      */
     @RabbitListener(queues = ContentScheduleDelayConfig.DLX_QUEUE)
+    @ReliableMqDlq(consumerName = "ContentScheduleConsumer",
+            originalQueue = ContentScheduleDelayConfig.QUEUE,
+            originalExchange = ContentScheduleDelayConfig.EXCHANGE,
+            originalRoutingKey = ContentScheduleDelayConfig.ROUTING_KEY,
+            fallbackPayloadType = "cn.nexus.trigger.mq.event.ContentScheduleTriggerEvent",
+            lastError = "'content schedule dead-lettered'")
     public void onDLQ(Message message) {
-        // 1. 统一记录 DLQ：保留 message 元信息与解析失败原因，便于后续人工回放。
-        reliableMqDlqRecorder.record(
-                message,
-                "ContentScheduleConsumer",
-                ContentScheduleDelayConfig.QUEUE,
-                ContentScheduleDelayConfig.EXCHANGE,
-                ContentScheduleDelayConfig.ROUTING_KEY,
-                ContentScheduleTriggerEvent.class.getName(),
-                null,
-                "content schedule dead-lettered"
-        );
-        // 2. 尝试从 payload 中解析 taskId，打印更友好的告警上下文。
         Long taskId = null;
         try {
             JsonNode root = objectMapper.readTree(message.getBody());
@@ -57,7 +49,6 @@ public class ContentScheduleDLQConsumer {
         } catch (Exception ignored) {
         }
         log.error("content schedule task dead-lettered, taskId={}", taskId);
-        // 3. 尝试补充任务审计信息（失败也不影响主流程）。
         try {
             ContentScheduleEntity task = contentService.getScheduleAudit(taskId, null);
             if (task != null) {

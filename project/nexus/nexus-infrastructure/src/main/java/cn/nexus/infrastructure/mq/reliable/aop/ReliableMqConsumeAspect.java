@@ -24,8 +24,8 @@ public class ReliableMqConsumeAspect {
 
     @Around("@annotation(annotation)")
     public Object around(ProceedingJoinPoint joinPoint, ReliableMqConsume annotation) throws Throwable {
-        String eventId = expressionEvaluator.requiredString(joinPoint, annotation.eventId(), "eventId");
-        Object payload = expressionEvaluator.requiredObject(joinPoint, annotation.payload(), "payload");
+        String eventId = requiredEventId(joinPoint, annotation);
+        Object payload = requiredPayload(joinPoint, annotation);
         String payloadJson = toJson(payload);
         StartResult startResult = consumerRecordService.startManual(eventId, annotation.consumerName(), payloadJson);
         if (startResult == StartResult.DUPLICATE_DONE || startResult == StartResult.IN_PROGRESS) {
@@ -42,6 +42,24 @@ public class ReliableMqConsumeAspect {
         } catch (Throwable throwable) {
             consumerRecordService.markFail(eventId, annotation.consumerName(), throwable.getMessage());
             throw throwable;
+        }
+    }
+
+    private String requiredEventId(ProceedingJoinPoint joinPoint, ReliableMqConsume annotation) {
+        try {
+            return expressionEvaluator.requiredString(joinPoint, annotation.eventId(), "eventId");
+        } catch (IllegalArgumentException e) {
+            throw new ReliableMqPermanentFailureException(
+                    "invalid reliable mq consume eventId, consumer=" + annotation.consumerName(), e);
+        }
+    }
+
+    private Object requiredPayload(ProceedingJoinPoint joinPoint, ReliableMqConsume annotation) {
+        try {
+            return expressionEvaluator.requiredObject(joinPoint, annotation.payload(), "payload");
+        } catch (IllegalArgumentException e) {
+            throw new ReliableMqPermanentFailureException(
+                    "invalid reliable mq consume payload, consumer=" + annotation.consumerName(), e);
         }
     }
 

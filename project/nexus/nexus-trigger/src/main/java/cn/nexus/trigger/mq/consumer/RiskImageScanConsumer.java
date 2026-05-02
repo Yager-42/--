@@ -4,7 +4,8 @@ import cn.nexus.domain.social.adapter.port.IMediaStoragePort;
 import cn.nexus.domain.social.adapter.port.IRiskLlmPort;
 import cn.nexus.domain.social.model.valobj.RiskLlmResultVO;
 import cn.nexus.domain.social.service.risk.RiskAsyncService;
-import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume;
+import cn.nexus.infrastructure.mq.reliable.exception.ReliableMqPermanentFailureException;
 import cn.nexus.trigger.mq.config.RiskMqConfig;
 import cn.nexus.types.event.risk.ImageScanRequestedEvent;
 import cn.nexus.types.event.risk.ScanCompletedEvent;
@@ -15,7 +16,6 @@ import org.redisson.api.RAtomicLong;
 import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
-import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,7 +43,6 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class RiskImageScanConsumer {
 
-    private static final String CONSUMER_NAME = "RiskImageScanConsumer";
     private static final String CACHE_KEY_PREFIX = "risk:llm:cache:";
     private static final String INFLIGHT_KEY_PREFIX = "risk:llm:inflight:";
     private static final String BUDGET_KEY_PREFIX = "risk:llm:budget:";
@@ -53,7 +52,6 @@ public class RiskImageScanConsumer {
     private final IMediaStoragePort mediaStoragePort;
     private final IRiskLlmPort llmPort;
     private final RiskAsyncService riskAsyncService;
-    private final ReliableMqConsumerRecordService consumerRecordService;
     private final ObjectMapper objectMapper;
     private final RabbitTemplate rabbitTemplate;
 
@@ -72,12 +70,10 @@ public class RiskImageScanConsumer {
      * @param event 事件对象。类型：{@link ImageScanRequestedEvent}
      */
     @RabbitListener(queues = RiskMqConfig.Q_IMAGE_SCAN, containerFactory = "reliableMqListenerContainerFactory")
+    @ReliableMqConsume(consumerName = "RiskImageScanConsumer", eventId = "#event.eventId", payload = "#event")
     public void onMessage(ImageScanRequestedEvent event) {
         if (event == null || event.getDecisionId() == null || event.getEventId() == null || event.getEventId().isBlank()) {
-            throw new AmqpRejectAndDontRequeueException("risk image scan payload invalid");
-        }
-        if (!consumerRecordService.start(event.getEventId(), CONSUMER_NAME, toJson(event))) {
-            return;
+            throw new ReliableMqPermanentFailureException("risk image scan payload invalid");
         }
         String url = event.getImageUrl();
         String hash = url == null || url.isBlank() ? "" : sha256Base64Url(url.trim());
@@ -87,7 +83,6 @@ public class RiskImageScanConsumer {
             if (cached != null) {
                 riskAsyncService.applyLlmResult(event.getDecisionId(), cached);
                 publishCompleted(event, cached);
-                consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
                 return;
             }
 
@@ -95,7 +90,6 @@ public class RiskImageScanConsumer {
                 RiskLlmResultVO fb = fallback("IMAGE", "LLM_BUDGET_EXCEEDED");
                 riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
                 publishCompleted(event, fb);
-                consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
                 return;
             }
 
@@ -103,7 +97,6 @@ public class RiskImageScanConsumer {
                 RiskLlmResultVO fb = fallback("IMAGE", "IMAGE_URL_EMPTY");
                 riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
                 publishCompleted(event, fb);
-                consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
                 return;
             }
 
@@ -112,14 +105,12 @@ public class RiskImageScanConsumer {
             try {
                 locked = lock.tryLock(200, TimeUnit.SECONDS.toMillis(inflightLockSeconds), TimeUnit.MILLISECONDS);
                 if (!locked) {
-                    consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, "INFLIGHT_LOCK_BUSY");
-                    throw new AmqpRejectAndDontRequeueException("risk image scan inflight lock busy");
+                    throw new IllegalStateException("risk image scan inflight lock busy");
                 }
                 RiskLlmResultVO again = getCached(hash);
                 if (again != null) {
                     riskAsyncService.applyLlmResult(event.getDecisionId(), again);
                     publishCompleted(event, again);
-                    consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
                     return;
                 }
 
@@ -135,7 +126,6 @@ public class RiskImageScanConsumer {
                     riskAsyncService.applyLlmResult(event.getDecisionId(), fb);
                     publishCompleted(event, fb);
                 }
-                consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
             } finally {
                 if (locked) {
                     try {
@@ -144,12 +134,12 @@ public class RiskImageScanConsumer {
                     }
                 }
             }
-        } catch (AmqpRejectAndDontRequeueException e) {
-            throw e;
-        } catch (Exception e) {
-            consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("risk image scan interrupted", e);
+        } catch (RuntimeException e) {
             log.warn("risk image scan failed, decisionId={}, taskId={}", event.getDecisionId(), event.getTaskId(), e);
-            throw new AmqpRejectAndDontRequeueException("risk image scan failed", e);
+            throw e;
         }
     }
 
@@ -235,14 +225,6 @@ public class RiskImageScanConsumer {
                 .evidence(null)
                 .suggestedAction("QUARANTINE")
                 .build();
-    }
-
-    private String toJson(ImageScanRequestedEvent event) {
-        try {
-            return objectMapper.writeValueAsString(event);
-        } catch (Exception e) {
-            return "{}";
-        }
     }
 
     private String sha256Base64Url(String input) {

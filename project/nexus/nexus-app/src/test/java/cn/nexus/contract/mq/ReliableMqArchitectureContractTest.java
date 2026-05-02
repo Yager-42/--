@@ -111,17 +111,7 @@ class ReliableMqArchitectureContractTest {
 
     private static final List<String> EXPECTED_UNANNOTATED_LISTENER_FINDINGS = List.of(
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/CommentCreatedConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/ContentScheduleConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutTaskConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackAConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendFeedbackConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertConsumer.java:onMessage",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/PostSummaryGenerateConsumer.java:onPostSummaryGenerate",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskImageScanConsumer.java:onMessage",
-            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/RiskLlmScanConsumer.java:onMessage",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcConsumer.java:onPostChanged",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexCdcRawPublisher.java:onRaw",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/SearchIndexConsumer.java:onUserNicknameChanged"

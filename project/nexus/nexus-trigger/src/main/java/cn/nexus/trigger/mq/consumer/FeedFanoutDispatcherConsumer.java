@@ -8,14 +8,13 @@ import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
 import cn.nexus.domain.social.service.FeedAuthorCategoryStateMachine;
-import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
+import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume;
+import cn.nexus.infrastructure.mq.reliable.exception.ReliableMqPermanentFailureException;
 import cn.nexus.trigger.mq.config.FeedFanoutConfig;
 import cn.nexus.types.event.FeedFanoutTask;
 import cn.nexus.types.event.PostPublishedEvent;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,8 +32,6 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class FeedFanoutDispatcherConsumer {
 
-    private static final String CONSUMER_NAME = "FeedFanoutDispatcherConsumer";
-
     private final RabbitTemplate rabbitTemplate;
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedOutboxRepository feedOutboxRepository;
@@ -43,8 +40,6 @@ public class FeedFanoutDispatcherConsumer {
     private final IRelationRepository relationRepository;
     private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
     private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine;
-    private final ReliableMqConsumerRecordService consumerRecordService;
-    private final ObjectMapper objectMapper;
 
     /**
      * fanout 切片大小，默认 200（复用现有配置键）。
@@ -66,24 +61,13 @@ public class FeedFanoutDispatcherConsumer {
      * @param event 发布事件
      */
     @RabbitListener(queues = FeedFanoutConfig.QUEUE, containerFactory = "reliableMqListenerContainerFactory")
+    @ReliableMqConsume(consumerName = "FeedFanoutDispatcherConsumer", eventId = "#event.eventId", payload = "#event")
     public void onMessage(PostPublishedEvent event) {
         if (event == null || event.getPostId() == null || event.getAuthorId() == null
                 || event.getPublishTimeMs() == null || event.getEventId() == null || event.getEventId().isBlank()) {
-            throw new AmqpRejectAndDontRequeueException("feed fanout dispatch payload invalid");
+            throw new ReliableMqPermanentFailureException("feed fanout dispatch payload invalid");
         }
-        if (!consumerRecordService.start(event.getEventId(), CONSUMER_NAME, toJson(event))) {
-            return;
-        }
-        try {
-            dispatch(event);
-            consumerRecordService.markDone(event.getEventId(), CONSUMER_NAME);
-        } catch (Exception e) {
-            consumerRecordService.markFail(event.getEventId(), CONSUMER_NAME, e.getMessage());
-            Long postId = event.getPostId();
-            Long authorId = event.getAuthorId();
-            log.error("MQ feed fanout dispatch failed, postId={}, authorId={}", postId, authorId, e);
-            throw new AmqpRejectAndDontRequeueException("feed fanout dispatch failed", e);
-        }
+        dispatch(event);
     }
 
     private void dispatch(PostPublishedEvent event) {
@@ -133,21 +117,6 @@ public class FeedFanoutDispatcherConsumer {
         }
         log.info("feed fanout dispatched, postId={}, authorId={}, totalFollowers={}, slices={}, pageSize={}",
                 postId, authorId, followerCount, slices, pageSize);
-    }
-
-    private boolean isBigV(int followerCount) {
-        if (bigvFollowerThreshold <= 0) {
-            return false;
-        }
-        return followerCount >= bigvFollowerThreshold;
-    }
-
-    private String toJson(PostPublishedEvent event) {
-        try {
-            return objectMapper.writeValueAsString(event);
-        } catch (Exception e) {
-            return "{}";
-        }
     }
 
 }

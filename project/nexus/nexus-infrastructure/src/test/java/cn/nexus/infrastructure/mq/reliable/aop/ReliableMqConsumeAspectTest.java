@@ -85,6 +85,19 @@ class ReliableMqConsumeAspectTest {
     }
 
     @Test
+    void around_shouldRethrowPermanentFailureForBlankEventIdExpressionResult() throws Throwable {
+        ConsumeEvent event = new ConsumeEvent(" ", "hello");
+        Method method = ConsumeFixture.class.getMethod("consume", ConsumeEvent.class);
+        ProceedingJoinPoint joinPoint = joinPoint(method, new ConsumeFixture(), new Object[] {event}, null);
+
+        assertThrows(ReliableMqPermanentFailureException.class,
+                () -> aspect.around(joinPoint, method.getAnnotation(ReliableMqConsume.class)));
+
+        verify(joinPoint, never()).proceed();
+        verify(consumerRecordService, never()).startManual(Mockito.any(), Mockito.any(), Mockito.any());
+    }
+
+    @Test
     void around_shouldRethrowBusinessPermanentFailureWithoutSwallowingIt() throws Throwable {
         ConsumeEvent event = new ConsumeEvent("evt-1", "hello");
         Method method = ConsumeFixture.class.getMethod("consume", ConsumeEvent.class);

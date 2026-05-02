@@ -5,10 +5,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 京东 HotKey 配置。
+ * 本地热点 key 检测配置。
  *
  * @author codex
- * @since 2026-01-20
+ * @since 2026-05-02
  */
 @Data
 @Component
@@ -16,29 +16,32 @@ import org.springframework.stereotype.Component;
 public class HotKeyProperties {
 
     /**
-     * 是否启用 HotKey 客户端。
+     * 是否启用本地热点 key 检测。
      */
     private boolean enabled = true;
 
     /**
-     * 应用名：需要与 hotkey dashboard 的 appName / workerPath 保持一致。
+     * 滑动窗口总时长（秒）。
      */
-    private String appName;
+    private int windowSeconds = 60;
 
     /**
-     * etcd 连接串，例如 http://127.0.0.1:2379
+     * 单个计数分片时长（秒）。
      */
-    private String etcdServer;
+    private int segmentSeconds = 10;
 
     /**
-     * client pushPeriod（毫秒），默认 500ms。
+     * 低热度阈值。
      */
-    private Long pushPeriodMs = 500L;
+    private int levelLow = 50;
 
     /**
-     * HotKey 客户端模式：direct 或 isolated。
-     *
-     * <p>WSL 本地开发建议使用 isolated，避免旧版 grpc/netty 与主项目依赖冲突。</p>
+     * 中热度阈值。
      */
-    private String mode = "direct";
+    private int levelMedium = 200;
+
+    /**
+     * 高热度阈值。
+     */
+    private int levelHigh = 500;
 }

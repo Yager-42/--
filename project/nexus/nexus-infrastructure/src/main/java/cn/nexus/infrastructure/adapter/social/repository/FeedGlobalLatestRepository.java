@@ -39,6 +39,14 @@ public class FeedGlobalLatestRepository implements IFeedGlobalLatestRepository {
     }
 
     @Override
+    public void removeFromLatest(Long postId) {
+        if (postId == null) {
+            return;
+        }
+        stringRedisTemplate.opsForZSet().remove(KEY_GLOBAL_LATEST, postId.toString());
+    }
+
+    @Override
     public List<FeedInboxEntryVO> pageLatest(Long cursorTimeMs, Long cursorPostId, int limit) {
         int normalizedLimit = Math.max(1, limit);
 
@@ -104,4 +112,3 @@ public class FeedGlobalLatestRepository implements IFeedGlobalLatestRepository {
         stringRedisTemplate.opsForZSet().removeRange(KEY_GLOBAL_LATEST, 0, removeCount - 1);
     }
 }
-

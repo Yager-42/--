@@ -4,8 +4,11 @@ import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.infrastructure.config.FeedOutboxProperties;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Repository;
 
 import java.time.Duration;
@@ -27,9 +30,54 @@ public class FeedOutboxRepository implements IFeedOutboxRepository {
 
     private static final String KEY_OUTBOX_PREFIX = "feed:outbox:";
     private static final String KEY_OUTBOX_TMP_PREFIX = "feed:outbox:tmp:";
+    private static final String KEY_OUTBOX_REBUILD_LOCK_PREFIX = "feed:outbox:rebuild:lock:";
+    private static final RedisScript<Long> REPLACE_OUTBOX_SCRIPT = new DefaultRedisScript<>("""
+            local realKey = ARGV[1]
+            local tmpKey = ARGV[2]
+            local ttlSeconds = tonumber(ARGV[3])
+            local maxSize = tonumber(ARGV[4])
+            local windowSize = tonumber(ARGV[5])
+            local entryCount = tonumber(ARGV[6])
+
+            redis.call('DEL', tmpKey)
+            if entryCount == 0 then
+                redis.call('DEL', realKey)
+                return 1
+            end
+
+            local argIndex = 7
+            for i = 1, entryCount do
+                redis.call('ZADD', tmpKey, ARGV[argIndex + 1], ARGV[argIndex])
+                argIndex = argIndex + 2
+            end
+
+            if windowSize > 0 then
+                local oldMembers = redis.call('ZREVRANGE', realKey, 0, windowSize - 1, 'WITHSCORES')
+                for i = 1, #oldMembers, 2 do
+                    local member = oldMembers[i]
+                    if redis.call('ZSCORE', tmpKey, member) == false then
+                        redis.call('ZADD', tmpKey, oldMembers[i + 1], member)
+                    end
+                end
+            end
+
+            local size = redis.call('ZCARD', tmpKey)
+            if size > maxSize then
+                redis.call('ZREMRANGEBYRANK', tmpKey, 0, size - maxSize - 1)
+            end
+            redis.call('EXPIRE', tmpKey, ttlSeconds)
+            redis.call('RENAME', tmpKey, realKey)
+            return 1
+            """, Long.class);
 
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedOutboxProperties feedOutboxProperties;
+
+    /**
+     * outbox 重建互斥锁过期秒数（默认 30）。 {@code int}
+     */
+    @Value("${feed.outbox.rebuildLockSeconds:30}")
+    private int rebuildLockSeconds;
 
     @Override
     public void addToOutbox(Long authorId, Long postId, Long publishTimeMs) {
@@ -55,25 +103,32 @@ public class FeedOutboxRepository implements IFeedOutboxRepository {
         if (authorId == null) {
             return;
         }
-        String outboxKey = outboxKey(authorId);
-        if (entries == null || entries.isEmpty()) {
-            stringRedisTemplate.delete(outboxKey);
+        if (!tryAcquireRebuildLock(authorId)) {
             return;
         }
-
-        String tmpKey = outboxTmpKey(authorId, System.currentTimeMillis());
-        for (FeedInboxEntryVO entry : entries) {
-            if (entry == null || entry.getPostId() == null || entry.getPublishTimeMs() == null) {
-                continue;
+        String outboxKey = outboxKey(authorId);
+        String tmpKey = outboxTmpKey(authorId, System.nanoTime());
+        List<Object> args = new ArrayList<>();
+        args.add(outboxKey);
+        args.add(tmpKey);
+        args.add(String.valueOf(ttl().getSeconds()));
+        args.add(String.valueOf(maxSize()));
+        args.add(String.valueOf(rebuildWindowSize()));
+        int countIndex = args.size();
+        args.add("0");
+        int count = 0;
+        if (entries != null && !entries.isEmpty()) {
+            for (FeedInboxEntryVO entry : entries) {
+                if (entry == null || entry.getPostId() == null || entry.getPublishTimeMs() == null) {
+                    continue;
+                }
+                args.add(entry.getPostId().toString());
+                args.add(entry.getPublishTimeMs().toString());
+                count++;
             }
-            stringRedisTemplate.opsForZSet()
-                    .add(tmpKey, entry.getPostId().toString(), entry.getPublishTimeMs().doubleValue());
         }
-
-        stringRedisTemplate.expire(tmpKey, ttl());
-        stringRedisTemplate.rename(tmpKey, outboxKey);
-        stringRedisTemplate.expire(outboxKey, ttl());
-        trimToMaxSize(outboxKey);
+        args.set(countIndex, String.valueOf(count));
+        stringRedisTemplate.execute(REPLACE_OUTBOX_SCRIPT, List.of(outboxKey), args.toArray());
     }
 
     @Override
@@ -142,13 +197,32 @@ public class FeedOutboxRepository implements IFeedOutboxRepository {
         return KEY_OUTBOX_TMP_PREFIX + authorId + ":" + epochMs;
     }
 
+    private String rebuildLockKey(Long authorId) {
+        return KEY_OUTBOX_REBUILD_LOCK_PREFIX + authorId;
+    }
+
+    private boolean tryAcquireRebuildLock(Long authorId) {
+        int seconds = Math.max(1, rebuildLockSeconds);
+        Boolean locked = stringRedisTemplate.opsForValue()
+                .setIfAbsent(rebuildLockKey(authorId), "1", Duration.ofSeconds(seconds));
+        return Boolean.TRUE.equals(locked);
+    }
+
     private Duration ttl() {
         int ttlDays = Math.max(1, feedOutboxProperties.getTtlDays());
         return Duration.ofDays(ttlDays);
     }
 
+    private int maxSize() {
+        return Math.max(1, feedOutboxProperties.getMaxSize());
+    }
+
+    private int rebuildWindowSize() {
+        return Math.min(Math.max(0, feedOutboxProperties.getRebuildMergeWindowSize()), maxSize());
+    }
+
     private void trimToMaxSize(String key) {
-        int maxSize = Math.max(1, feedOutboxProperties.getMaxSize());
+        int maxSize = maxSize();
         Long size = stringRedisTemplate.opsForZSet().zCard(key);
         if (size == null || size <= maxSize) {
             return;
@@ -157,4 +231,3 @@ public class FeedOutboxRepository implements IFeedOutboxRepository {
         stringRedisTemplate.opsForZSet().removeRange(key, 0, removeCount - 1);
     }
 }
-

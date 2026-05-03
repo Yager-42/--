@@ -24,5 +24,9 @@ public class FeedOutboxProperties {
      * Outbox 过期天数（默认 30 天）。
      */
     private int ttlDays = 30;
-}
 
+    /**
+     * Outbox 重建时保留最新端旧成员窗口（默认 256）。
+     */
+    private int rebuildMergeWindowSize = 256;
+}

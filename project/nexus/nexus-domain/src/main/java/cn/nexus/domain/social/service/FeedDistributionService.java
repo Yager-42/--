@@ -4,7 +4,6 @@ import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
-import cn.nexus.types.event.PostPublishedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -45,49 +44,6 @@ public class FeedDistributionService implements IFeedDistributionService {
      */
     @Value("${feed.bigv.followerThreshold:500000}")
     private int bigvFollowerThreshold;
-
-    /**
-     * 执行 fanout：将发布内容写入在线用户的 InboxTimeline。
-     *
-     * <p>在线定义：{@link IFeedTimelineRepository#inboxExists(Long)} 为 true。</p>
-     *
-     * @param event 内容发布事件 {@link PostPublishedEvent}
-     */
-    @Override
-    public void fanout(PostPublishedEvent event) {
-        if (event == null) {
-            return;
-        }
-        Long postId = event.getPostId();
-        Long authorId = event.getAuthorId();
-        Long publishTimeMs = event.getPublishTimeMs();
-        if (postId == null || authorId == null || publishTimeMs == null) {
-            return;
-        }
-
-        feedOutboxRepository.addToOutbox(authorId, postId, publishTimeMs);
-        feedTimelineRepository.addToInbox(authorId, postId, publishTimeMs);
-
-        int followerCount = relationRepository.countFollowerIds(authorId);
-        if (followerCount > 0 && bigvFollowerThreshold > 0 && followerCount >= bigvFollowerThreshold) {
-            feedBigVPoolRepository.addToPool(authorId, postId, publishTimeMs);
-            return;
-        }
-
-        int offset = 0;
-        int limit = Math.max(1, batchSize);
-        while (true) {
-            List<Long> followerIds = relationRepository.pageFollowerIdsForFanout(authorId, offset, limit);
-            if (followerIds == null || followerIds.isEmpty()) {
-                break;
-            }
-            fanoutFollowerIds(authorId, postId, publishTimeMs, followerIds);
-            offset += followerIds.size();
-            if (followerIds.size() < limit) {
-                break;
-            }
-        }
-    }
 
     /**
      * 执行 fanout 的一个切片：只处理 authorId 粉丝列表的某一段（offset+limit）。

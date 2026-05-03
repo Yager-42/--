@@ -23,6 +23,13 @@ public interface IFeedGlobalLatestRepository {
     void addToLatest(Long postId, Long publishTimeMs);
 
     /**
+     * 从全站 latest 索引删除指定内容。
+     *
+     * @param postId 内容 ID
+     */
+    void removeFromLatest(Long postId);
+
+    /**
      * 分页读取全站 latest 索引（Max_ID 语义）。
      *
      * @param cursorTimeMs 游标时间（首页传 null 表示从最新开始）
@@ -32,4 +39,3 @@ public interface IFeedGlobalLatestRepository {
      */
     List<FeedInboxEntryVO> pageLatest(Long cursorTimeMs, Long cursorPostId, int limit);
 }
-

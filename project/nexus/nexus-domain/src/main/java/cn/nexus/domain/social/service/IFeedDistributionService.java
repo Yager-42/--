@@ -1,7 +1,5 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.types.event.PostPublishedEvent;
-
 /**
  * Feed 分发服务：处理内容发布后的写扩散（fanout）。
  *
@@ -11,13 +9,6 @@ import cn.nexus.types.event.PostPublishedEvent;
  * @since 2026-01-12
  */
 public interface IFeedDistributionService {
-
-    /**
-     * 执行 fanout：将 postId 写入发布者与其粉丝的 InboxTimeline。
-     *
-     * @param event 内容发布事件
-     */
-    void fanout(PostPublishedEvent event);
 
     /**
      * 执行 fanout 的一个切片：只处理 authorId 的粉丝列表中 {@code [offset, offset+limit)} 这一段。

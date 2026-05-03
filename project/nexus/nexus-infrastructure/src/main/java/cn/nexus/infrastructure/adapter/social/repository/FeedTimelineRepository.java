@@ -7,6 +7,8 @@ import cn.nexus.infrastructure.config.FeedInboxProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Repository;
@@ -33,6 +35,44 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
     private static final String KEY_TMP_PREFIX = "feed:inbox:tmp:";
     private static final String KEY_REBUILD_LOCK_PREFIX = "feed:inbox:rebuild:lock:";
     private static final String INBOX_NO_MORE_MEMBER = "__NOMORE__";
+    private static final RedisScript<Long> REPLACE_INBOX_SCRIPT = new DefaultRedisScript<>("""
+            local realKey = ARGV[1]
+            local tmpKey = ARGV[2]
+            local ttlSeconds = tonumber(ARGV[3])
+            local maxSize = tonumber(ARGV[4])
+            local windowSize = tonumber(ARGV[5])
+            local noMoreMember = ARGV[6]
+            local entryCount = tonumber(ARGV[7])
+
+            redis.call('DEL', tmpKey)
+            local argIndex = 8
+            for i = 1, entryCount do
+                redis.call('ZADD', tmpKey, ARGV[argIndex + 1], ARGV[argIndex])
+                argIndex = argIndex + 2
+            end
+
+            if entryCount == 0 then
+                redis.call('ZADD', tmpKey, 0, noMoreMember)
+            end
+
+            if entryCount > 0 and windowSize > 0 then
+                local oldMembers = redis.call('ZREVRANGE', realKey, 0, windowSize - 1, 'WITHSCORES')
+                for i = 1, #oldMembers, 2 do
+                    local member = oldMembers[i]
+                    if member ~= noMoreMember and redis.call('ZSCORE', tmpKey, member) == false then
+                        redis.call('ZADD', tmpKey, oldMembers[i + 1], member)
+                    end
+                end
+            end
+
+            local size = redis.call('ZCARD', tmpKey)
+            if size > maxSize then
+                redis.call('ZREMRANGEBYRANK', tmpKey, 0, size - maxSize - 1)
+            end
+            redis.call('EXPIRE', tmpKey, ttlSeconds)
+            redis.call('RENAME', tmpKey, realKey)
+            return 1
+            """, Long.class);
 
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedInboxProperties feedInboxProperties;
@@ -42,6 +82,12 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
      */
     @Value("${feed.rebuild.lockSeconds:30}")
     private int rebuildLockSeconds;
+
+    /**
+     * inbox 重建时保留最新端旧成员窗口（默认 256）。 {@code int}
+     */
+    @Value("${feed.rebuild.mergeWindowSize:256}")
+    private int rebuildMergeWindowSize;
 
     /**
      * 执行 addToInbox 逻辑。
@@ -139,25 +185,30 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
             return;
         }
 
-        String tmpKey = inboxTmpKey(userId, System.currentTimeMillis());
+        String inboxKey = inboxKey(userId);
+        String tmpKey = inboxTmpKey(userId, System.nanoTime());
+        List<Object> args = new ArrayList<>();
+        args.add(inboxKey);
+        args.add(tmpKey);
+        args.add(String.valueOf(ttl().getSeconds()));
+        args.add(String.valueOf(maxSize()));
+        args.add(String.valueOf(rebuildWindowSize()));
+        args.add(INBOX_NO_MORE_MEMBER);
+        int countIndex = args.size();
+        args.add("0");
+        int count = 0;
         if (entries != null && !entries.isEmpty()) {
             for (FeedInboxEntryVO entry : entries) {
                 if (entry == null || entry.getPostId() == null || entry.getPublishTimeMs() == null) {
                     continue;
                 }
-                stringRedisTemplate.opsForZSet()
-                        .add(tmpKey, entry.getPostId().toString(), entry.getPublishTimeMs().doubleValue());
+                args.add(entry.getPostId().toString());
+                args.add(entry.getPublishTimeMs().toString());
+                count++;
             }
         }
-
-        stringRedisTemplate.opsForZSet().add(tmpKey, INBOX_NO_MORE_MEMBER, 0D);
-        stringRedisTemplate.expire(tmpKey, ttl());
-        trimToMaxSize(tmpKey);
-
-        // 先写临时 key，再原子 rename，避免重建过程中读到半成品 Inbox。
-        String inboxKey = inboxKey(userId);
-        stringRedisTemplate.rename(tmpKey, inboxKey);
-        stringRedisTemplate.expire(inboxKey, ttl());
+        args.set(countIndex, String.valueOf(count));
+        stringRedisTemplate.execute(REPLACE_INBOX_SCRIPT, List.of(inboxKey), args.toArray());
     }
 
     /**
@@ -310,6 +361,14 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
         return Duration.ofDays(ttlDays);
     }
 
+    private int maxSize() {
+        return Math.max(1, feedInboxProperties.getMaxSize());
+    }
+
+    private int rebuildWindowSize() {
+        return Math.min(Math.max(0, rebuildMergeWindowSize), maxSize());
+    }
+
     private void expireIfNeeded(String key) {
         if (key == null || key.isBlank()) {
             return;
@@ -321,7 +380,7 @@ public class FeedTimelineRepository implements IFeedTimelineRepository {
     }
 
     private void trimToMaxSize(String key) {
-        int maxSize = Math.max(1, feedInboxProperties.getMaxSize());
+        int maxSize = maxSize();
         Long size = stringRedisTemplate.opsForZSet().zCard(key);
         if (size == null || size <= maxSize) {
             return;

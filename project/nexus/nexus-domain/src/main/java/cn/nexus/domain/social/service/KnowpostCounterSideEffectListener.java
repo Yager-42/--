@@ -61,10 +61,8 @@ public class KnowpostCounterSideEffectListener {
                 userCounterService.incrementFavsReceived(ownerUserId, delta);
             }
         } catch (Exception e) {
-            if (log.isDebugEnabled()) {
-                log.debug("increment received counter failed, requestId={}, postId={}, metric={}, delta={}",
-                        requestId, postId, metric, delta, e);
-            }
+            log.warn("increment received counter failed, requestId={}, postId={}, metric={}, delta={}",
+                    requestId, postId, metric, delta, e);
         }
     }
 
@@ -72,9 +70,7 @@ public class KnowpostCounterSideEffectListener {
         try {
             feedCounterSideEffectPort.applyPostCounterDelta(postId, metric, delta);
         } catch (Exception e) {
-            if (log.isDebugEnabled()) {
-                log.debug("apply feed side effects failed, postId={}, metric={}, delta={}", postId, metric, delta, e);
-            }
+            log.warn("apply feed side effects failed, postId={}, metric={}, delta={}", postId, metric, delta, e);
         }
     }
 }

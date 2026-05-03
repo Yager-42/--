@@ -40,6 +40,16 @@ public class FeedFanoutConfig {
     public static final String ROUTING_KEY = "post.published";
 
     /**
+     * RoutingKey：内容更新事件路由键。
+     */
+    public static final String RK_POST_UPDATED = "post.updated";
+
+    /**
+     * RoutingKey：内容删除事件路由键。
+     */
+    public static final String RK_POST_DELETED = "post.deleted";
+
+    /**
      * RoutingKey：fanout 切片任务路由键。
      */
     public static final String TASK_ROUTING_KEY = "feed.fanout.task";
@@ -65,6 +75,26 @@ public class FeedFanoutConfig {
     public static final String DLQ_FANOUT_TASK = "feed.fanout.task.dlx.queue";
 
     /**
+     * Queue：Feed 索引清理内容更新队列。
+     */
+    public static final String Q_FEED_INDEX_CLEANUP_UPDATED = "feed.index.cleanup.updated.queue";
+
+    /**
+     * Queue：Feed 索引清理内容删除队列。
+     */
+    public static final String Q_FEED_INDEX_CLEANUP_DELETED = "feed.index.cleanup.deleted.queue";
+
+    /**
+     * DLQ：Feed 索引清理内容更新死信队列。
+     */
+    public static final String DLQ_FEED_INDEX_CLEANUP_UPDATED = "feed.index.cleanup.updated.dlq.queue";
+
+    /**
+     * DLQ：Feed 索引清理内容删除死信队列。
+     */
+    public static final String DLQ_FEED_INDEX_CLEANUP_DELETED = "feed.index.cleanup.deleted.dlq.queue";
+
+    /**
      * DLX RoutingKey：内容发布事件进入死信队列的路由键。
      */
     public static final String DLX_ROUTING_KEY_POST_PUBLISHED = "post.published.dlx";
@@ -73,6 +103,16 @@ public class FeedFanoutConfig {
      * DLX RoutingKey：fanout 切片任务进入死信队列的路由键。
      */
     public static final String DLX_ROUTING_KEY_FANOUT_TASK = "feed.fanout.task.dlx";
+
+    /**
+     * DLX RoutingKey：Feed 索引清理内容更新死信路由键。
+     */
+    public static final String DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_UPDATED = "feed.index.cleanup.updated.dlx";
+
+    /**
+     * DLX RoutingKey：Feed 索引清理内容删除死信路由键。
+     */
+    public static final String DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_DELETED = "feed.index.cleanup.deleted.dlx";
 
     /**
      * 统一 MQ 消息序列化为 JSON：避免默认 Java 序列化导致的跨语言/跨版本不稳定。
@@ -137,6 +177,22 @@ public class FeedFanoutConfig {
         return new Queue(TASK_QUEUE, true, false, false, args);
     }
 
+    @Bean
+    public Queue feedIndexCleanupUpdatedQueue() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
+        args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_UPDATED);
+        return new Queue(Q_FEED_INDEX_CLEANUP_UPDATED, true, false, false, args);
+    }
+
+    @Bean
+    public Queue feedIndexCleanupDeletedQueue() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
+        args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_DELETED);
+        return new Queue(Q_FEED_INDEX_CLEANUP_DELETED, true, false, false, args);
+    }
+
     /**
      * 声明内容发布事件死信队列。
      *
@@ -155,6 +211,16 @@ public class FeedFanoutConfig {
     @Bean
     public Queue feedFanoutTaskDlqQueue() {
         return new Queue(DLQ_FANOUT_TASK, true);
+    }
+
+    @Bean
+    public Queue feedIndexCleanupUpdatedDlqQueue() {
+        return new Queue(DLQ_FEED_INDEX_CLEANUP_UPDATED, true);
+    }
+
+    @Bean
+    public Queue feedIndexCleanupDeletedDlqQueue() {
+        return new Queue(DLQ_FEED_INDEX_CLEANUP_DELETED, true);
     }
 
     /**
@@ -183,6 +249,18 @@ public class FeedFanoutConfig {
         return BindingBuilder.bind(feedFanoutTaskQueue).to(feedExchange).with(TASK_ROUTING_KEY);
     }
 
+    @Bean
+    public Binding feedIndexCleanupUpdatedBinding(@Qualifier("feedIndexCleanupUpdatedQueue") Queue feedIndexCleanupUpdatedQueue,
+                                                  @Qualifier("feedExchange") DirectExchange feedExchange) {
+        return BindingBuilder.bind(feedIndexCleanupUpdatedQueue).to(feedExchange).with(RK_POST_UPDATED);
+    }
+
+    @Bean
+    public Binding feedIndexCleanupDeletedBinding(@Qualifier("feedIndexCleanupDeletedQueue") Queue feedIndexCleanupDeletedQueue,
+                                                  @Qualifier("feedExchange") DirectExchange feedExchange) {
+        return BindingBuilder.bind(feedIndexCleanupDeletedQueue).to(feedExchange).with(RK_POST_DELETED);
+    }
+
     /**
      * 声明死信交换机与“内容发布事件死信队列”的绑定关系。
      *
@@ -207,5 +285,21 @@ public class FeedFanoutConfig {
     public Binding feedFanoutTaskDlqBinding(@Qualifier("feedFanoutTaskDlqQueue") Queue feedFanoutTaskDlqQueue,
                                             @Qualifier("feedDlxExchange") DirectExchange feedDlxExchange) {
         return BindingBuilder.bind(feedFanoutTaskDlqQueue).to(feedDlxExchange).with(DLX_ROUTING_KEY_FANOUT_TASK);
+    }
+
+    @Bean
+    public Binding feedIndexCleanupUpdatedDlqBinding(@Qualifier("feedIndexCleanupUpdatedDlqQueue") Queue feedIndexCleanupUpdatedDlqQueue,
+                                                     @Qualifier("feedDlxExchange") DirectExchange feedDlxExchange) {
+        return BindingBuilder.bind(feedIndexCleanupUpdatedDlqQueue)
+                .to(feedDlxExchange)
+                .with(DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_UPDATED);
+    }
+
+    @Bean
+    public Binding feedIndexCleanupDeletedDlqBinding(@Qualifier("feedIndexCleanupDeletedDlqQueue") Queue feedIndexCleanupDeletedDlqQueue,
+                                                     @Qualifier("feedDlxExchange") DirectExchange feedDlxExchange) {
+        return BindingBuilder.bind(feedIndexCleanupDeletedDlqQueue)
+                .to(feedDlxExchange)
+                .with(DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_DELETED);
     }
 }

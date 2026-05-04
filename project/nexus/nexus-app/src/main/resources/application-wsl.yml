@@ -18,6 +18,9 @@ spring:
         enabled: false
 
 feed:
+  timeline:
+    maxSize: 1000
+    ttlDays: 30
   recommend:
     baseUrl: http://127.0.0.1:8087
     trendingRecommenderName: trending

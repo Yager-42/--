@@ -97,7 +97,8 @@ public class FeedAuthorTimelineRepository implements IFeedAuthorTimelineReposito
             }
 
             candidates.sort(timelineOrder());
-            // Fetch another chunk only when the current page boundary would split equal-score ties.
+            // Fetch another chunk only to avoid splitting equal-score ties; retained ZSET size
+            // bounds worst-case read work by feed.timeline.maxSize.
             if (candidates.size() >= effectiveLimit
                     && lowestFetchedScore < candidates.get(effectiveLimit - 1).getPublishTimeMs()) {
                 break;

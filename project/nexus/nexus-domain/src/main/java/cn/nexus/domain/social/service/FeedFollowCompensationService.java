@@ -1,9 +1,8 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.adapter.repository.IContentRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedAuthorTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
-import cn.nexus.domain.social.model.entity.ContentPostEntity;
-import cn.nexus.domain.social.model.valobj.ContentPostPageVO;
+import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -22,7 +21,7 @@ import java.util.List;
 public class FeedFollowCompensationService implements IFeedFollowCompensationService {
 
     private final IFeedTimelineRepository feedTimelineRepository;
-    private final IContentRepository contentRepository;
+    private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
 
     /**
      * 刚关注后回填的“最近内容条数”（默认 20）。
@@ -46,17 +45,16 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
         }
 
         int limit = Math.max(1, recentPosts);
-        ContentPostPageVO page = contentRepository.listUserPosts(followeeId, null, limit);
-        List<ContentPostEntity> posts = page.getPosts() == null ? List.of() : page.getPosts();
-        if (posts.isEmpty()) {
+        List<FeedInboxEntryVO> entries = feedAuthorTimelineRepository.pageTimeline(followeeId, null, null, limit);
+        if (entries == null || entries.isEmpty()) {
             return;
         }
 
-        for (ContentPostEntity post : posts) {
-            if (post == null || post.getPostId() == null || post.getCreateTime() == null) {
+        for (FeedInboxEntryVO entry : entries) {
+            if (entry == null || entry.getPostId() == null || entry.getPublishTimeMs() == null) {
                 continue;
             }
-            feedTimelineRepository.addToInbox(followerId, post.getPostId(), post.getCreateTime());
+            feedTimelineRepository.addToInbox(followerId, entry.getPostId(), entry.getPublishTimeMs());
         }
     }
 
@@ -68,10 +66,6 @@ public class FeedFollowCompensationService implements IFeedFollowCompensationSer
     @Override
     public void onUnfollow(Long followerId, Long followeeId) {
         if (followerId == null || followeeId == null || followerId.equals(followeeId)) {
-            return;
-        }
-        // 离线用户下次首页会走 rebuildIfNeeded；这里仅用于“立刻生效”体验。
-        if (!feedTimelineRepository.inboxExists(followerId)) {
             return;
         }
         // 读侧会做关注/拉黑过滤，取消关注无需强制重建 inbox。

@@ -32,7 +32,7 @@ public class FeedIndexCleanupConsumer {
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
     private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
 
-    @RabbitListener(queues = FeedFanoutConfig.Q_FEED_INDEX_CLEANUP_UPDATED, containerFactory = "reliableMqListenerContainerFactory")
+    @RabbitListener(queues = FeedFanoutConfig.Q_FEED_INDEX_CLEANUP, containerFactory = "reliableMqListenerContainerFactory")
     @ReliableMqConsume(consumerName = "FeedIndexCleanupUpdatedConsumer", eventId = "#event.eventId", payload = "#event")
     public void onUpdated(PostUpdatedEvent event) {
         validate(event == null ? null : event.getEventId(), event == null ? null : event.getPostId(),
@@ -40,7 +40,7 @@ public class FeedIndexCleanupConsumer {
         cleanupIfInvisible(event.getPostId());
     }
 
-    @RabbitListener(queues = FeedFanoutConfig.Q_FEED_INDEX_CLEANUP_DELETED, containerFactory = "reliableMqListenerContainerFactory")
+    @RabbitListener(queues = FeedFanoutConfig.Q_FEED_INDEX_CLEANUP, containerFactory = "reliableMqListenerContainerFactory")
     @ReliableMqConsume(consumerName = "FeedIndexCleanupDeletedConsumer", eventId = "#event.eventId", payload = "#event")
     public void onDeleted(PostDeletedEvent event) {
         validate(event == null ? null : event.getEventId(), event == null ? null : event.getPostId(),

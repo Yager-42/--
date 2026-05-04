@@ -28,6 +28,9 @@ public class FeedAuthorTimelineRepository implements IFeedAuthorTimelineReposito
 
     private static final String KEY_TIMELINE_PREFIX = "feed:timeline:";
     private static final int PAGE_FETCH_CUSHION = 20;
+    private static final Comparator<FeedInboxEntryVO> TIMELINE_ORDER = Comparator
+            .comparing(FeedInboxEntryVO::getPublishTimeMs, Comparator.reverseOrder())
+            .thenComparing(FeedInboxEntryVO::getPostId, Comparator.reverseOrder());
 
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedAuthorTimelineProperties feedAuthorTimelineProperties;
@@ -57,14 +60,15 @@ public class FeedAuthorTimelineRepository implements IFeedAuthorTimelineReposito
             return List.of();
         }
         int normalizedLimit = Math.max(1, limit);
+        int effectiveLimit = Math.min(normalizedLimit, maxSize());
         String key = timelineKey(authorId);
 
         long safeCursorTime = cursorTimeMs == null ? Long.MAX_VALUE : cursorTimeMs;
         long safeCursorPostId = cursorPostId == null ? Long.MAX_VALUE : cursorPostId;
-        long fetchCount = normalizedLimit + PAGE_FETCH_CUSHION;
+        long fetchCount = effectiveLimit + PAGE_FETCH_CUSHION;
         long offset = 0;
 
-        List<FeedInboxEntryVO> candidates = new ArrayList<>(normalizedLimit);
+        List<FeedInboxEntryVO> candidates = new ArrayList<>(effectiveLimit);
         while (true) {
             Set<ZSetOperations.TypedTuple<String>> tuples = stringRedisTemplate.opsForZSet()
                     .reverseRangeByScoreWithScores(key, 0D, safeCursorTime, offset, fetchCount);
@@ -93,8 +97,9 @@ public class FeedAuthorTimelineRepository implements IFeedAuthorTimelineReposito
             }
 
             candidates.sort(timelineOrder());
-            if (candidates.size() >= normalizedLimit
-                    && lowestFetchedScore < candidates.get(normalizedLimit - 1).getPublishTimeMs()) {
+            // Fetch another chunk only when the current page boundary would split equal-score ties.
+            if (candidates.size() >= effectiveLimit
+                    && lowestFetchedScore < candidates.get(effectiveLimit - 1).getPublishTimeMs()) {
                 break;
             }
             if (tuples.size() < fetchCount) {
@@ -105,7 +110,7 @@ public class FeedAuthorTimelineRepository implements IFeedAuthorTimelineReposito
         if (candidates.isEmpty()) {
             return List.of();
         }
-        return candidates.size() <= normalizedLimit ? candidates : candidates.subList(0, normalizedLimit);
+        return candidates.size() <= effectiveLimit ? candidates : candidates.subList(0, effectiveLimit);
     }
 
     @Override
@@ -174,7 +179,6 @@ public class FeedAuthorTimelineRepository implements IFeedAuthorTimelineReposito
     }
 
     private Comparator<FeedInboxEntryVO> timelineOrder() {
-        return Comparator.comparing(FeedInboxEntryVO::getPublishTimeMs, Comparator.reverseOrder())
-                .thenComparing(FeedInboxEntryVO::getPostId, Comparator.reverseOrder());
+        return TIMELINE_ORDER;
     }
 }

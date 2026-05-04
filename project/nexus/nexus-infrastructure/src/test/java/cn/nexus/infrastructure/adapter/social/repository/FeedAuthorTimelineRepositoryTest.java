@@ -208,14 +208,11 @@ class FeedAuthorTimelineRepositoryTest {
         // cursor at (2000, 201) -> should exclude exactly this item
         List<FeedInboxEntryVO> result = fx.repository.pageTimeline(42L, 2000L, 201L, 10);
 
-        // Only (2000, 200) and (1999, 999) should remain
         assertEquals(2, result.size());
-        // The entries won't be in a deterministic order from HashSet, but we can verify no entry equals cursor
-        for (FeedInboxEntryVO entry : result) {
-            assertFalse(
-                    entry.getPublishTimeMs() == 2000L && entry.getPostId() == 201L,
-                    "cursor item should be excluded");
-        }
+        assertEquals(200L, result.get(0).getPostId());
+        assertEquals(2000L, result.get(0).getPublishTimeMs());
+        assertEquals(999L, result.get(1).getPostId());
+        assertEquals(1999L, result.get(1).getPublishTimeMs());
     }
 
     @Test
@@ -232,7 +229,35 @@ class FeedAuthorTimelineRepositoryTest {
 
         List<FeedInboxEntryVO> result = fx.repository.pageTimeline(42L, null, null, 3);
 
-        assertTrue(result.size() <= 3);
+        assertEquals(3, result.size());
+        assertEquals(1000L, result.get(0).getPostId());
+        assertEquals(10000L, result.get(0).getPublishTimeMs());
+        assertEquals(1001L, result.get(1).getPostId());
+        assertEquals(9999L, result.get(1).getPublishTimeMs());
+        assertEquals(1002L, result.get(2).getPostId());
+        assertEquals(9998L, result.get(2).getPublishTimeMs());
+    }
+
+    @Test
+    void pageTimeline_capsLimitAtConfiguredMaxSize() {
+        Fixture fx = new Fixture();
+        fx.properties.setMaxSize(3);
+
+        Set<ZSetOperations.TypedTuple<String>> tuples = new LinkedHashSet<>();
+        for (long i = 0; i < 5; i++) {
+            tuples.add(tuple(String.valueOf(1000 + i), (double) (10000 - i)));
+        }
+
+        when(fx.zSetOps.reverseRangeByScoreWithScores(
+                eq("feed:timeline:42"), eq(0.0), eq((double) Long.MAX_VALUE), eq(0L), eq(23L)))
+                .thenReturn(tuples);
+
+        List<FeedInboxEntryVO> result = fx.repository.pageTimeline(42L, null, null, 10);
+
+        assertEquals(3, result.size());
+        assertEquals(1000L, result.get(0).getPostId());
+        assertEquals(1001L, result.get(1).getPostId());
+        assertEquals(1002L, result.get(2).getPostId());
     }
 
     @Test

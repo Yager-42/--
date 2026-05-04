@@ -4,9 +4,8 @@ import cn.nexus.domain.social.adapter.port.IRelationAdjacencyCachePort;
 import cn.nexus.domain.social.adapter.port.IRecommendationPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedAuthorTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedRecommendSessionRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
@@ -51,14 +50,15 @@ public class FeedService implements IFeedService {
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
     private static final int RELATION_BLOCK = 3;
+    private static final int CONTENT_STATUS_PUBLISHED = 2;
+    private static final int FOLLOW_SCAN_MAX_ROUNDS = 3;
 
     private final IContentRepository contentRepository;
     private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
     private final IRelationRepository relationRepository;
     private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
     private final IFeedTimelineRepository feedTimelineRepository;
-    private final IFeedOutboxRepository feedOutboxRepository;
-    private final IFeedBigVPoolRepository feedBigVPoolRepository;
+    private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
     private final IFeedInboxActivationService feedInboxActivationService;
     private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private final IFeedRecommendSessionRepository feedRecommendSessionRepository;
@@ -88,30 +88,6 @@ public class FeedService implements IFeedService {
      */
     @Value("${feed.bigv.pull.perBigvLimit:50}")
     private int perBigvLimit;
-
-    /**
-     * 是否启用大 V 聚合池（默认 false）。 {@code boolean}
-     */
-    @Value("${feed.bigv.pool.enabled:false}")
-    private boolean bigvPoolEnabled;
-
-    /**
-     * 大 V 聚合池分桶数量（默认 4）。 {@code int}
-     */
-    @Value("${feed.bigv.pool.buckets:4}")
-    private int bigvPoolBuckets;
-
-    /**
-     * 聚合池拉取放大系数（默认 30）。 {@code int}
-     */
-    @Value("${feed.bigv.pool.fetchFactor:30}")
-    private int bigvPoolFetchFactor;
-
-    /**
-     * 触发“聚合池读取”的关注数量阈值（默认 200）。 {@code int}
-     */
-    @Value("${feed.bigv.pool.triggerFollowings:200}")
-    private int bigvPoolTriggerFollowings;
 
     /**
      * 推荐候选预取系数：appendBatch = limit * prefetchFactor（默认 5）。 {@code int}
@@ -514,16 +490,6 @@ public class FeedService implements IFeedService {
                 break;
             }
 
-            List<Long> poolCandidates = listRecommendBigvPoolCandidates(followings, batch);
-            if (!poolCandidates.isEmpty()) {
-                feedRecommendSessionRepository.appendCandidates(userId, sessionId, poolCandidates);
-            }
-
-            if (feedRecommendSessionRepository.size(userId, sessionId) >= needSize) {
-                rounds++;
-                break;
-            }
-
             // 2) gorse 不可用或候选不足：降级用全站 latest 补齐（internal cursor：timeMs:postId）。
             String latestCursor = feedRecommendSessionRepository.getLatestCursor(userId, sessionId);
             LatestCursor parsed = LatestCursor.parse(latestCursor);
@@ -573,7 +539,7 @@ public class FeedService implements IFeedService {
             if (authorId == null) {
                 continue;
             }
-            List<FeedInboxEntryVO> entries = feedOutboxRepository.pageOutbox(authorId, null, null, 1);
+            List<FeedInboxEntryVO> entries = feedAuthorTimelineRepository.pageTimeline(authorId, null, null, 1);
             if (entries == null || entries.isEmpty()) {
                 continue;
             }
@@ -586,41 +552,6 @@ public class FeedService implements IFeedService {
             }
         }
         return ids;
-    }
-
-    private List<Long> listRecommendBigvPoolCandidates(List<Long> followings, int batch) {
-        if (followings == null || followings.isEmpty()) {
-            return List.of();
-        }
-        if (!shouldUseBigVPool(followings)) {
-            return List.of();
-        }
-        int buckets = Math.max(1, bigvPoolBuckets);
-        int perBucket = Math.max(1, batch / buckets);
-        List<Long> ids = new ArrayList<>(batch);
-        for (int i = 0; i < buckets; i++) {
-            List<FeedInboxEntryVO> entries = feedBigVPoolRepository.pagePool(i, null, null, perBucket);
-            if (entries == null || entries.isEmpty()) {
-                continue;
-            }
-            for (FeedInboxEntryVO entry : entries) {
-                if (entry != null && entry.getPostId() != null) {
-                    ids.add(entry.getPostId());
-                }
-                if (ids.size() >= batch) {
-                    return ids;
-                }
-            }
-        }
-        return ids;
-    }
-
-    private boolean shouldUseBigVPool(List<Long> followings) {
-        if (!bigvPoolEnabled) {
-            return false;
-        }
-        int trigger = Math.max(0, bigvPoolTriggerFollowings);
-        return followings != null && followings.size() > trigger;
     }
 
     private void writeRecommendReadFeedbackAsync(Long userId, List<FeedItemVO> items) {
@@ -742,6 +673,18 @@ public class FeedService implements IFeedService {
                                                 int normalizedLimit,
                                                 List<Long> followings,
                                                 boolean enforceFollowingAuthors) {
+        List<FeedInboxEntryVO> filtered = filterTimelineCandidates(userId, source, candidates, followings, enforceFollowingAuthors);
+        if (filtered.isEmpty()) {
+            return List.of();
+        }
+        return feedCardAssembleService.assemble(userId, source, filtered, normalizedLimit);
+    }
+
+    private List<FeedInboxEntryVO> filterTimelineCandidates(Long userId,
+                                                           String source,
+                                                           List<FeedInboxEntryVO> candidates,
+                                                           List<Long> followings,
+                                                           boolean enforceFollowingAuthors) {
         if (candidates == null || candidates.isEmpty()) {
             return List.of();
         }
@@ -787,6 +730,10 @@ public class FeedService implements IFeedService {
             if (post == null) {
                 continue;
             }
+            if (followSource && !isPublished(post)) {
+                feedTimelineRepository.removeFromInbox(userId, entry.getPostId());
+                continue;
+            }
             Long authorId = post.getUserId();
             if (followSource) {
                 if (authorId == null) {
@@ -801,7 +748,7 @@ public class FeedService implements IFeedService {
             }
             filtered.add(entry);
         }
-        return feedCardAssembleService.assemble(userId, source, filtered, normalizedLimit);
+        return filtered;
     }
 
     private boolean isBlockedBetween(Long sourceId, Long targetId) {
@@ -833,12 +780,6 @@ public class FeedService implements IFeedService {
                 continue;
             }
             feedTimelineRepository.removeFromInbox(userId, postId);
-            ContentPostEntity raw = contentRepository.findPost(postId);
-            if (raw == null || raw.getUserId() == null) {
-                continue;
-            }
-            feedOutboxRepository.removeFromOutbox(raw.getUserId(), postId);
-            feedBigVPoolRepository.removeFromPool(raw.getUserId(), postId);
         }
     }
 
@@ -906,37 +847,80 @@ public class FeedService implements IFeedService {
         List<Long> followings = listFollowings(userId);
         AuthorBuckets authorBuckets = splitAuthorsByCategory(followings);
 
-        List<FeedInboxEntryVO> inboxEntries = feedTimelineRepository.pageInboxEntries(
-                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
-        );
+        List<FeedInboxEntryVO> accepted = new ArrayList<>(normalizedLimit);
+        Set<Long> acceptedPostIds = new HashSet<>();
+        FeedInboxEntryVO lastScanned = null;
+        boolean hasMore = false;
+        int rounds = 0;
+        while (accepted.size() < normalizedLimit && rounds < FOLLOW_SCAN_MAX_ROUNDS) {
+            MergeResult mergeResult = pageAndMergeFollowCandidates(userId, authorBuckets, maxIdCursor, normalizedLimit);
+            if (mergeResult.entries().isEmpty()) {
+                hasMore = mergeResult.hasMore();
+                break;
+            }
+            lastScanned = mergeResult.lastEntry();
+            hasMore = mergeResult.hasMore();
 
-        List<SourceCursor> sources = new ArrayList<>(1 + authorBuckets.bigvAuthors().size());
-        sources.add(new SourceCursor(inboxEntries));
-        for (Long authorId : authorBuckets.bigvAuthors()) {
-            List<FeedInboxEntryVO> outboxEntries = feedOutboxRepository.pageOutbox(
-                    authorId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+            List<FeedInboxEntryVO> filtered = filterTimelineCandidates(
+                    userId,
+                    "FOLLOW",
+                    mergeResult.entries(),
+                    followings,
+                    true
             );
-            sources.add(new SourceCursor(outboxEntries));
+            for (FeedInboxEntryVO entry : filtered) {
+                if (entry == null || entry.getPostId() == null || !acceptedPostIds.add(entry.getPostId())) {
+                    continue;
+                }
+                accepted.add(entry);
+                if (accepted.size() >= normalizedLimit) {
+                    break;
+                }
+            }
+            rounds++;
+            if (accepted.size() >= normalizedLimit || lastScanned == null) {
+                break;
+            }
+            maxIdCursor = new MaxIdCursor(lastScanned.getPublishTimeMs(), lastScanned.getPostId());
+        }
+        if (accepted.size() < normalizedLimit && rounds >= FOLLOW_SCAN_MAX_ROUNDS && lastScanned != null) {
+            hasMore = true;
         }
 
-        MergeResult mergeResult = mergeFollowCandidates(sources, normalizedLimit);
-        List<FeedItemVO> items = buildTimelineItems(
-                userId,
-                "FOLLOW",
-                mergeResult.entries(),
-                normalizedLimit,
-                followings,
-                true
-        );
+        List<FeedItemVO> items = accepted.isEmpty()
+                ? List.of()
+                : feedCardAssembleService.assemble(userId, "FOLLOW", accepted, normalizedLimit);
 
-        FeedInboxEntryVO last = mergeResult.lastEntry();
+        FeedInboxEntryVO last = accepted.isEmpty() ? lastScanned : accepted.get(accepted.size() - 1);
         return FeedTimelineVO.builder()
                 .items(items)
                 .nextCursor(null)
                 .nextCursorTs(last == null ? null : last.getPublishTimeMs())
                 .nextCursorPostId(last == null ? null : last.getPostId())
-                .hasMore(mergeResult.hasMore())
+                .hasMore(hasMore)
                 .build();
+    }
+
+    private MergeResult pageAndMergeFollowCandidates(Long userId,
+                                                     AuthorBuckets authorBuckets,
+                                                     MaxIdCursor maxIdCursor,
+                                                     int normalizedLimit) {
+        List<FeedInboxEntryVO> inboxEntries = feedTimelineRepository.pageInboxEntries(
+                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+        );
+
+        List<SourceCursor> sources = new ArrayList<>(2 + authorBuckets.bigvAuthors().size());
+        sources.add(new SourceCursor(inboxEntries));
+        for (Long authorId : authorBuckets.bigvAuthors()) {
+            List<FeedInboxEntryVO> timelineEntries = feedAuthorTimelineRepository.pageTimeline(
+                    authorId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+            );
+            sources.add(new SourceCursor(timelineEntries));
+        }
+        sources.add(new SourceCursor(feedAuthorTimelineRepository.pageTimeline(
+                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+        )));
+        return mergeFollowCandidates(sources, normalizedLimit);
     }
 
     private AuthorBuckets splitAuthorsByCategory(List<Long> followings) {
@@ -967,6 +951,10 @@ public class FeedService implements IFeedService {
             }
         }
         return new AuthorBuckets(normalAuthors, bigvAuthors);
+    }
+
+    private boolean isPublished(ContentPostEntity post) {
+        return post != null && Integer.valueOf(CONTENT_STATUS_PUBLISHED).equals(post.getStatus());
     }
 
     private MergeResult mergeFollowCandidates(List<SourceCursor> sources, int limit) {

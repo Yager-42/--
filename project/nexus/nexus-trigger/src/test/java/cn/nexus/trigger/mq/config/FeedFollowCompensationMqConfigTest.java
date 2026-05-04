@@ -25,12 +25,12 @@ class FeedFollowCompensationMqConfigTest {
         assertEquals("relation.counter.follow.feed.compensate.queue", queue.getName());
         assertEquals("relation.counter.follow.feed.compensate.dlq.queue", dlq.getName());
         assertEquals(RelationCounterRouting.EXCHANGE, binding.getExchange());
-        assertEquals(RelationCounterRouting.RK_FOLLOW, binding.getRoutingKey());
+        assertEquals("relation.counter.follow", binding.getRoutingKey());
         assertEquals(RelationCounterRouting.DLX_EXCHANGE, queue.getArguments().get("x-dead-letter-exchange"));
         assertEquals(
-                RelationCounterRouting.RK_FOLLOW_FEED_COMPENSATE_DLX,
+                "relation.counter.follow.feed.compensate.dlx",
                 queue.getArguments().get("x-dead-letter-routing-key"));
         assertEquals(RelationCounterRouting.DLX_EXCHANGE, dlqBinding.getExchange());
-        assertEquals(RelationCounterRouting.RK_FOLLOW_FEED_COMPENSATE_DLX, dlqBinding.getRoutingKey());
+        assertEquals("relation.counter.follow.feed.compensate.dlx", dlqBinding.getRoutingKey());
     }
 }

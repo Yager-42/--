@@ -42,14 +42,6 @@ public class FeedFanoutDispatcherConsumer {
     private int batchSize;
 
     /**
-     * 大 V 判定阈值：粉丝数 >= 阈值则默认不做“全量写扩散”，改为读侧拉 Outbox（默认 500000）。
-     *
-     * <p>阈值 <= 0 表示禁用大 V 逻辑（始终走普通 fanout）。</p>
-     */
-    @Value("${feed.bigv.followerThreshold:500000}")
-    private int bigvFollowerThreshold;
-
-    /**
      * 消费内容发布事件，拆分为切片任务并投递。
      *
      * @param event 发布事件

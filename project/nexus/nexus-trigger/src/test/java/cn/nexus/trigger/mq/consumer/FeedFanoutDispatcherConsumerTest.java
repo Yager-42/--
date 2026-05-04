@@ -4,6 +4,7 @@ import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
@@ -18,6 +19,11 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -27,6 +33,26 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FeedFanoutDispatcherConsumerTest {
+
+    @Test
+    void consumerDoesNotDependOnReadSideFanoutRepositories() {
+        Set<Class<?>> forbiddenDependencies = Set.of(
+                IFeedTimelineRepository.class,
+                IFeedOutboxRepository.class,
+                IFeedBigVPoolRepository.class,
+                IFeedGlobalLatestRepository.class);
+
+        for (Field field : FeedFanoutDispatcherConsumer.class.getDeclaredFields()) {
+            assertFalse(forbiddenDependencies.contains(field.getType()),
+                    () -> "FeedFanoutDispatcherConsumer field depends on " + field.getType().getName());
+        }
+        for (Constructor<?> constructor : FeedFanoutDispatcherConsumer.class.getDeclaredConstructors()) {
+            for (Class<?> parameterType : constructor.getParameterTypes()) {
+                assertFalse(forbiddenDependencies.contains(parameterType),
+                        () -> "FeedFanoutDispatcherConsumer constructor depends on " + parameterType.getName());
+            }
+        }
+    }
 
     @Test
     void onMessage_duplicateDoneDoesNotInvokeBusinessDependency() throws Throwable {
@@ -55,9 +81,6 @@ class FeedFanoutDispatcherConsumerTest {
         fixture.invokeThroughAspect(event);
 
         verify(fixture.feedAuthorTimelineRepository).addToTimeline(11L, 22L, 33L);
-        verify(fixture.feedTimelineRepository, never()).addToInbox(Mockito.any(), Mockito.any(), Mockito.any());
-        verify(fixture.feedGlobalLatestRepository, never()).addToLatest(Mockito.any(), Mockito.any());
-        verify(fixture.feedBigVPoolRepository, never()).addToPool(Mockito.any(), Mockito.any(), Mockito.any());
         verify(fixture.consumerRecordService).markDone("evt-fanout-2", "FeedFanoutDispatcherConsumer");
     }
 
@@ -75,9 +98,6 @@ class FeedFanoutDispatcherConsumerTest {
 
         verify(fixture.feedAuthorTimelineRepository).addToTimeline(11L, 22L, 33L);
         verify(fixture.feedFanoutTaskProducer, never()).publish(Mockito.any());
-        verify(fixture.feedTimelineRepository, never()).addToInbox(Mockito.any(), Mockito.any(), Mockito.any());
-        verify(fixture.feedGlobalLatestRepository, never()).addToLatest(Mockito.any(), Mockito.any());
-        verify(fixture.feedBigVPoolRepository, never()).addToPool(Mockito.any(), Mockito.any(), Mockito.any());
     }
 
     @Test
@@ -94,9 +114,6 @@ class FeedFanoutDispatcherConsumerTest {
         fixture.invokeThroughAspect(event);
 
         verify(fixture.feedAuthorTimelineRepository).addToTimeline(11L, 22L, 33L);
-        verify(fixture.feedTimelineRepository, never()).addToInbox(Mockito.any(), Mockito.any(), Mockito.any());
-        verify(fixture.feedGlobalLatestRepository, never()).addToLatest(Mockito.any(), Mockito.any());
-        verify(fixture.feedBigVPoolRepository, never()).addToPool(Mockito.any(), Mockito.any(), Mockito.any());
         verify(fixture.feedFanoutTaskProducer).publish(argThat(task ->
                 task != null
                         && "evt-fanout-4:0:200".equals(task.eventId())
@@ -157,9 +174,6 @@ class FeedFanoutDispatcherConsumerTest {
     private static final class Fixture {
         private final FeedFanoutTaskProducer feedFanoutTaskProducer = Mockito.mock(FeedFanoutTaskProducer.class);
         private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository = Mockito.mock(IFeedAuthorTimelineRepository.class);
-        private final IFeedTimelineRepository feedTimelineRepository = Mockito.mock(IFeedTimelineRepository.class);
-        private final IFeedBigVPoolRepository feedBigVPoolRepository = Mockito.mock(IFeedBigVPoolRepository.class);
-        private final IFeedGlobalLatestRepository feedGlobalLatestRepository = Mockito.mock(IFeedGlobalLatestRepository.class);
         private final IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
         private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository = Mockito.mock(IFeedAuthorCategoryRepository.class);
         private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine = Mockito.mock(FeedAuthorCategoryStateMachine.class);

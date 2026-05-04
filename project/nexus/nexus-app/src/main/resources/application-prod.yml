@@ -6,6 +6,9 @@ logging:
 feed:
   inbox:
     ttlDays: 14
+  timeline:
+    maxSize: 1000
+    ttlDays: 30
   outbox:
     ttlDays: 14
 

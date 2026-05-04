@@ -16,8 +16,8 @@ import cn.nexus.infrastructure.adapter.counter.support.CountRedisKeys;
 import cn.nexus.infrastructure.adapter.counter.support.CountRedisSchema;
 import cn.nexus.infrastructure.adapter.id.LeafSnowflakeIdGenerator;
 import cn.nexus.infrastructure.adapter.social.repository.CommentHotRankRepository;
+import cn.nexus.infrastructure.adapter.social.repository.FeedAuthorTimelineRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedGlobalLatestRepository;
-import cn.nexus.infrastructure.adapter.social.repository.FeedOutboxRepository;
 import cn.nexus.infrastructure.adapter.social.repository.FeedTimelineRepository;
 import cn.nexus.infrastructure.adapter.social.repository.RelationRepository;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqOutboxService;
@@ -120,7 +120,7 @@ public abstract class RealBusinessIntegrationTestSupport {
     protected FeedTimelineRepository feedTimelineRepository;
 
     @Autowired
-    protected FeedOutboxRepository feedOutboxRepository;
+    protected FeedAuthorTimelineRepository feedAuthorTimelineRepository;
 
     @Autowired
     protected FeedGlobalLatestRepository feedGlobalLatestRepository;
@@ -308,7 +308,7 @@ public abstract class RealBusinessIntegrationTestSupport {
     }
 
     protected void clearFeedKeys(long authorId, long... inboxUserIds) {
-        deleteRedisKey("feed:outbox:" + authorId);
+        deleteRedisKey("feed:timeline:" + authorId);
         for (long userId : inboxUserIds) {
             deleteRedisKey("feed:inbox:" + userId);
         }

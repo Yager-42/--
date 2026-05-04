@@ -37,7 +37,7 @@ class FeedFanoutRealIntegrationTest extends RealMiddlewareIntegrationTestSupport
         rabbitTemplate.convertAndSend(FeedFanoutConfig.EXCHANGE, FeedFanoutConfig.ROUTING_KEY, event);
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-            assertThat(feedOutboxRepository.pageOutbox(authorId, null, null, 10))
+            assertThat(feedAuthorTimelineRepository.pageTimeline(authorId, null, null, 10))
                     .extracting(item -> item.getPostId())
                     .contains(postId);
             assertThat(feedGlobalLatestRepository.pageLatest(null, null, 10))

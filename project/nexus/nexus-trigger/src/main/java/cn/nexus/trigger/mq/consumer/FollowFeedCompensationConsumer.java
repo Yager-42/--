@@ -25,10 +25,10 @@ public class FollowFeedCompensationConsumer {
     @RabbitListener(queues = RelationCounterRouting.Q_FOLLOW_FEED_COMPENSATE,
             containerFactory = "reliableMqListenerContainerFactory")
     @ReliableMqConsume(consumerName = "FollowFeedCompensationConsumer",
-            eventId = "#event != null && #event.eventId != null && !#event.eventId.isBlank() "
-                    + "? #event.eventId "
-                    + ": (#event != null && #event.relationEventId != null "
-                    + "? 'relation-counter:' + #event.relationEventId : 'relation-counter:unknown')",
+            eventId = "#event == null ? 'relation-counter:unknown' "
+                    + ": (#event.eventId != null && !#event.eventId.isBlank() "
+                    + "? #event.eventId : (#event.relationEventId != null "
+                    + "? 'relation-counter:' + #event.relationEventId : null))",
             payload = "#event != null ? #event : 'null-event'")
     public void onMessage(RelationCounterProjectEvent event) {
         if (event == null || event.getSourceId() == null || event.getTargetId() == null) {

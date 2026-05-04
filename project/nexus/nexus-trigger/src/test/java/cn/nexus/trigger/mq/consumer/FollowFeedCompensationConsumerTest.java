@@ -5,6 +5,7 @@ import cn.nexus.domain.social.service.IFeedFollowCompensationService;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
 import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService.StartResult;
 import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume;
+import cn.nexus.infrastructure.mq.reliable.exception.ReliableMqPermanentFailureException;
 import cn.nexus.types.event.relation.RelationCounterProjectEvent;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
@@ -93,8 +94,10 @@ class FollowFeedCompensationConsumerTest {
 
         ReliableMqConsume reliableMqConsume = method.getAnnotation(ReliableMqConsume.class);
         assertEquals("FollowFeedCompensationConsumer", reliableMqConsume.consumerName());
-        assertTrue(reliableMqConsume.eventId().contains("#event.eventId"));
-        assertTrue(reliableMqConsume.eventId().contains("#event.relationEventId"));
+        assertEquals("#event == null ? 'relation-counter:unknown' "
+                + ": (#event.eventId != null && !#event.eventId.isBlank() "
+                + "? #event.eventId : (#event.relationEventId != null "
+                + "? 'relation-counter:' + #event.relationEventId : null))", reliableMqConsume.eventId());
         assertTrue(reliableMqConsume.payload().contains("#event"));
     }
 
@@ -154,6 +157,22 @@ class FollowFeedCompensationConsumerTest {
         verify(fixture.compensationService, never()).onFollow(Mockito.any(), Mockito.any());
         verify(fixture.compensationService, never()).onUnfollow(Mockito.any(), Mockito.any());
         verify(fixture.consumerRecordService).markDone("relation-counter:unknown", "FollowFeedCompensationConsumer");
+    }
+
+    @Test
+    void onMessage_runtimeReliableConsumeRejectsNonNullEventMissingStableIdsBeforeCompensation() {
+        Fixture fixture = new Fixture();
+        RelationCounterProjectEvent event = event(101L, 202L, "ACTIVE");
+        event.setEventId(" ");
+        event.setRelationEventId(null);
+
+        ReliableMqPermanentFailureException thrown = assertThrows(ReliableMqPermanentFailureException.class,
+                () -> fixture.invokeThroughAspect(event));
+
+        assertTrue(thrown.getMessage().contains("invalid reliable mq consume eventId"));
+        verify(fixture.compensationService, never()).onFollow(Mockito.any(), Mockito.any());
+        verify(fixture.compensationService, never()).onUnfollow(Mockito.any(), Mockito.any());
+        verify(fixture.consumerRecordService, never()).startManual(Mockito.any(), Mockito.any(), Mockito.any());
     }
 
     private static RelationCounterProjectEvent event(Long sourceId, Long targetId, String status) {

@@ -3,6 +3,8 @@ package cn.nexus.integration.feed;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import cn.nexus.domain.social.model.entity.RelationEntity;
+import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
@@ -16,34 +18,75 @@ import org.junit.jupiter.api.Test;
 class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
     @Test
-    void timelineAndProfile_shouldAssembleCardsFromRedisInboxAndMysqlPosts() throws Exception {
-        TestSession author = registerAndLoginSession("feed-author");
+    void followTimeline_shouldMergeInboxSelfAndBigvAuthorTimelineWhileFilteringInvalidSources() throws Exception {
+        TestSession normalAuthor = registerAndLoginSession("feed-normal-author");
+        TestSession bigvAuthor = registerAndLoginSession("feed-bigv-author");
+        TestSession unfollowedAuthor = registerAndLoginSession("feed-unfollowed-author");
+        TestSession blockedAuthor = registerAndLoginSession("feed-blocked-author");
+        TestSession invalidAuthor = registerAndLoginSession("feed-invalid-author");
         TestSession viewer = registerAndLoginSession("feed-viewer");
 
         long nowMs = System.currentTimeMillis();
-        long postId = seedPublishedPost(author.userId(), nowMs);
+        long bigvPostId = seedPublishedPost(bigvAuthor.userId(), nowMs + 4_000);
+        long selfPostId = seedPublishedPost(viewer.userId(), nowMs + 3_000);
+        long normalPostId = seedPublishedPost(normalAuthor.userId(), nowMs + 2_000);
+        long unfollowedPostId = seedPublishedPost(unfollowedAuthor.userId(), nowMs + 1_000);
+        long blockedPostId = seedPublishedPost(blockedAuthor.userId(), nowMs);
+        long invalidPostId = seedPost(invalidAuthor.userId(), nowMs - 1_000, ContentPostStatusEnumVO.DELETED);
 
         assertSuccess(postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
-                .put("targetId", author.userId()), viewer.token()));
+                .put("targetId", normalAuthor.userId()), viewer.token()));
+        assertSuccess(postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
+                .put("targetId", bigvAuthor.userId()), viewer.token()));
+        assertSuccess(postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
+                .put("targetId", blockedAuthor.userId()), viewer.token()));
+        assertSuccess(postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
+                .put("targetId", invalidAuthor.userId()), viewer.token()));
 
-        feedTimelineRepository.addToInbox(viewer.userId(), postId, nowMs);
+        stringRedisTemplate.opsForHash().put(
+                "feed:author:category",
+                String.valueOf(bigvAuthor.userId()),
+                String.valueOf(FeedAuthorCategoryEnumVO.BIGV.getCode())
+        );
+        relationRepository.saveRelation(RelationEntity.builder()
+                .id(uniqueId())
+                .sourceId(blockedAuthor.userId())
+                .targetId(viewer.userId())
+                .relationType(3)
+                .status(1)
+                .groupId(0L)
+                .version(0L)
+                .createTime(new Date(nowMs))
+                .build());
+
+        feedTimelineRepository.addToInbox(viewer.userId(), normalPostId, nowMs + 2_000);
+        feedTimelineRepository.addToInbox(viewer.userId(), unfollowedPostId, nowMs + 1_000);
+        feedTimelineRepository.addToInbox(viewer.userId(), blockedPostId, nowMs);
+        feedTimelineRepository.addToInbox(viewer.userId(), invalidPostId, nowMs - 1_000);
+        feedAuthorTimelineRepository.addToTimeline(bigvAuthor.userId(), bigvPostId, nowMs + 4_000);
+        feedAuthorTimelineRepository.addToTimeline(viewer.userId(), selfPostId, nowMs + 3_000);
 
         JsonNode timeline = assertSuccess(getJson("/api/v1/feed/timeline?limit=10", viewer.token()));
-        assertThat(timeline.path("items")).isNotEmpty();
+        assertThat(timeline.path("items")).hasSize(3);
+        assertThat(timeline.path("items"))
+                .extracting(item -> item.path("postId").asLong())
+                .containsExactly(bigvPostId, selfPostId, normalPostId)
+                .doesNotContain(unfollowedPostId, blockedPostId, invalidPostId);
+
         JsonNode first = timeline.path("items").get(0);
-        assertThat(first.path("postId").asLong()).isEqualTo(postId);
-        assertThat(first.path("authorId").asLong()).isEqualTo(author.userId());
-        assertThat(first.path("authorNickname").asText()).isEqualTo(author.nickname());
+        assertThat(first.path("postId").asLong()).isEqualTo(bigvPostId);
+        assertThat(first.path("authorId").asLong()).isEqualTo(bigvAuthor.userId());
+        assertThat(first.path("authorNickname").asText()).isEqualTo(bigvAuthor.nickname());
         assertThat(first.path("followed").asBoolean()).isTrue();
         assertThat(timeline.path("nextCursor").isNull()).isTrue();
-        assertThat(timeline.path("nextCursorTs").asLong()).isEqualTo(nowMs);
-        assertThat(timeline.path("nextCursorPostId").asLong()).isEqualTo(postId);
+        assertThat(timeline.path("nextCursorTs").asLong()).isEqualTo(nowMs + 2_000);
+        assertThat(timeline.path("nextCursorPostId").asLong()).isEqualTo(normalPostId);
         assertThat(timeline.path("hasMore").asBoolean()).isFalse();
 
-        JsonNode profile = assertSuccess(getJson("/api/v1/feed/profile/" + author.userId() + "?limit=10", viewer.token()));
+        JsonNode profile = assertSuccess(getJson("/api/v1/feed/profile/" + normalAuthor.userId() + "?limit=10", viewer.token()));
         assertThat(profile.path("items"))
                 .extracting(JsonNode::toString)
-                .anySatisfy(raw -> assertThat(raw).contains("\"postId\":" + postId));
+                .anySatisfy(raw -> assertThat(raw).contains("\"postId\":" + normalPostId));
     }
 
     @Test
@@ -255,6 +298,10 @@ class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
     }
 
     private long seedPublishedPost(long authorId, long nowMs) {
+        return seedPost(authorId, nowMs, ContentPostStatusEnumVO.PUBLISHED);
+    }
+
+    private long seedPost(long authorId, long nowMs, ContentPostStatusEnumVO status) {
         long postId = uniqueId();
         Date now = new Date(nowMs);
         ContentPostPO post = new ContentPostPO();
@@ -265,7 +312,7 @@ class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         post.setSummary("feed integration");
         post.setSummaryStatus(1);
         post.setMediaType(0);
-        post.setStatus(ContentPostStatusEnumVO.PUBLISHED.getCode());
+        post.setStatus(status.getCode());
         post.setVisibility(ContentPostVisibilityEnumVO.PUBLIC.getCode());
         post.setVersionNum(1);
         post.setIsEdited(0);

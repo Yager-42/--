@@ -2,8 +2,12 @@ package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
 import cn.nexus.domain.social.service.IFeedFollowCompensationService;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService;
+import cn.nexus.infrastructure.mq.reliable.ReliableMqConsumerRecordService.StartResult;
 import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume;
 import cn.nexus.types.event.relation.RelationCounterProjectEvent;
+import org.aspectj.lang.ProceedingJoinPoint;
+import org.aspectj.lang.reflect.MethodSignature;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -17,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class FollowFeedCompensationConsumerTest {
 
@@ -88,8 +93,67 @@ class FollowFeedCompensationConsumerTest {
 
         ReliableMqConsume reliableMqConsume = method.getAnnotation(ReliableMqConsume.class);
         assertEquals("FollowFeedCompensationConsumer", reliableMqConsume.consumerName());
-        assertEquals("#event.eventId", reliableMqConsume.eventId());
-        assertEquals("#event", reliableMqConsume.payload());
+        assertTrue(reliableMqConsume.eventId().contains("#event.eventId"));
+        assertTrue(reliableMqConsume.eventId().contains("#event.relationEventId"));
+        assertTrue(reliableMqConsume.payload().contains("#event"));
+    }
+
+    @Test
+    void onMessage_runtimeReliableConsumePrefersEventIdWhenPresent() throws Throwable {
+        Fixture fixture = new Fixture();
+        RelationCounterProjectEvent event = event(101L, 202L, "ACTIVE");
+        event.setEventId("evt-follow-feed-compensate-1");
+        event.setRelationEventId(1L);
+        when(fixture.consumerRecordService.startManual(Mockito.eq("evt-follow-feed-compensate-1"),
+                Mockito.eq("FollowFeedCompensationConsumer"), Mockito.anyString()))
+                .thenReturn(StartResult.STARTED);
+
+        fixture.invokeThroughAspect(event);
+
+        verify(fixture.consumerRecordService).startManual(Mockito.eq("evt-follow-feed-compensate-1"),
+                Mockito.eq("FollowFeedCompensationConsumer"), Mockito.anyString());
+        verify(fixture.consumerRecordService).markDone("evt-follow-feed-compensate-1", "FollowFeedCompensationConsumer");
+    }
+
+    @Test
+    void onMessage_runtimeReliableConsumeFallsBackToRelationEventIdWhenEventIdMissing() throws Throwable {
+        Fixture fixture = new Fixture();
+        RelationCounterProjectEvent blankEventIdEvent = event(101L, 202L, "ACTIVE");
+        blankEventIdEvent.setEventId(" ");
+        blankEventIdEvent.setRelationEventId(11L);
+        RelationCounterProjectEvent nullEventIdEvent = event(303L, 404L, "UNFOLLOW");
+        nullEventIdEvent.setEventId(null);
+        nullEventIdEvent.setRelationEventId(22L);
+        when(fixture.consumerRecordService.startManual(Mockito.eq("relation-counter:11"),
+                Mockito.eq("FollowFeedCompensationConsumer"), Mockito.anyString()))
+                .thenReturn(StartResult.STARTED);
+        when(fixture.consumerRecordService.startManual(Mockito.eq("relation-counter:22"),
+                Mockito.eq("FollowFeedCompensationConsumer"), Mockito.anyString()))
+                .thenReturn(StartResult.STARTED);
+
+        fixture.invokeThroughAspect(blankEventIdEvent);
+        fixture.invokeThroughAspect(nullEventIdEvent);
+
+        verify(fixture.consumerRecordService).startManual(Mockito.eq("relation-counter:11"),
+                Mockito.eq("FollowFeedCompensationConsumer"), Mockito.anyString());
+        verify(fixture.consumerRecordService).markDone("relation-counter:11", "FollowFeedCompensationConsumer");
+        verify(fixture.consumerRecordService).startManual(Mockito.eq("relation-counter:22"),
+                Mockito.eq("FollowFeedCompensationConsumer"), Mockito.anyString());
+        verify(fixture.consumerRecordService).markDone("relation-counter:22", "FollowFeedCompensationConsumer");
+    }
+
+    @Test
+    void onMessage_runtimeReliableConsumeAllowsNullEventToSkipInMethodBody() throws Throwable {
+        Fixture fixture = new Fixture();
+        when(fixture.consumerRecordService.startManual(Mockito.eq("relation-counter:unknown"),
+                Mockito.eq("FollowFeedCompensationConsumer"), Mockito.anyString()))
+                .thenReturn(StartResult.STARTED);
+
+        fixture.invokeThroughAspect(null);
+
+        verify(fixture.compensationService, never()).onFollow(Mockito.any(), Mockito.any());
+        verify(fixture.compensationService, never()).onUnfollow(Mockito.any(), Mockito.any());
+        verify(fixture.consumerRecordService).markDone("relation-counter:unknown", "FollowFeedCompensationConsumer");
     }
 
     private static RelationCounterProjectEvent event(Long sourceId, Long targetId, String status) {
@@ -105,7 +169,33 @@ class FollowFeedCompensationConsumerTest {
     private static final class Fixture {
         private final IFeedFollowCompensationService compensationService =
                 Mockito.mock(IFeedFollowCompensationService.class);
+        private final ReliableMqConsumerRecordService consumerRecordService =
+                Mockito.mock(ReliableMqConsumerRecordService.class);
         private final FollowFeedCompensationConsumer consumer =
                 new FollowFeedCompensationConsumer(compensationService);
+
+        private void invokeThroughAspect(RelationCounterProjectEvent event) throws Throwable {
+            ProceedingJoinPoint joinPoint = joinPoint(event);
+            ReliableConsumerAspectTestSupport.aspect(consumerRecordService).around(
+                    joinPoint,
+                    ReliableConsumerAspectTestSupport.annotation(
+                            FollowFeedCompensationConsumer.class, "onMessage", RelationCounterProjectEvent.class));
+        }
+
+        private ProceedingJoinPoint joinPoint(RelationCounterProjectEvent event) throws Throwable {
+            Method method = FollowFeedCompensationConsumer.class.getMethod("onMessage", RelationCounterProjectEvent.class);
+            ProceedingJoinPoint joinPoint = Mockito.mock(ProceedingJoinPoint.class);
+            MethodSignature signature = Mockito.mock(MethodSignature.class);
+            when(signature.getMethod()).thenReturn(method);
+            when(signature.getParameterNames()).thenReturn(new String[] {"event"});
+            when(joinPoint.getSignature()).thenReturn(signature);
+            when(joinPoint.getTarget()).thenReturn(consumer);
+            when(joinPoint.getArgs()).thenReturn(new Object[] {event});
+            when(joinPoint.proceed()).thenAnswer(invocation -> {
+                consumer.onMessage(event);
+                return null;
+            });
+            return joinPoint;
+        }
     }
 }

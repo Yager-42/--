@@ -5,6 +5,7 @@ import cn.nexus.domain.social.adapter.port.IRecommendationPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorTimelineRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedRecommendSessionRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
@@ -59,6 +60,7 @@ public class FeedService implements IFeedService {
     private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
+    private final IFeedBigVPoolRepository feedBigVPoolRepository;
     private final IFeedInboxActivationService feedInboxActivationService;
     private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private final IFeedRecommendSessionRepository feedRecommendSessionRepository;
@@ -88,6 +90,30 @@ public class FeedService implements IFeedService {
      */
     @Value("${feed.bigv.pull.perBigvLimit:50}")
     private int perBigvLimit;
+
+    /**
+     * 是否启用大 V 聚合池（默认 false）。 {@code boolean}
+     */
+    @Value("${feed.bigv.pool.enabled:false}")
+    private boolean bigvPoolEnabled;
+
+    /**
+     * 大 V 聚合池分桶数量（默认 4）。 {@code int}
+     */
+    @Value("${feed.bigv.pool.buckets:4}")
+    private int bigvPoolBuckets;
+
+    /**
+     * 聚合池拉取放大系数（默认 30）。 {@code int}
+     */
+    @Value("${feed.bigv.pool.fetchFactor:30}")
+    private int bigvPoolFetchFactor;
+
+    /**
+     * 触发“聚合池读取”的关注数量阈值（默认 200）。 {@code int}
+     */
+    @Value("${feed.bigv.pool.triggerFollowings:200}")
+    private int bigvPoolTriggerFollowings;
 
     /**
      * 推荐候选预取系数：appendBatch = limit * prefetchFactor（默认 5）。 {@code int}
@@ -490,6 +516,16 @@ public class FeedService implements IFeedService {
                 break;
             }
 
+            List<Long> poolCandidates = listRecommendBigvPoolCandidates(followings, batch);
+            if (!poolCandidates.isEmpty()) {
+                feedRecommendSessionRepository.appendCandidates(userId, sessionId, poolCandidates);
+            }
+
+            if (feedRecommendSessionRepository.size(userId, sessionId) >= needSize) {
+                rounds++;
+                break;
+            }
+
             // 2) gorse 不可用或候选不足：降级用全站 latest 补齐（internal cursor：timeMs:postId）。
             String latestCursor = feedRecommendSessionRepository.getLatestCursor(userId, sessionId);
             LatestCursor parsed = LatestCursor.parse(latestCursor);
@@ -552,6 +588,41 @@ public class FeedService implements IFeedService {
             }
         }
         return ids;
+    }
+
+    private List<Long> listRecommendBigvPoolCandidates(List<Long> followings, int batch) {
+        if (followings == null || followings.isEmpty()) {
+            return List.of();
+        }
+        if (!shouldUseBigVPool(followings)) {
+            return List.of();
+        }
+        int buckets = Math.max(1, bigvPoolBuckets);
+        int perBucket = Math.max(1, batch / buckets);
+        List<Long> ids = new ArrayList<>(batch);
+        for (int i = 0; i < buckets; i++) {
+            List<FeedInboxEntryVO> entries = feedBigVPoolRepository.pagePool(i, null, null, perBucket);
+            if (entries == null || entries.isEmpty()) {
+                continue;
+            }
+            for (FeedInboxEntryVO entry : entries) {
+                if (entry != null && entry.getPostId() != null) {
+                    ids.add(entry.getPostId());
+                }
+                if (ids.size() >= batch) {
+                    return ids;
+                }
+            }
+        }
+        return ids;
+    }
+
+    private boolean shouldUseBigVPool(List<Long> followings) {
+        if (!bigvPoolEnabled) {
+            return false;
+        }
+        int trigger = Math.max(0, bigvPoolTriggerFollowings);
+        return followings != null && followings.size() > trigger;
     }
 
     private void writeRecommendReadFeedbackAsync(Long userId, List<FeedItemVO> items) {

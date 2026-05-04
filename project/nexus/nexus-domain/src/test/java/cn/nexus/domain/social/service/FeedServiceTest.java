@@ -19,6 +19,7 @@ import cn.nexus.domain.social.adapter.port.IRecommendationPort;
 import cn.nexus.domain.social.adapter.repository.IContentRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedFollowSeenRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedRecommendSessionRepository;
@@ -48,6 +49,7 @@ class FeedServiceTest {
     private IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
     private IFeedTimelineRepository feedTimelineRepository;
     private IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
+    private IFeedBigVPoolRepository feedBigVPoolRepository;
     private IFeedFollowSeenRepository feedFollowSeenRepository;
     private IFeedInboxActivationService feedInboxActivationService;
     private IFeedGlobalLatestRepository feedGlobalLatestRepository;
@@ -64,6 +66,7 @@ class FeedServiceTest {
         feedAuthorCategoryRepository = Mockito.mock(IFeedAuthorCategoryRepository.class);
         feedTimelineRepository = Mockito.mock(IFeedTimelineRepository.class);
         feedAuthorTimelineRepository = Mockito.mock(IFeedAuthorTimelineRepository.class);
+        feedBigVPoolRepository = Mockito.mock(IFeedBigVPoolRepository.class);
         feedFollowSeenRepository = Mockito.mock(IFeedFollowSeenRepository.class);
         feedInboxActivationService = Mockito.mock(IFeedInboxActivationService.class);
         feedGlobalLatestRepository = Mockito.mock(IFeedGlobalLatestRepository.class);
@@ -78,6 +81,7 @@ class FeedServiceTest {
                 feedAuthorCategoryRepository,
                 feedTimelineRepository,
                 feedAuthorTimelineRepository,
+                feedBigVPoolRepository,
                 feedInboxActivationService,
                 feedGlobalLatestRepository,
                 feedRecommendSessionRepository,
@@ -92,6 +96,10 @@ class FeedServiceTest {
         ReflectionTestUtils.setField(feedService, "maxFollowings", 2000);
         ReflectionTestUtils.setField(feedService, "maxBigvFollowings", 200);
         ReflectionTestUtils.setField(feedService, "perBigvLimit", 50);
+        ReflectionTestUtils.setField(feedService, "bigvPoolEnabled", false);
+        ReflectionTestUtils.setField(feedService, "bigvPoolBuckets", 4);
+        ReflectionTestUtils.setField(feedService, "bigvPoolFetchFactor", 30);
+        ReflectionTestUtils.setField(feedService, "bigvPoolTriggerFollowings", 200);
         ReflectionTestUtils.setField(feedService, "trendingRecommenderName", "trending");
         ReflectionTestUtils.setField(feedService, "latestRecommenderName", "latest");
         ReflectionTestUtils.setField(feedService, "similarRecommenderName", "similar");
@@ -341,6 +349,31 @@ class FeedServiceTest {
         assertNotNull(result);
         assertNotNull(result.getNextCursor());
         verify(feedRecommendSessionRepository).sessionExists(1L, "expired");
+    }
+
+    @Test
+    void timeline_recommendShouldKeepBigVPoolFallbackBeforeGlobalLatest() {
+        ReflectionTestUtils.setField(feedService, "bigvPoolEnabled", true);
+        ReflectionTestUtils.setField(feedService, "bigvPoolBuckets", 1);
+        ReflectionTestUtils.setField(feedService, "bigvPoolTriggerFollowings", 0);
+
+        when(feedRecommendSessionRepository.size(eq(1L), anyString())).thenReturn(0L, 0L, 0L, 0L, 1L);
+        when(recommendationPort.recommend(1L, 1)).thenReturn(List.of());
+        when(recommendationPort.nonPersonalized("trending", 1L, 1, 0)).thenReturn(List.of());
+        when(relationAdjacencyCachePort.listFollowing(1L, 2000)).thenReturn(List.of(300L));
+        when(feedAuthorTimelineRepository.pageTimeline(300L, null, null, 1)).thenReturn(List.of());
+        when(feedBigVPoolRepository.pagePool(0, null, null, 1)).thenReturn(List.of(entry(501L, 5000L)));
+        when(feedRecommendSessionRepository.appendCandidates(eq(1L), anyString(), eq(List.of(501L)))).thenReturn(1);
+        when(feedRecommendSessionRepository.range(eq(1L), anyString(), eq(0L), eq(0L))).thenReturn(List.of(501L));
+        when(contentRepository.listPostsByIds(List.of(501L))).thenReturn(List.of(post(501L, 300L, 5000L, 2)));
+        when(feedCardAssembleService.assemble(eq(1L), eq("RECOMMEND"), any(), eq(1)))
+                .thenReturn(List.of(FeedItemVO.builder().postId(501L).build()));
+
+        FeedTimelineVO result = feedService.timeline(1L, null, 1, "RECOMMEND", null, null, null);
+
+        assertEquals(List.of(501L), result.getItems().stream().map(FeedItemVO::getPostId).toList());
+        verify(feedBigVPoolRepository).pagePool(0, null, null, 1);
+        verify(feedGlobalLatestRepository, never()).pageLatest(any(), any(), anyInt());
     }
 
     @Test

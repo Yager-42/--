@@ -50,7 +50,7 @@ class FeedServiceTest {
     private IFeedOutboxRepository feedOutboxRepository;
     private IFeedBigVPoolRepository feedBigVPoolRepository;
     private IFeedFollowSeenRepository feedFollowSeenRepository;
-    private IFeedInboxRebuildService feedInboxRebuildService;
+    private IFeedInboxActivationService feedInboxActivationService;
     private IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private IFeedRecommendSessionRepository feedRecommendSessionRepository;
     private IRecommendationPort recommendationPort;
@@ -67,7 +67,7 @@ class FeedServiceTest {
         feedOutboxRepository = Mockito.mock(IFeedOutboxRepository.class);
         feedBigVPoolRepository = Mockito.mock(IFeedBigVPoolRepository.class);
         feedFollowSeenRepository = Mockito.mock(IFeedFollowSeenRepository.class);
-        feedInboxRebuildService = Mockito.mock(IFeedInboxRebuildService.class);
+        feedInboxActivationService = Mockito.mock(IFeedInboxActivationService.class);
         feedGlobalLatestRepository = Mockito.mock(IFeedGlobalLatestRepository.class);
         feedRecommendSessionRepository = Mockito.mock(IFeedRecommendSessionRepository.class);
         recommendationPort = Mockito.mock(IRecommendationPort.class);
@@ -81,7 +81,7 @@ class FeedServiceTest {
                 feedTimelineRepository,
                 feedOutboxRepository,
                 feedBigVPoolRepository,
-                feedInboxRebuildService,
+                feedInboxActivationService,
                 feedGlobalLatestRepository,
                 feedRecommendSessionRepository,
                 recommendationPort,
@@ -115,19 +115,19 @@ class FeedServiceTest {
 
     @Test
     void timeline_shouldTriggerRebuildWhenFollowHomePageRequested() {
-        when(feedInboxRebuildService.rebuildIfNeeded(1L)).thenReturn(true);
+        when(feedInboxActivationService.activateIfNeeded(1L)).thenReturn(true);
         when(feedTimelineRepository.pageInboxEntries(eq(1L), eq(null), eq(null), anyInt())).thenReturn(List.of());
 
         FeedTimelineVO result = feedService.timeline(1L, null, 20, "FOLLOW", null, null, null);
 
         assertNotNull(result);
         assertEquals(List.of(), result.getItems());
-        verify(feedInboxRebuildService).rebuildIfNeeded(1L);
+        verify(feedInboxActivationService).activateIfNeeded(1L);
     }
 
     @Test
     void timeline_followRefreshShouldMergeInboxAndBigVOutboxUsingMaxIdOrder() {
-        when(feedInboxRebuildService.rebuildIfNeeded(1L)).thenReturn(false);
+        when(feedInboxActivationService.activateIfNeeded(1L)).thenReturn(false);
         when(relationAdjacencyCachePort.listFollowing(1L, 2000)).thenReturn(List.of(200L, 300L));
         when(feedAuthorCategoryRepository.batchGetCategory(List.of(200L, 300L))).thenReturn(java.util.Map.of(
                 200L, FeedAuthorCategoryEnumVO.NORMAL.getCode(),

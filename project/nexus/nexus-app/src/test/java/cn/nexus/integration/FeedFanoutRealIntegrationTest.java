@@ -23,8 +23,8 @@ class FeedFanoutRealIntegrationTest extends RealMiddlewareIntegrationTestSupport
         deleteRedisKey("feed:global:latest");
         deleteRedisHashField("feed:author:category", String.valueOf(authorId));
 
-        feedTimelineRepository.replaceInbox(followerA, java.util.List.of());
-        feedTimelineRepository.replaceInbox(followerB, java.util.List.of());
+        feedTimelineRepository.addToInbox(followerA, -1L, 0L);
+        feedTimelineRepository.addToInbox(followerB, -1L, 0L);
 
         relationRepository.saveFollower(uniqueId(), authorId, followerA, new Date(publishTimeMs));
         relationRepository.saveFollower(uniqueId(), authorId, followerB, new Date(publishTimeMs));

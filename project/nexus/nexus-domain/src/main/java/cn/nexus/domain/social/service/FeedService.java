@@ -59,7 +59,7 @@ public class FeedService implements IFeedService {
     private final IFeedTimelineRepository feedTimelineRepository;
     private final IFeedOutboxRepository feedOutboxRepository;
     private final IFeedBigVPoolRepository feedBigVPoolRepository;
-    private final IFeedInboxRebuildService feedInboxRebuildService;
+    private final IFeedInboxActivationService feedInboxActivationService;
     private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
     private final IFeedRecommendSessionRepository feedRecommendSessionRepository;
     private final IRecommendationPort recommendationPort;
@@ -899,7 +899,7 @@ public class FeedService implements IFeedService {
                     .build();
         }
         if (refresh) {
-            feedInboxRebuildService.rebuildIfNeeded(userId);
+            feedInboxActivationService.activateIfNeeded(userId);
         }
 
         MaxIdCursor maxIdCursor = refresh ? new MaxIdCursor(null, null) : new MaxIdCursor(cursorTs, cursorPostId);

@@ -3,7 +3,6 @@ package cn.nexus.integration.feed;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.infrastructure.dao.social.po.ContentPostPO;
 import cn.nexus.integration.support.RealHttpIntegrationTestSupport;
 import cn.nexus.types.enums.ContentPostStatusEnumVO;
@@ -12,7 +11,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.time.Duration;
 import java.util.Date;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
@@ -28,10 +26,7 @@ class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertSuccess(postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
                 .put("targetId", author.userId()), viewer.token()));
 
-        feedTimelineRepository.replaceInbox(viewer.userId(), List.of(FeedInboxEntryVO.builder()
-                .postId(postId)
-                .publishTimeMs(nowMs)
-                .build()));
+        feedTimelineRepository.addToInbox(viewer.userId(), postId, nowMs);
 
         JsonNode timeline = assertSuccess(getJson("/api/v1/feed/timeline?limit=10", viewer.token()));
         assertThat(timeline.path("items")).isNotEmpty();
@@ -62,10 +57,7 @@ class FeedHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
         assertSuccess(postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
                 .put("targetId", author.userId()), viewer.token()));
 
-        feedTimelineRepository.replaceInbox(viewer.userId(), List.of(FeedInboxEntryVO.builder()
-                .postId(postId)
-                .publishTimeMs(nowMs)
-                .build()));
+        feedTimelineRepository.addToInbox(viewer.userId(), postId, nowMs);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             JsonNode timeline = assertSuccess(getJson("/api/v1/feed/timeline?limit=10", viewer.token()));

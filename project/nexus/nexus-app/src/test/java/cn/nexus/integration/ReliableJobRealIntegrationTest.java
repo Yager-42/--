@@ -198,7 +198,7 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         long postId = seedPublishedPost(followeeId);
 
         clearFeedKeys(followeeId, followerId);
-        feedTimelineRepository.replaceInbox(followerId, List.of());
+        feedTimelineRepository.addToInbox(followerId, -1L, 0L);
         ensureRelationTopology();
         ensureRelationConsumersReady();
 
@@ -237,7 +237,7 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         long postId = seedPublishedPost(followeeId);
 
         clearFeedKeys(followeeId, followerId);
-        feedTimelineRepository.replaceInbox(followerId, List.of());
+        feedTimelineRepository.addToInbox(followerId, -1L, 0L);
         ensureRelationTopology();
         ensureRelationConsumersReady();
 

@@ -78,11 +78,10 @@ feed:
     ttlDays: 30
   fanout:
     batchSize: 200
-  rebuild:
+  activation:
     perFollowingLimit: 20
     inboxSize: 200
     maxFollowings: 2000
-    lockSeconds: 30
   follow:
     compensate:
       recentPosts: 20

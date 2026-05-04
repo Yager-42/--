@@ -114,7 +114,7 @@ class FeedServiceTest {
     }
 
     @Test
-    void timeline_shouldTriggerRebuildWhenFollowHomePageRequested() {
+    void timeline_shouldActivateInboxWhenFollowHomePageRequested() {
         when(feedInboxActivationService.activateIfNeeded(1L)).thenReturn(true);
         when(feedTimelineRepository.pageInboxEntries(eq(1L), eq(null), eq(null), anyInt())).thenReturn(List.of());
 

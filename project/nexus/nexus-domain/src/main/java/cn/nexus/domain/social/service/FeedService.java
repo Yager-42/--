@@ -72,9 +72,9 @@ public class FeedService implements IFeedService {
     private int bigvFollowerThreshold;
 
     /**
-     * 读侧最多扫描的关注对象数量（默认 2000，与 rebuild 一致）。 {@code int}
+     * 读侧最多扫描的关注对象数量（默认 2000）。 {@code int}
      */
-    @Value("${feed.rebuild.maxFollowings:2000}")
+    @Value("${feed.follow.maxFollowings:2000}")
     private int maxFollowings;
 
     /**

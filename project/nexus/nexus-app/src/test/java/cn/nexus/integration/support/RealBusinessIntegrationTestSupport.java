@@ -314,6 +314,16 @@ public abstract class RealBusinessIntegrationTestSupport {
         }
     }
 
+    protected long createOnlineInboxMarker(long userId) {
+        long markerPostId = uniqueId();
+        feedTimelineRepository.addToInbox(userId, markerPostId, System.currentTimeMillis());
+        return markerPostId;
+    }
+
+    protected void removeOnlineInboxMarker(long userId, long markerPostId) {
+        feedTimelineRepository.removeFromInbox(userId, markerPostId);
+    }
+
     protected void clearAuthThrottleKeys(String phone) {
         deleteRedisKey("auth:login:fail:password:" + phone);
         deleteRedisKey("auth:login:lock:password:" + phone);

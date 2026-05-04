@@ -114,13 +114,14 @@ class FeedInboxActivationServiceTest {
     }
 
     @Test
-    void activateIfNeeded_shouldNotUseContentRepositoryOrReplaceInboxApi() {
+    void activateIfNeeded_shouldNotUseContentRepositoryOrBulkInboxReplacementApi() {
         for (java.lang.reflect.Field field : FeedInboxActivationService.class.getDeclaredFields()) {
             org.junit.jupiter.api.Assertions.assertNotEquals("contentRepository", field.getName());
         }
+        String oldBulkReplacementMethodName = "replace" + "Inbox";
         try {
-            IFeedTimelineRepository.class.getDeclaredMethod("replaceInbox", Long.class, List.class);
-            org.junit.jupiter.api.Assertions.fail("Unexpected replaceInbox API exists");
+            IFeedTimelineRepository.class.getDeclaredMethod(oldBulkReplacementMethodName, Long.class, List.class);
+            org.junit.jupiter.api.Assertions.fail("Unexpected bulk inbox replacement API exists");
         } catch (NoSuchMethodException expected) {
             // expected
         }

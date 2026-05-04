@@ -23,8 +23,8 @@ class FeedFanoutRealIntegrationTest extends RealMiddlewareIntegrationTestSupport
         deleteRedisKey("feed:global:latest");
         deleteRedisHashField("feed:author:category", String.valueOf(authorId));
 
-        feedTimelineRepository.addToInbox(followerA, -1L, 0L);
-        feedTimelineRepository.addToInbox(followerB, -1L, 0L);
+        long followerAMarkerPostId = createOnlineInboxMarker(followerA);
+        long followerBMarkerPostId = createOnlineInboxMarker(followerB);
 
         relationRepository.saveFollower(uniqueId(), authorId, followerA, new Date(publishTimeMs));
         relationRepository.saveFollower(uniqueId(), authorId, followerB, new Date(publishTimeMs));
@@ -53,5 +53,8 @@ class FeedFanoutRealIntegrationTest extends RealMiddlewareIntegrationTestSupport
                     .extracting(item -> item.getPostId())
                     .contains(postId);
         });
+
+        removeOnlineInboxMarker(followerA, followerAMarkerPostId);
+        removeOnlineInboxMarker(followerB, followerBMarkerPostId);
     }
 }

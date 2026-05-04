@@ -939,12 +939,16 @@ public class FeedService implements IFeedService {
                     followings,
                     true
             );
-            for (FeedInboxEntryVO entry : filtered) {
+            for (int i = 0; i < filtered.size(); i++) {
+                FeedInboxEntryVO entry = filtered.get(i);
                 if (entry == null || entry.getPostId() == null || !acceptedPostIds.add(entry.getPostId())) {
                     continue;
                 }
                 accepted.add(entry);
                 if (accepted.size() >= normalizedLimit) {
+                    if (hasUnacceptedCandidate(filtered, i + 1, acceptedPostIds)) {
+                        hasMore = true;
+                    }
                     break;
                 }
             }
@@ -970,6 +974,22 @@ public class FeedService implements IFeedService {
                 .nextCursorPostId(last == null ? null : last.getPostId())
                 .hasMore(hasMore)
                 .build();
+    }
+
+    private boolean hasUnacceptedCandidate(List<FeedInboxEntryVO> entries, int startIndex, Set<Long> acceptedPostIds) {
+        if (entries == null || entries.isEmpty()) {
+            return false;
+        }
+        for (int i = Math.max(0, startIndex); i < entries.size(); i++) {
+            FeedInboxEntryVO entry = entries.get(i);
+            if (entry == null || entry.getPostId() == null) {
+                continue;
+            }
+            if (acceptedPostIds == null || !acceptedPostIds.contains(entry.getPostId())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private MergeResult pageAndMergeFollowCandidates(Long userId,

@@ -344,6 +344,40 @@ class FeedServiceTest {
     }
 
     @Test
+    void timeline_followShouldReportHasMoreWhenFilteredCandidatesRemainAfterPageFilled() {
+        when(relationAdjacencyCachePort.listFollowing(1L, 2000)).thenReturn(List.of(200L));
+        when(feedAuthorCategoryRepository.batchGetCategory(List.of(200L))).thenReturn(java.util.Map.of(
+                200L, FeedAuthorCategoryEnumVO.NORMAL.getCode()
+        ));
+        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 3)).thenReturn(List.of(
+                entry(10L, 1000L),
+                entry(11L, 990L)
+        ));
+        when(feedTimelineRepository.pageInboxEntries(1L, 990L, 11L, 3)).thenReturn(List.of(
+                entry(12L, 980L),
+                entry(13L, 970L)
+        ));
+        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 3)).thenReturn(List.of());
+        when(feedAuthorTimelineRepository.pageTimeline(1L, 990L, 11L, 3)).thenReturn(List.of());
+        when(contentRepository.listPostsByIds(List.of(10L, 11L))).thenReturn(List.of(
+                post(10L, 200L, 1000L, 2),
+                post(11L, 200L, 990L, 1)
+        ));
+        when(contentRepository.listPostsByIds(List.of(12L, 13L))).thenReturn(List.of(
+                post(12L, 200L, 980L, 2),
+                post(13L, 200L, 970L, 2)
+        ));
+        when(feedCardAssembleService.assemble(eq(1L), eq("FOLLOW"), any(), eq(2))).thenAnswer(invocation -> itemsFrom(invocation.getArgument(2)));
+
+        FeedTimelineVO result = feedService.timeline(1L, null, 2, "FOLLOW", "REFRESH", null, null);
+
+        assertEquals(List.of(10L, 12L), result.getItems().stream().map(FeedItemVO::getPostId).toList());
+        assertEquals(980L, result.getNextCursorTs());
+        assertEquals(12L, result.getNextCursorPostId());
+        assertTrue(result.getHasMore());
+    }
+
+    @Test
     void profile_shouldReturnEmptyWhenEitherSideBlocked() {
         when(relationRepository.findRelation(9L, 1L, 3))
                 .thenReturn(RelationEntity.builder().sourceId(9L).targetId(1L).relationType(3).status(1).build());

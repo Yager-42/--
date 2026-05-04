@@ -976,20 +976,21 @@ public class FeedService implements IFeedService {
                                                      AuthorBuckets authorBuckets,
                                                      MaxIdCursor maxIdCursor,
                                                      int normalizedLimit) {
+        int sourceLimit = normalizedLimit + 1;
         List<FeedInboxEntryVO> inboxEntries = feedTimelineRepository.pageInboxEntries(
-                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), sourceLimit
         );
 
         List<SourceCursor> sources = new ArrayList<>(2 + authorBuckets.bigvAuthors().size());
         sources.add(new SourceCursor(inboxEntries));
         for (Long authorId : authorBuckets.bigvAuthors()) {
             List<FeedInboxEntryVO> timelineEntries = feedAuthorTimelineRepository.pageTimeline(
-                    authorId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+                    authorId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), sourceLimit
             );
             sources.add(new SourceCursor(timelineEntries));
         }
         sources.add(new SourceCursor(feedAuthorTimelineRepository.pageTimeline(
-                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), normalizedLimit
+                userId, maxIdCursor.cursorTimeMs(), maxIdCursor.cursorPostId(), sourceLimit
         )));
         return mergeFollowCandidates(sources, normalizedLimit);
     }

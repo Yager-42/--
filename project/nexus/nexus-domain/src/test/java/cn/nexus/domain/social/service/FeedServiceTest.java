@@ -134,15 +134,15 @@ class FeedServiceTest {
                 200L, FeedAuthorCategoryEnumVO.NORMAL.getCode(),
                 300L, FeedAuthorCategoryEnumVO.BIGV.getCode()
         ));
-        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 2)).thenReturn(List.of(
+        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 3)).thenReturn(List.of(
                 FeedInboxEntryVO.builder().postId(12L).publishTimeMs(900L).build(),
                 FeedInboxEntryVO.builder().postId(11L).publishTimeMs(800L).build()
         ));
-        when(feedAuthorTimelineRepository.pageTimeline(300L, null, null, 2)).thenReturn(List.of(
+        when(feedAuthorTimelineRepository.pageTimeline(300L, null, null, 3)).thenReturn(List.of(
                 FeedInboxEntryVO.builder().postId(20L).publishTimeMs(900L).build(),
                 FeedInboxEntryVO.builder().postId(19L).publishTimeMs(700L).build()
         ));
-        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 2)).thenReturn(List.of(
+        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 3)).thenReturn(List.of(
                 FeedInboxEntryVO.builder().postId(30L).publishTimeMs(950L).build()
         ));
         when(contentRepository.listPostsByIds(List.of(30L, 20L))).thenReturn(List.of(
@@ -168,10 +168,10 @@ class FeedServiceTest {
         assertTrue(result.getHasMore());
         assertNull(result.getNextCursor());
         verify(feedInboxActivationService).activateIfNeeded(1L);
-        verify(feedTimelineRepository).pageInboxEntries(1L, null, null, 2);
-        verify(feedAuthorTimelineRepository).pageTimeline(300L, null, null, 2);
-        verify(feedAuthorTimelineRepository).pageTimeline(1L, null, null, 2);
-        verify(feedAuthorTimelineRepository, never()).pageTimeline(200L, null, null, 2);
+        verify(feedTimelineRepository).pageInboxEntries(1L, null, null, 3);
+        verify(feedAuthorTimelineRepository).pageTimeline(300L, null, null, 3);
+        verify(feedAuthorTimelineRepository).pageTimeline(1L, null, null, 3);
+        verify(feedAuthorTimelineRepository, never()).pageTimeline(200L, null, null, 3);
         verify(feedFollowSeenRepository, never()).markSeen(anyLong(), anyLong());
     }
 
@@ -182,14 +182,14 @@ class FeedServiceTest {
                 200L, FeedAuthorCategoryEnumVO.NORMAL.getCode(),
                 300L, FeedAuthorCategoryEnumVO.BIGV.getCode()
         ));
-        when(feedTimelineRepository.pageInboxEntries(1L, 900L, 20L, 2)).thenReturn(List.of(
+        when(feedTimelineRepository.pageInboxEntries(1L, 900L, 20L, 3)).thenReturn(List.of(
                 FeedInboxEntryVO.builder().postId(12L).publishTimeMs(900L).build(),
                 FeedInboxEntryVO.builder().postId(11L).publishTimeMs(800L).build()
         ));
-        when(feedAuthorTimelineRepository.pageTimeline(300L, 900L, 20L, 2)).thenReturn(List.of(
+        when(feedAuthorTimelineRepository.pageTimeline(300L, 900L, 20L, 3)).thenReturn(List.of(
                 FeedInboxEntryVO.builder().postId(19L).publishTimeMs(700L).build()
         ));
-        when(feedAuthorTimelineRepository.pageTimeline(1L, 900L, 20L, 2)).thenReturn(List.of());
+        when(feedAuthorTimelineRepository.pageTimeline(1L, 900L, 20L, 3)).thenReturn(List.of());
         when(contentRepository.listPostsByIds(List.of(12L, 11L))).thenReturn(List.of(
                 ContentPostEntity.builder().postId(12L).userId(200L).createTime(900L).status(2).build(),
                 ContentPostEntity.builder().postId(11L).userId(200L).createTime(800L).status(2).build()
@@ -210,9 +210,9 @@ class FeedServiceTest {
         assertEquals(800L, result.getNextCursorTs());
         assertEquals(11L, result.getNextCursorPostId());
         assertTrue(result.getHasMore());
-        verify(feedTimelineRepository).pageInboxEntries(1L, 900L, 20L, 2);
-        verify(feedAuthorTimelineRepository).pageTimeline(300L, 900L, 20L, 2);
-        verify(feedAuthorTimelineRepository).pageTimeline(1L, 900L, 20L, 2);
+        verify(feedTimelineRepository).pageInboxEntries(1L, 900L, 20L, 3);
+        verify(feedAuthorTimelineRepository).pageTimeline(300L, 900L, 20L, 3);
+        verify(feedAuthorTimelineRepository).pageTimeline(1L, 900L, 20L, 3);
         verify(feedInboxActivationService, never()).activateIfNeeded(anyLong());
     }
 
@@ -222,14 +222,14 @@ class FeedServiceTest {
         when(feedAuthorCategoryRepository.batchGetCategory(List.of(300L))).thenReturn(java.util.Map.of(
                 300L, FeedAuthorCategoryEnumVO.BIGV.getCode()
         ));
-        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 10)).thenReturn(List.of(
+        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 11)).thenReturn(List.of(
                 entry(20L, 900L)
         ));
-        when(feedAuthorTimelineRepository.pageTimeline(300L, null, null, 10)).thenReturn(List.of(
+        when(feedAuthorTimelineRepository.pageTimeline(300L, null, null, 11)).thenReturn(List.of(
                 entry(20L, 900L),
                 entry(19L, 800L)
         ));
-        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 10)).thenReturn(List.of());
+        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 11)).thenReturn(List.of());
         when(contentRepository.listPostsByIds(List.of(20L, 19L))).thenReturn(List.of(
                 post(20L, 300L, 900L, 2),
                 post(19L, 300L, 800L, 2)
@@ -253,15 +253,15 @@ class FeedServiceTest {
                 200L, FeedAuthorCategoryEnumVO.NORMAL.getCode(),
                 300L, FeedAuthorCategoryEnumVO.BIGV.getCode()
         ));
-        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 20)).thenReturn(List.of(
+        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 21)).thenReturn(List.of(
                 entry(10L, 1000L),
                 entry(11L, 990L),
                 entry(12L, 980L),
                 entry(13L, 970L),
                 entry(14L, 960L)
         ));
-        when(feedAuthorTimelineRepository.pageTimeline(300L, null, null, 20)).thenReturn(List.of());
-        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 20)).thenReturn(List.of());
+        when(feedAuthorTimelineRepository.pageTimeline(300L, null, null, 21)).thenReturn(List.of());
+        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 21)).thenReturn(List.of());
         when(contentRepository.listPostsByIds(List.of(10L, 11L, 12L, 13L, 14L))).thenReturn(List.of(
                 post(10L, 200L, 1000L, 2),
                 post(11L, 200L, 990L, 1),
@@ -290,16 +290,16 @@ class FeedServiceTest {
         when(feedAuthorCategoryRepository.batchGetCategory(List.of(200L))).thenReturn(java.util.Map.of(
                 200L, FeedAuthorCategoryEnumVO.NORMAL.getCode()
         ));
-        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 2)).thenReturn(List.of(
+        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 3)).thenReturn(List.of(
                 entry(10L, 1000L),
                 entry(11L, 990L)
         ));
-        when(feedTimelineRepository.pageInboxEntries(1L, 990L, 11L, 2)).thenReturn(List.of(
+        when(feedTimelineRepository.pageInboxEntries(1L, 990L, 11L, 3)).thenReturn(List.of(
                 entry(12L, 980L),
                 entry(13L, 970L)
         ));
-        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 2)).thenReturn(List.of());
-        when(feedAuthorTimelineRepository.pageTimeline(1L, 990L, 11L, 2)).thenReturn(List.of());
+        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 3)).thenReturn(List.of());
+        when(feedAuthorTimelineRepository.pageTimeline(1L, 990L, 11L, 3)).thenReturn(List.of());
         when(contentRepository.listPostsByIds(List.of(10L, 11L))).thenReturn(List.of(
                 post(10L, 200L, 1000L, 1),
                 post(11L, 200L, 990L, 1)
@@ -313,9 +313,34 @@ class FeedServiceTest {
         FeedTimelineVO result = feedService.timeline(1L, null, 2, "FOLLOW", "REFRESH", null, null);
 
         assertEquals(List.of(12L, 13L), result.getItems().stream().map(FeedItemVO::getPostId).toList());
-        verify(feedTimelineRepository).pageInboxEntries(1L, null, null, 2);
-        verify(feedTimelineRepository).pageInboxEntries(1L, 990L, 11L, 2);
-        verify(feedTimelineRepository, never()).pageInboxEntries(1L, 970L, 13L, 2);
+        verify(feedTimelineRepository).pageInboxEntries(1L, null, null, 3);
+        verify(feedTimelineRepository).pageInboxEntries(1L, 990L, 11L, 3);
+        verify(feedTimelineRepository, never()).pageInboxEntries(1L, 970L, 13L, 3);
+    }
+
+    @Test
+    void timeline_followShouldReportHasMoreWhenASourceHasAnotherPageBeyondLimit() {
+        when(relationAdjacencyCachePort.listFollowing(1L, 2000)).thenReturn(List.of(200L));
+        when(feedAuthorCategoryRepository.batchGetCategory(List.of(200L))).thenReturn(java.util.Map.of(
+                200L, FeedAuthorCategoryEnumVO.NORMAL.getCode()
+        ));
+        when(feedTimelineRepository.pageInboxEntries(1L, null, null, 3)).thenReturn(List.of(
+                entry(10L, 1000L),
+                entry(11L, 990L),
+                entry(12L, 980L)
+        ));
+        when(feedAuthorTimelineRepository.pageTimeline(1L, null, null, 3)).thenReturn(List.of());
+        when(contentRepository.listPostsByIds(List.of(10L, 11L))).thenReturn(List.of(
+                post(10L, 200L, 1000L, 2),
+                post(11L, 200L, 990L, 2)
+        ));
+        when(feedCardAssembleService.assemble(eq(1L), eq("FOLLOW"), any(), eq(2))).thenAnswer(invocation -> itemsFrom(invocation.getArgument(2)));
+
+        FeedTimelineVO result = feedService.timeline(1L, null, 2, "FOLLOW", "REFRESH", null, null);
+
+        assertEquals(List.of(10L, 11L), result.getItems().stream().map(FeedItemVO::getPostId).toList());
+        assertTrue(result.getHasMore());
+        verify(feedTimelineRepository).pageInboxEntries(1L, null, null, 3);
     }
 
     @Test

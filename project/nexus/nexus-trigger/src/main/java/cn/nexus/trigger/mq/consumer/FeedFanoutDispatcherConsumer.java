@@ -1,10 +1,7 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedAuthorTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import cn.nexus.domain.social.model.valobj.FeedAuthorCategoryEnumVO;
 import cn.nexus.domain.social.service.FeedAuthorCategoryStateMachine;
@@ -33,10 +30,7 @@ import org.springframework.stereotype.Component;
 public class FeedFanoutDispatcherConsumer {
 
     private final FeedFanoutTaskProducer feedFanoutTaskProducer;
-    private final IFeedTimelineRepository feedTimelineRepository;
-    private final IFeedOutboxRepository feedOutboxRepository;
-    private final IFeedBigVPoolRepository feedBigVPoolRepository;
-    private final IFeedGlobalLatestRepository feedGlobalLatestRepository;
+    private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
     private final IRelationRepository relationRepository;
     private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
     private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine;
@@ -81,28 +75,21 @@ public class FeedFanoutDispatcherConsumer {
             return;
         }
 
-        // 0) 永远写 Outbox：后续大 V 拉模式与聚合池都依赖它（幂等）
-        feedOutboxRepository.addToOutbox(authorId, postId, publishTimeMs);
+        // 0) 永远写 AuthorTimeline：作者侧发布流索引（幂等）
+        feedAuthorTimelineRepository.addToTimeline(authorId, postId, publishTimeMs);
 
-        // 1) 作者自己无条件写入 inbox：发布者体验保底（且写入天然幂等）
-        feedTimelineRepository.addToInbox(authorId, postId, publishTimeMs);
-
-        // 1.5) 写入全站 latest：推荐系统不可用时的兜底候选源（旁路，不影响 fanout 语义）
-        feedGlobalLatestRepository.addToLatest(postId, publishTimeMs);
-
-        // 2) 大 V 默认不做“全量写扩散”，避免发布一条写入海量粉丝 inbox
+        // 1) 大 V 默认不做“全量写扩散”，避免发布一条写入海量粉丝 inbox
         Integer category = feedAuthorCategoryRepository.getCategory(authorId);
         if (category == null) {
             feedAuthorCategoryStateMachine.onFollowerCountChanged(authorId);
             category = feedAuthorCategoryRepository.getCategory(authorId);
         }
         if (category != null && category == FeedAuthorCategoryEnumVO.BIGV.getCode()) {
-            feedBigVPoolRepository.addToPool(authorId, postId, publishTimeMs);
             log.info("skip fanout for bigv author, postId={}, authorId={}, category={}", postId, authorId, category);
             return;
         }
 
-        // 3) 计算切片数量并投递 fanout task（失败重试只重试某一片）
+        // 2) 计算切片数量并投递 fanout task（失败重试只重试某一片）
         int followerCount = relationRepository.countFollowerIds(authorId);
         int pageSize = Math.max(1, batchSize);
         if (followerCount <= 0) {

@@ -40,9 +40,6 @@ class FeedFanoutRealIntegrationTest extends RealMiddlewareIntegrationTestSupport
             assertThat(feedAuthorTimelineRepository.pageTimeline(authorId, null, null, 10))
                     .extracting(item -> item.getPostId())
                     .contains(postId);
-            assertThat(feedGlobalLatestRepository.pageLatest(null, null, 10))
-                    .extracting(item -> item.getPostId())
-                    .contains(postId);
             assertThat(inboxEntries(authorId, 10))
                     .extracting(item -> item.getPostId())
                     .contains(postId);

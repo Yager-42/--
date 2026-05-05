@@ -1,1204 +1,811 @@
-# Nexus Feed 关注推送简化重构实现计划
+# Nexus Feed Follow Simplification Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将关注推送索引从 4 种 Redis 结构简化为 2 种（inbox + AuthorTimeline），合并 cleanup 队列，取消 Lua 原子重建，接入关注补偿。
+**Goal:** Simplify the FOLLOW feed push index to InboxTimeline plus AuthorTimeline, remove rebuild/pool/latest ownership from FOLLOW, and keep recommendation, relation, counter, card, and reliable MQ capabilities intact.
 
-**Architecture:** 保持 Redis ZSET + RabbitMQ + repository/service 边界不变。Outbox 改名为 AuthorTimeline（新接口+新实现，旧接口标记废弃），cleanup 两个队列合并为一个，重建改为读时激活（无 Lua/锁/哨兵），关注补偿通过独立 MQ 队列接入。
+**Architecture:** Keep the current layered architecture: trigger consumes MQ and calls domain services, domain services orchestrate, repository interfaces express business storage semantics, infrastructure repositories own Redis details. AuthorTimeline is a new author-publish ZSET abstraction using `feed:timeline:{authorId}`; InboxTimeline remains the reader inbox using `feed:inbox:{userId}`. FOLLOW owns only those two ZSETs; recommendation latest fallback, card cache, relation adjacency, reliable MQ outbox, and consumer records stay outside this plan.
 
-**Tech Stack:** Java 17, Spring Boot, Redis ZSET, RabbitMQ, MyBatis-Plus, Maven.
+**Tech Stack:** Java 17, Spring Boot, Redis ZSET via `StringRedisTemplate`, RabbitMQ, MyBatis-Plus, Maven, JUnit 5, Mockito.
 
 ---
+
+## Path Correction
+
+The user-requested path `project/nexus/docs/superpowers/plans/2026-05-04-nexus-feed-simplify-design.md` does not exist. The actual implementation plan is this file:
+
+`project/nexus/docs/superpowers/plans/2026-05-04-nexus-feed-simplify-plan.md`
+
+Do not create a duplicate `*-design.md` file under `plans/`; doing so would create two competing implementation plans.
+
+## Source Of Truth
+
+Implement against:
+
+`project/nexus/docs/superpowers/specs/2026-05-04-nexus-feed-simplify-design.md`
+
+If this plan and the spec conflict, stop and update the plan before implementing. Do not silently choose either side.
 
 ## Hard Boundaries
 
-1. 只改 FOLLOW 推送索引，不动 RECOMMEND/POPULAR/NEIGHBORS/PROFILE 读入口
-2. 不动推荐 item upsert/delete 消费者和队列
-3. 不删除 `feed:global:latest` Redis key（如果推荐系统仍依赖）；只取消 FOLLOW dispatcher 对它的写入责任
-4. 不动 Count 系统、卡片缓存、关系邻接缓存、可靠 MQ outbox
-5. 不在关系写事务内同步写 Feed Redis
-6. 不引入新的基础设施（Redis Stream、CDC、新表、新 exchange）
+1. Only change FOLLOW push-index behavior.
+2. Do not change `RECOMMEND`, `POPULAR`, `NEIGHBORS`, or `PROFILE` API behavior.
+3. Do not delete recommendation latest fallback storage or repository just because FOLLOW no longer writes it.
+4. Do not modify recommendation item upsert/delete queues, recommendation feedback queues, Gorse contracts, or recommendation session keys.
+5. Do not modify Count, card cache, relation truth source, relation adjacency cache, reliable MQ outbox, or consumer record infrastructure.
+6. Do not write Feed Redis inside the relation write transaction.
+7. Do not introduce new infrastructure: no Redis Stream, CDC, new DB table, distributed transaction, or new exchange.
+8. Do not scan Redis keyspace to migrate or delete old feed keys.
+9. Do not keep or add Lua rebuild, rebuild locks, merge windows, or `__NOMORE__` sentinel logic.
 
-## Command Context
+## Naming Rules
 
-所有 `mvn`、`rg`、`git` 命令在 `project/nexus` 目录执行。
+Use these names consistently:
 
----
+- `InboxTimeline`: reader inbox, key `feed:inbox:{userId}`, existing `IFeedTimelineRepository`.
+- `AuthorTimeline`: author publish index, key `feed:timeline:{authorId}`, new `IFeedAuthorTimelineRepository`.
+- `HTTP timeline`: returned feed page from `FeedService.timeline`, not a Redis key.
+- `Outbox`: only reliable MQ outbox or legacy Redis author index. Do not use it as the new FOLLOW business name.
 
-## Implementation Map
+## File Responsibility Map
 
-### New files
+Create:
+
 - `nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedAuthorTimelineRepository.java`
+  Owns the AuthorTimeline contract only.
 - `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/config/FeedAuthorTimelineProperties.java`
+  Owns `feed.timeline.*` configuration.
 - `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepository.java`
+  Owns Redis ZSET implementation for `feed:timeline:{authorId}`.
 - `nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFollowCompensationMqConfig.java`
+  Declares an extra relation FOLLOW binding for Feed compensation. It reuses the existing relation exchange and existing FOLLOW routing key.
 - `nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumer.java`
+  Consumes relation FOLLOW events and delegates to `IFeedFollowCompensationService`.
 
-### Modified files
-- `nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFanoutConfig.java` — 合并 cleanup 队列
-- `nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java` — 拆掉 latest/pool/自写 inbox
-- `nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java` — 只清 AuthorTimeline
-- `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedInboxRebuildService.java` — 改为读时激活
-- `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedFollowCompensationService.java` — 改用 AuthorTimeline
-- `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java` — 读路径改 AuthorTimeline + self
-- `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedDistributionService.java` — 移除无用注入
-- `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedAuthorCategoryStateMachine.java` — 移除 outbox rebuild
-- `nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxRebuildService.java` — 改名为 IFeedInboxActivationService
-- `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepository.java` — 取消 Lua/锁/哨兵
+Rename:
 
-### Deleted files
-- `nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedOutboxRebuildService.java`
-- `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedOutboxRebuildService.java`
+- `IFeedInboxRebuildService` to `IFeedInboxActivationService`.
+- `FeedInboxRebuildService` to `FeedInboxActivationService`.
+- Matching tests to activation names.
 
-### Test files to modify
-- `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepositoryTest.java`
-- `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/repository/FeedOutboxRepositoryTest.java`
-- `nexus-trigger/src/test/java/cn/nexus/trigger/mq/config/FeedFanoutConfigTest.java`
-- `nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumerTest.java`
-- `nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumerTest.java`
-- `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedServiceTest.java`
-- `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedInboxRebuildServiceTest.java`
-- `nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
-- `nexus-app/src/test/java/cn/nexus/integration/FeedFanoutRealIntegrationTest.java`
-- `nexus-app/src/test/java/cn/nexus/integration/feed/FeedHttpRealIntegrationTest.java`
+Modify:
+
+- `FeedFanoutConfig`: merge feed cleanup updated/deleted queues into one queue.
+- `FeedFanoutDispatcherConsumer`: write AuthorTimeline, stop writing latest/pool/author inbox.
+- `FeedIndexCleanupConsumer`: clean only AuthorTimeline.
+- `FeedFollowCompensationService`: read AuthorTimeline, write online follower inbox only.
+- `FeedService`: FOLLOW read path uses InboxTimeline + BIGV AuthorTimeline + self AuthorTimeline and activation.
+- `FeedTimelineRepository` and `IFeedTimelineRepository`: remove replace/rebuild APIs and implementation.
+- `FeedAuthorCategoryStateMachine`: category only, no outbox rebuild.
+- `FeedDistributionService`: remove unused outbox/pool injections.
+- Tests and architecture contract inventory touched by the above.
+
+Delete:
+
+- `IFeedOutboxRebuildService`
+- `FeedOutboxRebuildService`
+
+Do not delete in this plan:
+
+- `IFeedOutboxRepository` / `FeedOutboxRepository` unless a later dedicated compatibility cleanup proves no remaining references. This plan stops using them from FOLLOW but does not require deleting them.
+- `IFeedGlobalLatestRepository` / `FeedGlobalLatestRepository`.
+- `IFeedBigVPoolRepository` / `FeedBigVPoolRepository`.
+
+## Global Implementation Rules
+
+1. Use TDD per task: write or update the focused test first, verify it fails for the intended reason, implement, verify it passes.
+2. Do not paste large classes from this plan. Edit the existing files surgically using the rules here.
+3. Keep Max-ID order stable everywhere: `publishTimeMs DESC`, tie-break `postId DESC`.
+4. Redis ZSET members are `postId` strings; scores are `publishTimeMs`.
+5. Trim ZSETs by actual `zCard`: if `size > maxSize`, remove rank `0..size-maxSize-1`. Do not use negative stop indexes as a shortcut.
+6. Use `StringRedisTemplate.getExpire(key)` as the current code does. In tests, mock it as `Long`, not `Duration`.
+7. Page methods must over-fetch by a small fixed cushion and then apply the `(cursorTimeMs, cursorPostId)` predicate in Java to handle equal-millisecond ordering.
+8. Null or malformed Redis members are skipped, not fatal.
+9. Empty activation results do not create an inbox key and do not write a sentinel.
+10. Cleanup never scans timelines and never uses operatorId as authorId.
+11. Relation follow compensation must consume the existing `RelationCounterRouting.RK_FOLLOW`; do not create a new routing key that the publisher never emits.
 
 ---
 
-## Task 1: Create AuthorTimeline Repository
+## Task 1: AuthorTimeline Repository
 
 **Files:**
 - Create: `nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedAuthorTimelineRepository.java`
 - Create: `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/config/FeedAuthorTimelineProperties.java`
 - Create: `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepository.java`
 - Create: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepositoryTest.java`
+- Modify: `nexus-app/src/main/resources/application-dev.yml`
+- Modify: `nexus-app/src/main/resources/application-docker.yml`
+- Modify: `nexus-app/src/main/resources/application-test.yml`
+- Modify: `nexus-app/src/main/resources/application-prod.yml`
 
-- [ ] **Step 1: Write FeedAuthorTimelineProperties**
+- [ ] **Step 1: Write failing repository tests**
 
-```java
-package cn.nexus.infrastructure.config;
+Cover these exact behaviors in `FeedAuthorTimelineRepositoryTest`:
 
-import lombok.Data;
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
+- `addToTimeline` ZADDs `feed:timeline:{authorId}` with member `postId`.
+- `addToTimeline` sets TTL when Redis returns no TTL.
+- `addToTimeline` trims only when `zCard > maxSize`.
+- `removeFromTimeline` ZREMs the member.
+- `pageTimeline` returns entries ordered by `publishTimeMs DESC, postId DESC`.
+- `pageTimeline` excludes the cursor item and later/equal items according to Max-ID.
+- `timelineExists` delegates to `hasKey`.
+- Null arguments are no-ops or empty results.
 
-@Data
-@Component
-@ConfigurationProperties(prefix = "feed.author.timeline")
-public class FeedAuthorTimelineProperties {
-    private int maxSize = 1000;
-    private int ttlDays = 30;
-}
-```
+Run: `mvn -pl nexus-infrastructure test -Dtest=FeedAuthorTimelineRepositoryTest`
 
-- [ ] **Step 2: Write IFeedAuthorTimelineRepository interface**
+Expected before implementation: compile failure because repository/types do not exist.
 
-File: `nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedAuthorTimelineRepository.java`
+- [ ] **Step 2: Add properties**
 
-```java
-package cn.nexus.domain.social.adapter.repository;
+Create `FeedAuthorTimelineProperties` with `@ConfigurationProperties(prefix = "feed.timeline")`, not `feed.author.timeline`.
 
-import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
-import java.util.List;
+Fields:
 
-/**
- * AuthorTimeline: 某个作者的发布索引（替代旧 outbox）。
- * key: feed:timeline:{authorId}, ZSET score=publishTimeMs, member=postId
- */
-public interface IFeedAuthorTimelineRepository {
+- `maxSize`, default `1000`
+- `ttlDays`, default `30`
 
-    void addToTimeline(Long authorId, Long postId, Long publishTimeMs);
+Add `feed.timeline.maxSize` and `feed.timeline.ttlDays` to app YAML files. Keep `feed.outbox.*` for compatibility; do not repurpose it for new code.
 
-    void removeFromTimeline(Long authorId, Long postId);
+- [ ] **Step 3: Add repository interface**
 
-    List<FeedInboxEntryVO> pageTimeline(Long authorId, Long cursorTimeMs, Long cursorPostId, int limit);
+Create `IFeedAuthorTimelineRepository` with only:
 
-    boolean timelineExists(Long authorId);
-}
-```
+- `void addToTimeline(Long authorId, Long postId, Long publishTimeMs)`
+- `void removeFromTimeline(Long authorId, Long postId)`
+- `List<FeedInboxEntryVO> pageTimeline(Long authorId, Long cursorTimeMs, Long cursorPostId, int limit)`
+- `boolean timelineExists(Long authorId)`
 
-- [ ] **Step 3: Write FeedAuthorTimelineRepositoryTest**
+No replace, rebuild, lock, Lua, sentinel, or scan methods.
 
-File: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepositoryTest.java`
+- [ ] **Step 4: Implement Redis repository**
 
-```java
-package cn.nexus.infrastructure.adapter.social.repository;
+Implement `FeedAuthorTimelineRepository` with these constraints:
 
-import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ZSetOperations;
-
-import java.time.Duration;
-import java.util.List;
-import java.util.Set;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-
-@ExtendWith(MockitoExtension.class)
-class FeedAuthorTimelineRepositoryTest {
-
-    @Mock
-    StringRedisTemplate stringRedisTemplate;
-
-    @Mock
-    ZSetOperations<String, String> zSetOperations;
-
-    @Mock
-    cn.nexus.infrastructure.config.FeedAuthorTimelineProperties properties;
-
-    @InjectMocks
-    FeedAuthorTimelineRepository repository;
-
-    @BeforeEach
-    void setUp() {
-        when(properties.getMaxSize()).thenReturn(1000);
-        when(properties.getTtlDays()).thenReturn(30);
-        when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOperations);
-        when(stringRedisTemplate.getExpire(anyString())).thenReturn(Duration.ofDays(10));
-    }
-
-    @Test
-    void addToTimeline_shouldZaddAndTrim() {
-        when(zSetOperations.add(eq("feed:timeline:1"), eq("100"), anyDouble())).thenReturn(true);
-        when(zSetOperations.removeRange(eq("feed:timeline:1"), eq(0L), eq(-1001L))).thenReturn(0L);
-
-        repository.addToTimeline(1L, 100L, 999L);
-
-        verify(zSetOperations).add(eq("feed:timeline:1"), eq("100"), anyDouble());
-        verify(zSetOperations).removeRange(eq("feed:timeline:1"), eq(0L), eq(-1001L));
-    }
-
-    @Test
-    void removeFromTimeline_shouldZrem() {
-        repository.removeFromTimeline(1L, 100L);
-        verify(zSetOperations).remove("feed:timeline:1", "100");
-    }
-
-    @Test
-    void pageTimeline_shouldUseMaxIdCursor() {
-        Set<ZSetOperations.TypedTuple<String>> mockSet = mock(Set.class);
-        when(zSetOperations.reverseRangeByScoreWithScores(
-                eq("feed:timeline:2"), anyDouble(), anyDouble(), eq(0L), eq(20L)))
-                .thenReturn(mockSet);
-        when(mockSet.iterator()).thenReturn(Collections.emptyIterator());
-
-        List<FeedInboxEntryVO> result = repository.pageTimeline(2L, 999L, 100L, 20);
-        assertThat(result).isEmpty();
-    }
-
-    @Test
-    void timelineExists_shouldReturnTrue() {
-        when(stringRedisTemplate.hasKey("feed:timeline:1")).thenReturn(true);
-        assertThat(repository.timelineExists(1L)).isTrue();
-    }
-
-    @Test
-    void timelineExists_shouldReturnFalse() {
-        when(stringRedisTemplate.hasKey("feed:timeline:1")).thenReturn(false);
-        assertThat(repository.timelineExists(1L)).isFalse();
-    }
-}
-```
-
-- [ ] **Step 4: Write FeedAuthorTimelineRepository implementation**
-
-File: `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepository.java`
-
-```java
-package cn.nexus.infrastructure.adapter.social.repository;
-
-import cn.nexus.domain.social.adapter.repository.IFeedAuthorTimelineRepository;
-import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
-import cn.nexus.infrastructure.config.FeedAuthorTimelineProperties;
-import lombok.RequiredArgsConstructor;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ZSetOperations;
-import org.springframework.stereotype.Repository;
-
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
-
-@Repository
-@RequiredArgsConstructor
-public class FeedAuthorTimelineRepository implements IFeedAuthorTimelineRepository {
-
-    private static final String KEY_PREFIX = "feed:timeline:";
-
-    private final StringRedisTemplate stringRedisTemplate;
-    private final FeedAuthorTimelineProperties properties;
-
-    @Override
-    public void addToTimeline(Long authorId, Long postId, Long publishTimeMs) {
-        if (authorId == null || postId == null || publishTimeMs == null) return;
-        String key = timelineKey(authorId);
-        stringRedisTemplate.opsForZSet().add(key, String.valueOf(postId), publishTimeMs.doubleValue());
-        expireIfNeeded(key);
-        trimToMaxSize(key);
-    }
-
-    @Override
-    public void removeFromTimeline(Long authorId, Long postId) {
-        if (authorId == null || postId == null) return;
-        stringRedisTemplate.opsForZSet().remove(timelineKey(authorId), String.valueOf(postId));
-    }
-
-    @Override
-    public List<FeedInboxEntryVO> pageTimeline(Long authorId, Long cursorTimeMs, Long cursorPostId, int limit) {
-        if (authorId == null) return List.of();
-        double maxScore = cursorTimeMs != null ? cursorTimeMs.doubleValue() : Double.POSITIVE_INFINITY;
-        double minScore = 0.0;
-        int safeLimit = Math.max(1, Math.min(limit, properties.getMaxSize()));
-        Set<ZSetOperations.TypedTuple<String>> raw = stringRedisTemplate.opsForZSet()
-                .reverseRangeByScoreWithScores(timelineKey(authorId), minScore, maxScore, 0, safeLimit);
-        if (raw == null || raw.isEmpty()) return List.of();
-        List<FeedInboxEntryVO> result = new ArrayList<>(raw.size());
-        for (ZSetOperations.TypedTuple<String> t : raw) {
-            if (t == null || t.getValue() == null) continue;
-            long postId = parseLong(t.getValue());
-            if (postId == 0L) continue;
-            long ts = (long) t.getScore();
-            if (cursorTimeMs != null && ts == cursorTimeMs && postId >= cursorPostId) continue;
-            result.add(FeedInboxEntryVO.builder().postId(postId).publishTimeMs(ts).build());
-        }
-        return result;
-    }
-
-    @Override
-    public boolean timelineExists(Long authorId) {
-        if (authorId == null) return false;
-        return Boolean.TRUE.equals(stringRedisTemplate.hasKey(timelineKey(authorId)));
-    }
-
-    private String timelineKey(Long authorId) {
-        return KEY_PREFIX + authorId;
-    }
-
-    private void expireIfNeeded(String key) {
-        Long ttl = stringRedisTemplate.getExpire(key);
-        if (ttl != null && ttl < 0) {
-            stringRedisTemplate.expire(key, Duration.ofDays(properties.getTtlDays()));
-        }
-    }
-
-    private void trimToMaxSize(String key) {
-        int maxSize = Math.max(1, properties.getMaxSize());
-        stringRedisTemplate.opsForZSet().removeRange(key, 0, -(maxSize + 1L));
-    }
-
-    private long parseLong(String s) {
-        try {
-            return Long.parseLong(s);
-        } catch (NumberFormatException e) {
-            return 0L;
-        }
-    }
-}
-```
+- Key prefix exactly `feed:timeline:`.
+- `addToTimeline` uses `opsForZSet().add`, then TTL, then trim.
+- TTL follows existing `FeedTimelineRepository.expireIfNeeded` semantics.
+- Trim follows actual-cardinality rule from Global Implementation Rules.
+- `pageTimeline` mirrors current Max-ID logic in `FeedOutboxRepository.pageOutbox` but uses `feed:timeline:*` and no rebuild helpers.
+- Do not copy `replaceOutbox`, tmp keys, lock keys, or Lua script.
 
 - [ ] **Step 5: Verify**
 
-Run: `mvn -pl nexus-infrastructure test -Dtest="FeedAuthorTimelineRepositoryTest"`
-Expected: PASS
+Run: `mvn -pl nexus-infrastructure test -Dtest=FeedAuthorTimelineRepositoryTest`
+
+Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
+Run:
+
 ```bash
-git add nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedAuthorTimelineRepository.java \
-        nexus-infrastructure/src/main/java/cn/nexus/infrastructure/config/FeedAuthorTimelineProperties.java \
-        nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepository.java \
-        nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepositoryTest.java
-git commit -m "feat: add AuthorTimeline repository replacing outbox"
+git add nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedAuthorTimelineRepository.java nexus-infrastructure/src/main/java/cn/nexus/infrastructure/config/FeedAuthorTimelineProperties.java nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepository.java nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/repository/FeedAuthorTimelineRepositoryTest.java nexus-app/src/main/resources/application-dev.yml nexus-app/src/main/resources/application-docker.yml nexus-app/src/main/resources/application-test.yml nexus-app/src/main/resources/application-prod.yml
+git commit -m "feat: add feed author timeline repository"
 ```
 
 ---
 
-## Task 2: Add Follow Compensation MQ Topology
+## Task 2: Follow Compensation MQ Topology
 
 **Files:**
 - Create: `nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFollowCompensationMqConfig.java`
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/RelationCounterRouting.java`
+- Create: `nexus-trigger/src/test/java/cn/nexus/trigger/mq/config/FeedFollowCompensationMqConfigTest.java`
 
-- [ ] **Step 1: Add FOLLOW_COMPENSATE routing constant to RelationCounterRouting**
+- [ ] **Step 1: Write failing topology test**
 
-Edit `RelationCounterRouting.java`, add after `Q_BLOCK`:
+Create or update a focused test that asserts:
 
-```java
-/** RoutingKey：关注 Feed 补偿 */
-public static final String RK_FOLLOW_COMPENSATE = "relation.counter.follow.compensate";
+- Queue name is `relation.counter.follow.feed.compensate.queue`.
+- DLQ name is `relation.counter.follow.feed.compensate.dlq.queue`.
+- The queue binds to existing `RelationCounterRouting.EXCHANGE`.
+- The binding routing key is existing `RelationCounterRouting.RK_FOLLOW`.
+- The DLQ binding uses `RelationCounterRouting.DLX_EXCHANGE`.
 
-/** Queue：关注 Feed 补偿队列 */
-public static final String Q_FOLLOW_COMPENSATE = "relation.counter.follow.compensate.queue";
+Run: `mvn -pl nexus-trigger test -Dtest=FeedFollowCompensationMqConfigTest`
 
-/** DLQ：关注 Feed 补偿死信队列 */
-public static final String DLQ_FOLLOW_COMPENSATE = "relation.counter.follow.compensate.dlq.queue";
+Expected before implementation: compile failure because config/constants do not exist.
 
-/** DLX RoutingKey：关注 Feed 补偿 */
-public static final String RK_FOLLOW_COMPENSATE_DLX = "relation.counter.follow.compensate.dlx";
-```
+- [ ] **Step 2: Add queue constants only**
 
-- [ ] **Step 2: Write FeedFollowCompensationMqConfig**
+In `RelationCounterRouting`, add:
 
-File: `nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFollowCompensationMqConfig.java`
+- `Q_FOLLOW_FEED_COMPENSATE`
+- `DLQ_FOLLOW_FEED_COMPENSATE`
+- `RK_FOLLOW_FEED_COMPENSATE_DLX`
 
-```java
-package cn.nexus.trigger.mq.config;
+Do not add a new normal routing key. The publisher emits `RK_FOLLOW`; a new normal routing key would never receive messages.
 
-import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
-import org.springframework.amqp.core.Binding;
-import org.springframework.amqp.core.BindingBuilder;
-import org.springframework.amqp.core.DirectExchange;
-import org.springframework.amqp.core.Queue;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+- [ ] **Step 3: Add topology config**
 
-import java.util.HashMap;
-import java.util.Map;
+Create `FeedFollowCompensationMqConfig`.
 
-/**
- * Feed 关注补偿 MQ 拓扑：消费 relation exchange 的 FOLLOW 事件，补偿写入 inbox。
- */
-@Configuration
-public class FeedFollowCompensationMqConfig {
+Rules:
 
-    @Bean
-    public Queue feedFollowCompensateQueue() {
-        Map<String, Object> args = new HashMap<>();
-        args.put("x-dead-letter-exchange", RelationCounterRouting.DLX_EXCHANGE);
-        args.put("x-dead-letter-routing-key", RelationCounterRouting.RK_FOLLOW_COMPENSATE_DLX);
-        return new Queue(RelationCounterRouting.Q_FOLLOW_COMPENSATE, true, false, false, args);
-    }
+- Reuse existing `relationExchange` and `relationDlxExchange` beans.
+- Bind compensation queue to `RelationCounterRouting.RK_FOLLOW`.
+- Configure dead-letter routing to `RK_FOLLOW_FEED_COMPENSATE_DLX`.
+- This queue is not part of `social.feed` and must not change `FeedFanoutConfig`.
 
-    @Bean
-    public Queue feedFollowCompensateDlqQueue() {
-        return new Queue(RelationCounterRouting.DLQ_FOLLOW_COMPENSATE, true);
-    }
+- [ ] **Step 4: Verify**
 
-    @Bean
-    public Binding feedFollowCompensateBinding(
-            @Qualifier("feedFollowCompensateQueue") Queue queue,
-            @Qualifier("relationExchange") DirectExchange exchange) {
-        return BindingBuilder.bind(queue).to(exchange).with(RelationCounterRouting.RK_FOLLOW_COMPENSATE);
-    }
+Run: `mvn -pl nexus-trigger test -Dtest=FeedFollowCompensationMqConfigTest`
 
-    @Bean
-    public Binding feedFollowCompensateDlqBinding(
-            @Qualifier("feedFollowCompensateDlqQueue") Queue queue,
-            @Qualifier("relationDlxExchange") DirectExchange dlxExchange) {
-        return BindingBuilder.bind(queue).to(dlxExchange).with(RelationCounterRouting.RK_FOLLOW_COMPENSATE_DLX);
-    }
-}
-```
+Expected: PASS.
 
-- [ ] **Step 3: Verify**
+- [ ] **Step 5: Commit**
 
-Run: `mvn -pl nexus-trigger compile`
-Expected: BUILD SUCCESS
-
-- [ ] **Step 4: Commit**
+Run:
 
 ```bash
-git add nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/RelationCounterRouting.java \
-        nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFollowCompensationMqConfig.java
-git commit -m "feat: add follow feed compensation mq topology"
+git add nexus-domain/src/main/java/cn/nexus/domain/social/model/valobj/RelationCounterRouting.java nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFollowCompensationMqConfig.java nexus-trigger/src/test/java/cn/nexus/trigger/mq/config/FeedFollowCompensationMqConfigTest.java
+git commit -m "feat: add feed follow compensation queue"
 ```
 
 ---
 
-## Task 3: Create FollowFeedCompensationConsumer
+## Task 3: Follow Compensation Consumer
 
 **Files:**
 - Create: `nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumer.java`
 - Create: `nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumerTest.java`
 
-- [ ] **Step 1: Write FollowFeedCompensationConsumerTest**
+- [ ] **Step 1: Write failing consumer tests**
 
-File: `nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumerTest.java`
+Cover:
 
-```java
-package cn.nexus.trigger.mq.consumer;
+- `ACTIVE` calls `IFeedFollowCompensationService.onFollow(sourceId, targetId)`.
+- `UNFOLLOW` calls `onUnfollow(sourceId, targetId)`.
+- Null event, sourceId, or targetId skips.
+- Blank or unknown status skips.
+- Consumer uses compensation queue constant, not relation counter queue.
 
-import cn.nexus.domain.social.service.IFeedFollowCompensationService;
-import cn.nexus.types.event.relation.RelationCounterProjectEvent;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+Run: `mvn -pl nexus-trigger test -Dtest=FollowFeedCompensationConsumerTest`
 
-import static org.mockito.Mockito.*;
+Expected before implementation: compile failure because consumer does not exist.
 
-@ExtendWith(MockitoExtension.class)
-class FollowFeedCompensationConsumerTest {
+- [ ] **Step 2: Implement consumer**
 
-    @Mock IFeedFollowCompensationService compensationService;
-    @InjectMocks FollowFeedCompensationConsumer consumer;
+Rules:
 
-    @Test
-    void onFollowActive_shouldCallOnFollow() {
-        RelationCounterProjectEvent event = new RelationCounterProjectEvent();
-        event.setSourceId(1L);
-        event.setTargetId(2L);
-        event.setStatus("ACTIVE");
-        consumer.onFollowEvent(event);
-        verify(compensationService).onFollow(1L, 2L);
-    }
-
-    @Test
-    void onUnfollow_shouldCallOnUnfollow() {
-        RelationCounterProjectEvent event = new RelationCounterProjectEvent();
-        event.setSourceId(1L);
-        event.setTargetId(2L);
-        event.setStatus("UNFOLLOW");
-        consumer.onFollowEvent(event);
-        verify(compensationService).onUnfollow(1L, 2L);
-    }
-
-    @Test
-    void nullSourceOrTarget_shouldSkip() {
-        RelationCounterProjectEvent event = new RelationCounterProjectEvent();
-        event.setStatus("ACTIVE");
-        consumer.onFollowEvent(event);
-        verifyNoInteractions(compensationService);
-    }
-}
-```
-
-- [ ] **Step 2: Write FollowFeedCompensationConsumer**
-
-File: `nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumer.java`
-
-```java
-package cn.nexus.trigger.mq.consumer;
-
-import cn.nexus.domain.social.model.valobj.RelationCounterRouting;
-import cn.nexus.domain.social.service.IFeedFollowCompensationService;
-import cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume;
-import cn.nexus.types.event.relation.RelationCounterProjectEvent;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.stereotype.Component;
-
-@Slf4j
-@Component
-@RequiredArgsConstructor
-public class FollowFeedCompensationConsumer {
-
-    private final IFeedFollowCompensationService compensationService;
-
-    @RabbitListener(queues = RelationCounterRouting.Q_FOLLOW_COMPENSATE, containerFactory = "reliableMqListenerContainerFactory")
-    @ReliableMqConsume(consumerName = "FollowFeedCompensationConsumer", eventId = "#event.relationEventId", payload = "#event")
-    public void onFollowEvent(RelationCounterProjectEvent event) {
-        if (event == null || event.getSourceId() == null || event.getTargetId() == null) return;
-        String status = event.getStatus() == null ? "" : event.getStatus().trim().toUpperCase();
-        if ("ACTIVE".equals(status)) {
-            compensationService.onFollow(event.getSourceId(), event.getTargetId());
-        } else if ("UNFOLLOW".equals(status)) {
-            compensationService.onUnfollow(event.getSourceId(), event.getTargetId());
-        }
-    }
-}
-```
+- `@RabbitListener` queue is `RelationCounterRouting.Q_FOLLOW_FEED_COMPENSATE`.
+- Use `reliableMqListenerContainerFactory`.
+- Use `@ReliableMqConsume` with stable consumer name `FollowFeedCompensationConsumer`.
+- Event id expression must prefer `event.eventId` if available; do not use only `relationEventId` because it can be null in fallback paths.
+- Do not call relation repository, counter service, or adjacency cache here.
+- Do not catch and swallow compensation exceptions; retry/DLQ should work.
 
 - [ ] **Step 3: Verify**
 
-Run: `mvn -pl nexus-trigger test -Dtest="FollowFeedCompensationConsumerTest"`
-Expected: PASS
+Run: `mvn -pl nexus-trigger test -Dtest=FollowFeedCompensationConsumerTest`
+
+Expected: PASS.
 
 - [ ] **Step 4: Commit**
 
+Run:
+
 ```bash
-git add nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumer.java \
-        nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumerTest.java
-git commit -m "feat: add follow feed compensation consumer"
+git add nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumer.java nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumerTest.java
+git commit -m "feat: consume follow events for feed compensation"
 ```
 
 ---
 
-## Task 4: Merge Cleanup Queues into Single Queue
+## Task 4: Merge Feed Cleanup Queues
 
 **Files:**
 - Modify: `nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFanoutConfig.java`
 - Modify: `nexus-trigger/src/test/java/cn/nexus/trigger/mq/config/FeedFanoutConfigTest.java`
 
-- [ ] **Step 1: Update FeedFanoutConfig constants**
+- [ ] **Step 1: Update failing config test**
 
-In `FeedFanoutConfig.java`, replace the two cleanup queue constants and their DLQ constants with a single set:
+Assert:
 
-```java
-/** Queue：Feed 索引清理队列（consumes both post.updated and post.deleted） */
-public static final String Q_FEED_INDEX_CLEANUP = "feed.index.cleanup.queue";
+- One business queue constant: `Q_FEED_INDEX_CLEANUP = "feed.index.cleanup.queue"`.
+- One DLQ constant: `DLQ_FEED_INDEX_CLEANUP = "feed.index.cleanup.dlq.queue"`.
+- `post.updated` and `post.deleted` both bind to the same queue bean.
+- One cleanup DLQ binding exists.
+- Old updated/deleted cleanup queue constants are gone.
 
-/** DLQ：Feed 索引清理死信队列 */
-public static final String DLQ_FEED_INDEX_CLEANUP = "feed.index.cleanup.dlq.queue";
+Run: `mvn -pl nexus-trigger test -Dtest=FeedFanoutConfigTest`
 
-/** DLX RoutingKey：Feed 索引清理死信路由键 */
-public static final String DLX_ROUTING_KEY_FEED_INDEX_CLEANUP = "feed.index.cleanup.dlx";
-```
+Expected before implementation: FAIL or compile failure due to old constants.
 
-Remove: `Q_FEED_INDEX_CLEANUP_UPDATED`, `Q_FEED_INDEX_CLEANUP_DELETED`, `DLQ_FEED_INDEX_CLEANUP_UPDATED`, `DLQ_FEED_INDEX_CLEANUP_DELETED`, `DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_UPDATED`, `DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_DELETED`.
+- [ ] **Step 2: Modify `FeedFanoutConfig`**
 
-- [ ] **Step 2: Update queue beans**
+Rules:
 
-Replace `feedIndexCleanupUpdatedQueue()` and `feedIndexCleanupDeletedQueue()` with:
+- Replace updated/deleted cleanup queue and DLQ constants with one cleanup queue and one cleanup DLQ.
+- Keep `RK_POST_UPDATED` and `RK_POST_DELETED`.
+- Bind the single cleanup queue to both routing keys.
+- Keep distinct method names for the two business bindings.
+- Remove old cleanup queue beans and old cleanup DLQ beans.
+- Do not touch recommendation item queues.
 
-```java
-@Bean
-public Queue feedIndexCleanupQueue() {
-    Map<String, Object> args = new HashMap<>();
-    args.put("x-dead-letter-exchange", DLX_EXCHANGE);
-    args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY_FEED_INDEX_CLEANUP);
-    return new Queue(Q_FEED_INDEX_CLEANUP, true, false, false, args);
-}
-```
+- [ ] **Step 3: Verify**
 
-Replace two DLQ beans with:
+Run: `mvn -pl nexus-trigger test -Dtest=FeedFanoutConfigTest`
 
-```java
-@Bean
-public Queue feedIndexCleanupDlqQueue() {
-    return new Queue(DLQ_FEED_INDEX_CLEANUP, true);
-}
-```
+Expected: PASS.
 
-- [ ] **Step 3: Update bindings**
+- [ ] **Step 4: Commit**
 
-Replace `feedIndexCleanupUpdatedBinding` and `feedIndexCleanupDeletedBinding` with:
-
-```java
-@Bean
-public Binding feedIndexCleanupBinding(@Qualifier("feedIndexCleanupQueue") Queue queue,
-                                        @Qualifier("feedExchange") DirectExchange exchange) {
-    return BindingBuilder.bind(queue).to(exchange).with(RK_POST_UPDATED);
-}
-
-@Bean
-public Binding feedIndexCleanupDeletedBinding(@Qualifier("feedIndexCleanupQueue") Queue queue,
-                                               @Qualifier("feedExchange") DirectExchange exchange) {
-    return BindingBuilder.bind(queue).to(exchange).with(RK_POST_DELETED);
-}
-```
-
-Replace two DLQ bindings with:
-
-```java
-@Bean
-public Binding feedIndexCleanupDlqBinding(@Qualifier("feedIndexCleanupDlqQueue") Queue queue,
-                                           @Qualifier("feedDlxExchange") DirectExchange dlxExchange) {
-    return BindingBuilder.bind(queue).to(dlxExchange).with(DLX_ROUTING_KEY_FEED_INDEX_CLEANUP);
-}
-```
-
-- [ ] **Step 4: Update FeedFanoutConfigTest**
-
-Update `indexCleanupQueuesBindUpdatedAndDeletedSeparately` to verify the single queue with two routing keys:
-
-```java
-@Test
-void indexCleanupQueueBindsBothUpdatedAndDeletedToSingleQueue() {
-    // Single queue bound with both post.updated and post.deleted routing keys
-    assertThat(config.Q_FEED_INDEX_CLEANUP).isEqualTo("feed.index.cleanup.queue");
-    assertThat(config.DLQ_FEED_INDEX_CLEANUP).isEqualTo("feed.index.cleanup.dlq.queue");
-}
-```
-
-- [ ] **Step 5: Verify**
-
-Run: `mvn -pl nexus-trigger test -Dtest="FeedFanoutConfigTest"`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
+Run:
 
 ```bash
-git add nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFanoutConfig.java \
-        nexus-trigger/src/test/java/cn/nexus/trigger/mq/config/FeedFanoutConfigTest.java
-git commit -m "refactor: merge feed index cleanup queues into single queue"
+git add nexus-trigger/src/main/java/cn/nexus/trigger/mq/config/FeedFanoutConfig.java nexus-trigger/src/test/java/cn/nexus/trigger/mq/config/FeedFanoutConfigTest.java
+git commit -m "refactor: merge feed index cleanup queues"
 ```
 
 ---
 
-## Task 5: Simplify FeedIndexCleanupConsumer
+## Task 5: Simplify Cleanup Consumer
 
 **Files:**
 - Modify: `nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java`
 - Modify: `nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumerTest.java`
 
-- [ ] **Step 1: Rewrite FeedIndexCleanupConsumer**
+- [ ] **Step 1: Update failing tests**
 
-Replace the entire class with the simplified version. Key changes:
-- Both `onUpdated` and `onDeleted` listen on `Q_FEED_INDEX_CLEANUP`
-- Remove `IFeedBigVPoolRepository` and `IFeedGlobalLatestRepository` dependencies
-- `cleanupIfInvisible` only calls `removeFromTimeline` (not pool or latest)
-- `consumerName` for both methods must differ
+Cover:
 
-```java
-@Slf4j
-@Component
-@RequiredArgsConstructor
-public class FeedIndexCleanupConsumer {
+- Both update and delete listeners use `FeedFanoutConfig.Q_FEED_INDEX_CLEANUP`.
+- Invalid payload throws `ReliableMqPermanentFailureException`.
+- DB null logs/skips and does not remove timeline.
+- PUBLISHED post does not remove timeline.
+- Non-PUBLISHED post removes `feedAuthorTimelineRepository.removeFromTimeline(post.userId, postId)`.
+- Lookup exception propagates for retry.
+- No interactions with BigV pool or global latest repositories.
 
-    private final IContentRepository contentRepository;
-    private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
+Run: `mvn -pl nexus-trigger test -Dtest=FeedIndexCleanupConsumerTest`
 
-    @RabbitListener(queues = FeedFanoutConfig.Q_FEED_INDEX_CLEANUP, containerFactory = "reliableMqListenerContainerFactory")
-    @ReliableMqConsume(consumerName = "FeedIndexCleanupUpdatedConsumer", eventId = "#event.eventId", payload = "#event")
-    public void onUpdated(PostUpdatedEvent event) {
-        validate(event == null ? null : event.getEventId(), event == null ? null : event.getPostId(),
-                "feed index cleanup updated payload invalid");
-        cleanupIfInvisible(event.getPostId());
-    }
+Expected before implementation: FAIL due to old queue/dependencies.
 
-    @RabbitListener(queues = FeedFanoutConfig.Q_FEED_INDEX_CLEANUP, containerFactory = "reliableMqListenerContainerFactory")
-    @ReliableMqConsume(consumerName = "FeedIndexCleanupDeletedConsumer", eventId = "#event.eventId", payload = "#event")
-    public void onDeleted(PostDeletedEvent event) {
-        validate(event == null ? null : event.getEventId(), event == null ? null : event.getPostId(),
-                "feed index cleanup deleted payload invalid");
-        cleanupIfInvisible(event.getPostId());
-    }
+- [ ] **Step 2: Modify consumer**
 
-    private void cleanupIfInvisible(Long postId) {
-        ContentPostEntity post = contentRepository.findPostBypassCache(postId);
-        if (post == null) {
-            log.warn("feed index cleanup: post not found in DB, postId={}, skipping authorTimeline removal", postId);
-            return;
-        }
-        if (Integer.valueOf(ContentPostStatusEnumVO.PUBLISHED.getCode()).equals(post.getStatus())) {
-            return;
-        }
-        Long authorId = post.getUserId();
-        try {
-            feedAuthorTimelineRepository.removeFromTimeline(authorId, postId);
-        } catch (Exception e) {
-            log.warn("feed index cleanup remove authorTimeline failed, authorId={}, postId={}", authorId, postId, e);
-        }
-    }
+Rules:
 
-    private void validate(String eventId, Long postId, String message) {
-        if (eventId == null || eventId.isBlank() || postId == null) {
-            throw new ReliableMqPermanentFailureException(message);
-        }
-    }
-}
-```
-
-- [ ] **Step 2: Rewrite FeedIndexCleanupConsumerTest**
-
-Key test scenarios (replace all existing tests):
-
-```java
-@Test void onUpdated_invalidPayloadThrowsPermanentFailure() { /* unchanged */ }
-@Test void onDeleted_invalidPayloadThrowsPermanentFailure() { /* unchanged */ }
-@Test void onDeleted_dbNullDoesNotRemoveTimeline() { /* DB null → skip, warn */ }
-@Test void onUpdated_publishedPostDoesNotRemoveTimeline() { /* status=2 → no-op */ }
-@Test void onUpdated_nonPublishedPostRemovesTimelineByDbAuthor() { /* status≠2 → removeFromTimeline */ }
-@Test void onUpdated_contentLookupFailureRethrowsForRetry() { /* unchanged */ }
-```
+- Inject `IFeedAuthorTimelineRepository`.
+- Remove `IFeedOutboxRepository`, `IFeedBigVPoolRepository`, and `IFeedGlobalLatestRepository`.
+- Update both listener queue constants to the single cleanup queue.
+- Keep separate `@ReliableMqConsume.consumerName` values for updated and deleted methods.
+- If `findPostBypassCache(postId)` returns null, log and return.
+- Never scan all timelines and never use operatorId.
+- Do not remove inbox entries here.
 
 - [ ] **Step 3: Verify**
 
-Run: `mvn -pl nexus-trigger test -Dtest="FeedIndexCleanupConsumerTest"`
-Expected: PASS
+Run: `mvn -pl nexus-trigger test -Dtest=FeedIndexCleanupConsumerTest`
+
+Expected: PASS.
 
 - [ ] **Step 4: Commit**
 
+Run:
+
 ```bash
-git add nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java \
-        nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumerTest.java
-git commit -m "refactor: simplify cleanup consumer to only remove authorTimeline"
+git add nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumerTest.java
+git commit -m "refactor: cleanup only author timeline"
 ```
 
 ---
 
-## Task 6: Simplify FeedFanoutDispatcherConsumer
+## Task 6: Simplify Fanout Dispatcher
 
 **Files:**
 - Modify: `nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java`
 - Modify: `nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumerTest.java`
 
-- [ ] **Step 1: Rewrite dispatch method**
+- [ ] **Step 1: Update failing tests**
 
-Key changes in `FeedFanoutDispatcherConsumer`:
-- Remove `IFeedBigVPoolRepository`, `IFeedGlobalLatestRepository` dependencies
-- Replace `IFeedOutboxRepository` with `IFeedAuthorTimelineRepository`
-- Remove `addToInbox(author)` — author sees own posts via AuthorTimeline merge in read path
-- Remove `addToLatest`
-- Remove `addToPool` and bigV pool write
-- `addToOutbox` → `addToTimeline`
-- Keep `IFeedTimelineRepository` for fanout to followers
+Cover:
 
-```java
-@Slf4j
-@Component
-@RequiredArgsConstructor
-public class FeedFanoutDispatcherConsumer {
+- Every valid published event writes AuthorTimeline.
+- Dispatcher never writes author inbox.
+- Dispatcher never writes latest.
+- Dispatcher never writes BigV pool.
+- BigV author writes AuthorTimeline and does not publish fanout tasks.
+- NORMAL author writes AuthorTimeline and publishes expected fanout tasks.
+- Invalid event still throws permanent failure.
 
-    private final FeedFanoutTaskProducer feedFanoutTaskProducer;
-    private final IFeedTimelineRepository feedTimelineRepository;
-    private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
-    private final IRelationRepository relationRepository;
-    private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
-    private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine;
+Run: `mvn -pl nexus-trigger test -Dtest=FeedFanoutDispatcherConsumerTest`
 
-    @Value("${feed.fanout.batchSize:200}")
-    private int batchSize;
+Expected before implementation: FAIL due to old behavior.
 
-    @Value("${feed.bigv.followerThreshold:500000}")
-    private int bigvFollowerThreshold;
+- [ ] **Step 2: Modify dispatcher**
 
-    @RabbitListener(queues = FeedFanoutConfig.QUEUE, containerFactory = "reliableMqListenerContainerFactory")
-    @ReliableMqConsume(consumerName = "FeedFanoutDispatcherConsumer", eventId = "#event.eventId", payload = "#event")
-    public void onMessage(PostPublishedEvent event) {
-        if (event == null || event.getPostId() == null || event.getAuthorId() == null
-                || event.getPublishTimeMs() == null || event.getEventId() == null || event.getEventId().isBlank()) {
-            throw new ReliableMqPermanentFailureException("feed fanout dispatch payload invalid");
-        }
-        dispatch(event);
-    }
+Rules:
 
-    private void dispatch(PostPublishedEvent event) {
-        if (event == null) return;
-        Long postId = event.getPostId();
-        Long authorId = event.getAuthorId();
-        Long publishTimeMs = event.getPublishTimeMs();
-        if (postId == null || authorId == null || publishTimeMs == null) return;
-
-        // Write to author's own timeline (replaces old outbox)
-        feedAuthorTimelineRepository.addToTimeline(authorId, postId, publishTimeMs);
-
-        // Big V: skip fanout; readers pull from AuthorTimeline
-        Integer category = feedAuthorCategoryRepository.getCategory(authorId);
-        if (category == null) {
-            feedAuthorCategoryStateMachine.onFollowerCountChanged(authorId);
-            category = feedAuthorCategoryRepository.getCategory(authorId);
-        }
-        if (category != null && category == FeedAuthorCategoryEnumVO.BIGV.getCode()) {
-            log.info("skip fanout for bigv author, postId={}, authorId={}", postId, authorId);
-            return;
-        }
-
-        // Normal author: fanout to followers
-        int followerCount = relationRepository.countFollowerIds(authorId);
-        int pageSize = Math.max(1, batchSize);
-        if (followerCount <= 0) return;
-        int slices = (followerCount + pageSize - 1) / pageSize;
-        for (int i = 0; i < slices; i++) {
-            int offset = i * pageSize;
-            String taskEventId = (event.getEventId() == null ? "feed-fanout" : event.getEventId()) + ":" + offset + ":" + pageSize;
-            FeedFanoutTask task = new FeedFanoutTask(taskEventId, postId, authorId, publishTimeMs, offset, pageSize);
-            feedFanoutTaskProducer.publish(task);
-        }
-        log.info("feed fanout dispatched, postId={}, authorId={}, totalFollowers={}, slices={}",
-                postId, authorId, followerCount, slices);
-    }
-}
-```
-
-- [ ] **Step 2: Update FeedFanoutDispatcherConsumerTest**
-
-Update test to:
-- Remove `IFeedBigVPoolRepository`, `IFeedGlobalLatestRepository` mocks
-- Replace `IFeedOutboxRepository` mock with `IFeedAuthorTimelineRepository`
-- Remove assertions for `addToInbox(author)`, `addToLatest`, `addToPool`
-- Assert `feedAuthorTimelineRepository.addToTimeline(authorId, postId, publishTimeMs)` is called
+- Replace `IFeedOutboxRepository` with `IFeedAuthorTimelineRepository`.
+- Remove `IFeedBigVPoolRepository` and `IFeedGlobalLatestRepository`.
+- Keep `IFeedTimelineRepository` only if the class still needs online/fanout helpers; otherwise remove it.
+- First valid write is `addToTimeline(authorId, postId, publishTimeMs)`.
+- Do not call `addToInbox(authorId, ...)`.
+- Do not call `addToLatest`.
+- Do not call `addToPool`.
+- Category miss may call `FeedAuthorCategoryStateMachine.onFollowerCountChanged`, but that state machine must not rebuild timeline.
 
 - [ ] **Step 3: Verify**
 
-Run: `mvn -pl nexus-trigger test -Dtest="FeedFanoutDispatcherConsumerTest"`
-Expected: PASS
+Run: `mvn -pl nexus-trigger test -Dtest=FeedFanoutDispatcherConsumerTest`
+
+Expected: PASS.
 
 - [ ] **Step 4: Commit**
 
+Run:
+
 ```bash
-git add nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java \
-        nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumerTest.java
-git commit -m "refactor: simplify dispatcher to use AuthorTimeline, remove latest/pool/author-inbox"
+git add nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java nexus-trigger/src/test/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumerTest.java
+git commit -m "refactor: write author timeline from feed dispatcher"
 ```
 
 ---
 
-## Task 7: Replace Inbox Rebuild with Activation
+## Task 7: Replace Inbox Rebuild With Activation
 
 **Files:**
-- Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxRebuildService.java`
-- Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedInboxRebuildService.java`
+- Rename: `nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxRebuildService.java` to `nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxActivationService.java`
+- Rename: `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedInboxRebuildService.java` to `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedInboxActivationService.java`
+- Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedTimelineRepository.java`
 - Modify: `nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepository.java`
-- Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedInboxRebuildServiceTest.java`
-- Modify: `nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepositoryTest.java`
+- Rename/modify tests for rebuild and timeline repository.
+- Rename: `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedInboxRebuildServiceTest.java` to `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedInboxActivationServiceTest.java`
 
-- [ ] **Step 1: Rename interface to IFeedInboxActivationService**
+- [ ] **Step 1: Update failing activation tests**
 
-Rename `IFeedInboxRebuildService.java` to `IFeedInboxActivationService.java`. Change `forceRebuild` to `activateIfNeeded`:
+Cover:
 
-```java
-package cn.nexus.domain.social.service;
+- `activateIfNeeded` skips when inbox exists.
+- On inbox miss, activation reads self plus all followings from AuthorTimeline.
+- NORMAL and BIGV followings are both included.
+- Activation writes top merged entries to inbox with Max-ID ordering.
+- Empty merged result does not write inbox and does not create sentinel.
+- No DB `listUserPosts` dependency is used.
+- No `replaceInbox` call is used.
 
-/**
- * Inbox 激活服务：离线用户回归时，从关注者 AuthorTimeline 拉取内容写入 inbox。
- * 不做 Lua 原子替换、不写哨兵、不加重建锁。
- */
-public interface IFeedInboxActivationService {
+Run: `mvn -pl nexus-domain test -Dtest=FeedInboxActivationServiceTest`
 
-    /**
-     * 仅在 inbox key miss 时激活：从所有关注者的 AuthorTimeline 拉取第一页并写回 inbox。
-     *
-     * @return true if activation was performed
-     */
-    boolean activateIfNeeded(Long userId);
-}
-```
+Expected before implementation: compile failure or failing old behavior.
 
-- [ ] **Step 2: Rewrite FeedInboxRebuildService → FeedInboxActivationService**
+- [ ] **Step 2: Rename service and interface**
 
-Rename class to `FeedInboxActivationService`, implements `IFeedInboxActivationService`.
+Rules:
 
-Key changes:
-- Dependencies: replace `IContentRepository` with `IFeedAuthorTimelineRepository`
-- `activateIfNeeded`: if inbox doesn't exist, pull from ALL followees' AuthorTimeline (NORMAL + BIGV), merge, write to inbox via ZADD (not replaceInbox)
-- No Lua, no lock, no `__NOMORE__`, no `replaceInbox` call
-- No DB `listUserPosts` calls — all from AuthorTimeline
-- `activateIfNeeded` replaces `rebuildIfNeeded` (same trigger: inbox miss on FOLLOW refresh)
-- Remove `forceRebuild`, `filterNormalAuthors`, `collectRecentPosts`
+- Interface exposes only `boolean activateIfNeeded(Long userId)`.
+- Remove `forceRebuild`.
+- Class name and bean name become activation, not rebuild.
+- Keep package location unchanged.
+- Update all imports in later tasks.
 
-```java
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class FeedInboxActivationService implements IFeedInboxActivationService {
+- [ ] **Step 3: Implement activation behavior**
 
-    private final IRelationAdjacencyCachePort relationAdjacencyCachePort;
-    private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
-    private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
-    private final IFeedTimelineRepository feedTimelineRepository;
+Rules:
 
-    @Value("${feed.activation.perFollowingLimit:5}")
-    private int perFollowingLimit;
+- Dependencies: `IRelationAdjacencyCachePort`, `IFeedAuthorTimelineRepository`, `IFeedTimelineRepository`.
+- Do not depend on `IContentRepository`.
+- Config keys: use `feed.activation.perFollowingLimit`, `feed.activation.maxFollowings`, `feed.activation.inboxSize` with sane defaults.
+- Include self AuthorTimeline.
+- Pull each target with first-page Max-ID cursor.
+- Deduplicate by `postId` before writing inbox.
+- Sort with `publishTimeMs DESC, postId DESC`.
+- Write via `feedTimelineRepository.addToInbox`.
+- If no entries, do nothing.
 
-    @Value("${feed.activation.maxFollowings:2000}")
-    private int maxFollowings;
+- [ ] **Step 4: Remove rebuild API from InboxTimeline repository**
 
-    @Value("${feed.activation.inboxSize:200}")
-    private int activationInboxSize;
+Rules:
 
-    @Override
-    public boolean activateIfNeeded(Long userId) {
-        if (userId == null) return false;
-        if (feedTimelineRepository.inboxExists(userId)) return false;
-        doActivate(userId);
-        return true;
-    }
+- Remove `replaceInbox` from `IFeedTimelineRepository`.
+- Remove Lua script, tmp key, rebuild lock key, lock acquisition, merge window config, and `__NOMORE__` from `FeedTimelineRepository`.
+- Keep `addToInbox`, `inboxExists`, `filterOnlineUsers`, `pageInbox`, `pageInboxEntries`, and `removeFromInbox`.
+- Remove sentinel filtering from page methods because sentinel must no longer exist.
 
-    private void doActivate(Long userId) {
-        List<Long> followings = relationAdjacencyCachePort.listFollowing(userId, Math.max(0, maxFollowings));
-        if (followings == null) followings = List.of();
+- [ ] **Step 5: Update repository tests**
 
-        // Include self + all followings
-        List<Long> targets = new ArrayList<>();
-        targets.add(userId);
-        for (Long fid : followings) {
-            if (fid != null && !fid.equals(userId)) targets.add(fid);
-        }
+Remove old tests that assert Lua/lock/sentinel behavior.
 
-        // Pull from each target's AuthorTimeline, merge, write top N to inbox
-        List<FeedInboxEntryVO> all = new ArrayList<>();
-        int limit = Math.max(1, perFollowingLimit);
-        for (Long targetId : targets) {
-            List<FeedInboxEntryVO> entries = feedAuthorTimelineRepository.pageTimeline(targetId, null, null, limit);
-            all.addAll(entries);
-        }
+Add/keep tests for:
 
-        all.sort(Comparator.<FeedInboxEntryVO, Long>comparing(FeedInboxEntryVO::getPublishTimeMs)
-                .thenComparing(FeedInboxEntryVO::getPostId).reversed());
+- `addToInbox` trims by cardinality.
+- `pageInboxEntries` respects Max-ID cursor and skips malformed members.
+- `filterOnlineUsers` still uses key existence.
+- `removeFromInbox` remains idempotent.
 
-        int inboxLimit = Math.max(1, activationInboxSize);
-        List<FeedInboxEntryVO> top = all.size() <= inboxLimit ? all : all.subList(0, inboxLimit);
+- [ ] **Step 6: Verify**
 
-        if (top.isEmpty()) {
-            // Don't create empty inbox with sentinel; skip activation
-            return;
-        }
-
-        for (FeedInboxEntryVO e : top) {
-            feedTimelineRepository.addToInbox(userId, e.getPostId(), e.getPublishTimeMs());
-        }
-        log.info("feed inbox activated, userId={}, entries={}", userId, top.size());
-    }
-}
-```
-
-- [ ] **Step 3: Remove replaceInbox from FeedTimelineRepository**
-
-In `FeedTimelineRepository`:
-- Remove `REPLACE_INBOX_SCRIPT` Lua script
-- Remove `replaceInbox` method
-- Remove `tryAcquireRebuildLock`, `rebuildLockKey`, `inboxTmpKey`
-- Remove `rebuildWindowSize`, `@Value("${feed.rebuild.mergeWindowSize:256}")` 
-- Remove `@Value("${feed.rebuild.lockSeconds:30}")`
-- Remove sentinel handling (`filterNoMore`, `__NOMORE__`)
-
-Remove `replaceInbox` from `IFeedTimelineRepository` interface.
-
-- [ ] **Step 4: Update tests**
-
-Update `FeedInboxRebuildServiceTest`:
-- Rename to `FeedInboxActivationServiceTest`
-- Replace `IContentRepository` mock with `IFeedAuthorTimelineRepository`
-- Test: `activateIfNeeded_shouldPullFromAllFolloweeTimelines`
-- Test: `activateIfNeeded_shouldSkipWhenInboxExists`
-- Test: `activateIfNeeded_emptyResultShouldNotWriteInbox`
-
-Update `FeedTimelineRepositoryTest`:
-- Remove `replaceInbox_*` tests
-- Remove lock-related tests
-
-- [ ] **Step 5: Verify**
-
-Run: `mvn -pl nexus-domain test -Dtest="FeedInboxActivationServiceTest"` and
-`mvn -pl nexus-infrastructure test -Dtest="FeedTimelineRepositoryTest"`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
+Run:
 
 ```bash
-git add nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxRebuildService.java \
-        nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedInboxRebuildService.java \
-        nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepository.java \
-        nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedTimelineRepository.java
-git rm nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxRebuildService.java
-git add ...
-git commit -m "refactor: replace inbox rebuild with activation, remove Lua/lock/sentinel"
+mvn -pl nexus-domain test -Dtest=FeedInboxActivationServiceTest
+mvn -pl nexus-infrastructure test -Dtest=FeedTimelineRepositoryTest
+```
+
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+Run:
+
+```bash
+git add nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxActivationService.java nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedInboxActivationService.java nexus-domain/src/main/java/cn/nexus/domain/social/adapter/repository/IFeedTimelineRepository.java nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepository.java nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedInboxActivationServiceTest.java nexus-infrastructure/src/test/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepositoryTest.java
+git rm nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedInboxRebuildService.java nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedInboxRebuildService.java
+git commit -m "refactor: replace inbox rebuild with activation"
 ```
 
 ---
 
-## Task 8: Update FeedService Read Path
+## Task 8: FOLLOW Read Path
 
 **Files:**
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java`
 - Modify: `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedServiceTest.java`
 
-- [ ] **Step 1: Update FeedService dependencies and followTimeline**
+- [ ] **Step 1: Update failing tests**
 
-Key changes in `FeedService`:
-- Replace `IFeedOutboxRepository` → `IFeedAuthorTimelineRepository`
-- Replace `IFeedInboxRebuildService` → `IFeedInboxActivationService`
-- Remove `IFeedBigVPoolRepository`, `IFeedGlobalLatestRepository` (from FOLLOW path)
-- In `followTimeline`:
-  - `rebuildIfNeeded` → `activateIfNeeded`
-  - `pageOutbox` → `pageTimeline` for BIGV authors
-  - Add self AuthorTimeline as a source (step 3.5)
-  - Remove `cleanupMissingIndexes` for outbox/pool (only inbox cleanup remains)
-  - Remove BigV pool reads
+Cover:
 
-- [ ] **Step 2: Update AuthorBuckets to use pageTimeline**
+- Refresh calls `activateIfNeeded`.
+- FOLLOW merge sources are inbox, BIGV AuthorTimeline, and self AuthorTimeline.
+- NORMAL followee AuthorTimeline is not scanned during normal read.
+- Same post in inbox and AuthorTimeline returns once.
+- Non-PUBLISHED/missing/unfollowed/blocked candidates do not reach assembly.
+- Dirty post cleanup removes only current user inbox.
+- RECOMMEND/POPULAR/NEIGHBORS/PROFILE behavior remains unchanged.
 
-In `splitAuthorsByCategory`, BIGV authors' posts are now pulled via `pageTimeline` instead of `pageOutbox`.
+Run: `mvn -pl nexus-domain test -Dtest=FeedServiceTest`
 
-- [ ] **Step 3: Add self AuthorTimeline to merge sources**
+Expected before implementation: FAIL due to old outbox/rebuild behavior.
 
-Add self as a source in `followTimeline`:
+- [ ] **Step 2: Modify dependencies**
 
-```java
-// Self AuthorTimeline
-List<FeedInboxEntryVO> selfEntries = feedAuthorTimelineRepository.pageTimeline(userId, cursorTs, cursorPostId, limit);
-// Add to merge sources
-```
+Rules:
 
-- [ ] **Step 4: Update FeedServiceTest**
+- Replace `IFeedOutboxRepository` with `IFeedAuthorTimelineRepository`.
+- Replace `IFeedInboxRebuildService` with `IFeedInboxActivationService`.
+- Remove BigV pool dependency from FOLLOW read path.
+- Do not remove global latest dependency if recommendation methods still use it.
 
-Key test updates:
-- `timeline_followRefreshShouldMergeInboxAndBigVOutboxUsingMaxIdOrder` → rename to `...MergeInboxAndAuthorTimeline...`
-- Replace `IFeedOutboxRepository` mock with `IFeedAuthorTimelineRepository`
-- Replace `IFeedInboxRebuildService` mock with `IFeedInboxActivationService`
-- Assert `pageTimeline` is called instead of `pageOutbox`
+- [ ] **Step 3: Modify `followTimeline`**
 
-- [ ] **Step 5: Verify**
+Rules:
 
-Run: `mvn -pl nexus-domain test -Dtest="FeedServiceTest"`
-Expected: PASS
+- On refresh, call `activateIfNeeded(userId)`.
+- Page inbox with existing `pageInboxEntries`.
+- Page each BIGV followee via `pageTimeline`.
+- Always page self via `pageTimeline(userId, ...)`.
+- Use one Max-ID cursor for all sources.
+- Merge/dedupe before assembly.
+- Keep scan budget bounded when filtering reduces the result.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Verify**
+
+Run: `mvn -pl nexus-domain test -Dtest=FeedServiceTest`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+Run:
 
 ```bash
-git add nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java \
-        nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedServiceTest.java
-git commit -m "refactor: update follow read path to use AuthorTimeline and activation"
+git add nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedService.java nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedServiceTest.java
+git commit -m "refactor: read follow feed from inbox and author timelines"
 ```
 
 ---
 
-## Task 9: Update FeedFollowCompensationService to Use AuthorTimeline
+## Task 9: Follow Compensation Service
 
 **Files:**
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedFollowCompensationService.java`
+- Create: `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedFollowCompensationServiceTest.java`
 
-- [ ] **Step 1: Replace contentRepository with AuthorTimeline**
+- [ ] **Step 1: Write or update failing tests**
 
-In `onFollow`:
-- Replace `contentRepository.listUserPosts(followeeId, null, limit)` with `feedAuthorTimelineRepository.pageTimeline(followeeId, null, null, limit)`
-- Remove `IContentRepository` dependency
-- Add `IFeedAuthorTimelineRepository` dependency
+Cover:
 
-```java
-@Service
-@RequiredArgsConstructor
-public class FeedFollowCompensationService implements IFeedFollowCompensationService {
+- Online follower reads followee AuthorTimeline and writes entries to inbox.
+- Offline follower does not create inbox.
+- Null or self-follow inputs skip.
+- Empty AuthorTimeline skips.
+- Unfollow is no-op.
+- No DB content repository is used.
 
-    private final IFeedTimelineRepository feedTimelineRepository;
-    private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository;
+Run: `mvn -pl nexus-domain test -Dtest=FeedFollowCompensationServiceTest`
 
-    @Value("${feed.follow.compensate.recentPosts:20}")
-    private int recentPosts;
+Expected before implementation: FAIL due to DB-based implementation or missing tests.
 
-    @Override
-    public void onFollow(Long followerId, Long followeeId) {
-        if (followerId == null || followeeId == null || followerId.equals(followeeId)) return;
-        if (!feedTimelineRepository.inboxExists(followerId)) return;
+- [ ] **Step 2: Modify service**
 
-        int limit = Math.max(1, recentPosts);
-        List<FeedInboxEntryVO> entries = feedAuthorTimelineRepository.pageTimeline(followeeId, null, null, limit);
-        if (entries.isEmpty()) return;
+Rules:
 
-        for (FeedInboxEntryVO e : entries) {
-            feedTimelineRepository.addToInbox(followerId, e.getPostId(), e.getPublishTimeMs());
-        }
-    }
+- Replace `IContentRepository` dependency with `IFeedAuthorTimelineRepository`.
+- Keep `IFeedTimelineRepository.inboxExists(followerId)` gate.
+- Read `pageTimeline(followeeId, null, null, recentPosts)`.
+- Write each result via `addToInbox(followerId, postId, publishTimeMs)`.
+- Do not activate offline inbox here.
 
-    @Override
-    public void onUnfollow(Long followerId, Long followeeId) {
-        // No-op: read-side filtering handles unfollow visibility
-    }
-}
-```
+- [ ] **Step 3: Verify**
 
-- [ ] **Step 2: Verify**
+Run: `mvn -pl nexus-domain test -Dtest=FeedFollowCompensationServiceTest`
 
-Run: `mvn -pl nexus-domain compile`
-Expected: BUILD SUCCESS
+Expected: PASS.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
+
+Run:
 
 ```bash
-git add nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedFollowCompensationService.java
-git commit -m "refactor: compensation reads from AuthorTimeline instead of DB"
+git add nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedFollowCompensationService.java nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedFollowCompensationServiceTest.java
+git commit -m "refactor: compensate follow from author timeline"
 ```
 
 ---
 
-## Task 10: Remove Dead Code
+## Task 10: Remove Rebuild Coupling And Dead FOLLOW Dependencies
 
 **Files:**
 - Delete: `nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedOutboxRebuildService.java`
 - Delete: `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedOutboxRebuildService.java`
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedAuthorCategoryStateMachine.java`
 - Modify: `nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedDistributionService.java`
+- Create: `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedAuthorCategoryStateMachineTest.java`
+- Create: `nexus-domain/src/test/java/cn/nexus/domain/social/service/FeedDistributionServiceTest.java`
 
-- [ ] **Step 1: Remove outbox rebuild service**
+- [ ] **Step 1: Update failing tests**
 
-Delete `IFeedOutboxRebuildService.java` and `FeedOutboxRebuildService.java`.
+Cover:
 
-- [ ] **Step 2: Update FeedAuthorCategoryStateMachine**
+- Category change updates category hash but does not call any rebuild service.
+- `FeedDistributionService` still fanouts to online followers.
+- No outbox/pool repository dependency remains in `FeedDistributionService`.
 
-Remove `IFeedOutboxRebuildService` dependency. Remove `forceRebuild` call:
+Run: `mvn -pl nexus-domain test -Dtest=FeedAuthorCategoryStateMachineTest,FeedDistributionServiceTest`
 
-```java
-// Before: if category changed, feedOutboxRebuildService.forceRebuild(authorId);
-// After: just update category, no rebuild
-if (!newCategory.equals(existingCategory)) {
-    feedAuthorCategoryRepository.setCategory(authorId, newCategory);
-    log.info("author category changed, authorId={}, old={}, new={}", authorId, existingCategory, newCategory);
-}
-```
+Expected before implementation: compile failure because these focused tests do not exist yet, or failing old rebuild expectation if equivalent tests already exist.
 
-- [ ] **Step 3: Clean up FeedDistributionService**
+- [ ] **Step 2: Remove outbox rebuild service**
 
-Remove unused `IFeedOutboxRepository` and `IFeedBigVPoolRepository` fields.
+Rules:
+
+- Delete interface and implementation.
+- Remove dependency from state machine.
+- Category miss/change only updates category.
+- Keep follower threshold logic unchanged.
+
+- [ ] **Step 3: Clean FeedDistributionService**
+
+Rules:
+
+- Remove `IFeedOutboxRepository` and `IFeedBigVPoolRepository` fields if unused.
+- Do not change fanout online filtering behavior.
 
 - [ ] **Step 4: Verify**
 
-Run: `mvn compile`
-Expected: BUILD SUCCESS
+Run: `mvn -pl nexus-domain test -Dtest=FeedAuthorCategoryStateMachineTest,FeedDistributionServiceTest`
+
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
+Run:
+
 ```bash
-git rm nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedOutboxRebuildService.java \
-       nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedOutboxRebuildService.java
-git add nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedAuthorCategoryStateMachine.java \
-        nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedDistributionService.java
-git commit -m "chore: remove outbox rebuild service and dead dependencies"
+git rm nexus-domain/src/main/java/cn/nexus/domain/social/service/IFeedOutboxRebuildService.java nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedOutboxRebuildService.java
+git add nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedAuthorCategoryStateMachine.java nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedDistributionService.java
+git commit -m "chore: remove feed outbox rebuild coupling"
 ```
 
 ---
 
-## Task 11: Update Architecture Contract Test
+## Task 11: Compatibility And Reference Cleanup
 
-**Files:**
-- Modify: `nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
+**Files:** Search-driven.
 
-- [ ] **Step 1: Update inventory**
+- [ ] **Step 1: Run reference scan**
 
-Key changes:
-- Add `FollowFeedCompensationConsumer.java` to `SIDE_EFFECTING_LISTENER_FILES`
-- Add `FollowFeedCompensationConsumer` to `EXPECTED_LISTENER_INVENTORY`
-- Update `FeedIndexCleanupConsumer` entries (both listeners now on same queue `Q_FEED_INDEX_CLEANUP`)
-- Remove any deleted listener references
-- Update `DOMAIN_INBOX_LISTENERS_FROM_INVENTORY` if needed for the compensation consumer
-
-- [ ] **Step 2: Verify**
-
-Run: `mvn -pl nexus-app test -Dtest="ReliableMqArchitectureContractTest"`
-Expected: PASS
-
-- [ ] **Step 3: Commit**
+Run:
 
 ```bash
-git add nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java
-git commit -m "test: update mq architecture contract for feed simplification"
+rg -n "IFeedOutboxRepository|FeedOutboxRepository|pageOutbox|addToOutbox|removeFromOutbox|IFeedInboxRebuildService|FeedInboxRebuildService|replaceInbox|IFeedOutboxRebuildService|FeedOutboxRebuildService|feed:outbox|feed:bigv:pool|addToLatest|addToPool" nexus-*
 ```
 
----
+Expected: Only allowed references remain:
 
-## Task 12: Update Integration Tests
+- legacy repository classes/tests not used by FOLLOW,
+- recommendation code that still needs global latest,
+- docs or compatibility comments,
+- no production FOLLOW path references.
 
-**Files:**
-- Modify: `nexus-app/src/test/java/cn/nexus/integration/FeedFanoutRealIntegrationTest.java`
-- Modify: `nexus-app/src/test/java/cn/nexus/integration/feed/FeedHttpRealIntegrationTest.java`
+- [ ] **Step 2: Remove or update disallowed references**
 
-- [ ] **Step 1: Update FeedFanoutRealIntegrationTest**
+Rules:
 
-- Replace outbox assertions with AuthorTimeline assertions
-- Remove `feed:global:latest` assertions
-- Remove BigV pool assertions
-- Test that `feed:timeline:{authorId}` contains the post after fanout
-- Test that `feed:inbox:{followerId}` contains the post
+- Production FOLLOW path must not reference old outbox repository.
+- Dispatcher must not reference latest or pool.
+- Cleanup must not reference latest or pool.
+- Activation must not reference rebuild service.
+- Do not delete recommendation latest references.
 
-- [ ] **Step 2: Update FeedHttpRealIntegrationTest**
+- [ ] **Step 3: Verify compile**
 
-- Update assertions to use AuthorTimeline key instead of outbox key
-- Ensure FOLLOW timeline response still returns correct posts
+Run: `mvn compile`
 
-- [ ] **Step 3: Verify**
-
-Run: `mvn -pl nexus-app test -Dtest="FeedFanoutRealIntegrationTest,FeedHttpRealIntegrationTest"`
-Expected: PASS
+Expected: BUILD SUCCESS.
 
 - [ ] **Step 4: Commit**
 
+Run:
+
 ```bash
-git add nexus-app/src/test/java/cn/nexus/integration/FeedFanoutRealIntegrationTest.java \
-        nexus-app/src/test/java/cn/nexus/integration/feed/FeedHttpRealIntegrationTest.java
-git commit -m "test: update integration tests for feed simplification"
+git diff --name-only
+git add <only the disallowed-reference cleanup files shown by the diff>
+git commit -m "chore: clean feed simplification references"
+```
+
+Never use `git add .` in this repository for this task. The worktree may contain unrelated user changes.
+
+---
+
+## Task 12: Architecture Contract And Integration Tests
+
+**Files:**
+- Modify: `nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java`
+- Modify: `nexus-app/src/test/java/cn/nexus/integration/FeedFanoutRealIntegrationTest.java`
+- Modify: `nexus-app/src/test/java/cn/nexus/integration/feed/FeedHttpRealIntegrationTest.java`
+
+- [ ] **Step 1: Update MQ architecture contract**
+
+Rules:
+
+- Add `FollowFeedCompensationConsumer` to expected listener inventory.
+- Its queue is the feed compensation queue bound to relation FOLLOW.
+- Feed cleanup updated/deleted listeners both use `Q_FEED_INDEX_CLEANUP`.
+- Do not classify compensation consumer as relation counter projection.
+
+Run: `mvn -pl nexus-app test -Dtest=ReliableMqArchitectureContractTest`
+
+Expected before implementation: FAIL until inventory is updated.
+
+- [ ] **Step 2: Update fanout integration test**
+
+Rules:
+
+- Assert author post appears in `feed:timeline:{authorId}`.
+- Assert NORMAL follower inbox receives fanout.
+- Assert BigV author does not fanout but has AuthorTimeline entry.
+- Remove old assertions that FOLLOW writes global latest or BigV pool.
+
+- [ ] **Step 3: Update HTTP integration test**
+
+Rules:
+
+- FOLLOW response includes self AuthorTimeline post.
+- FOLLOW response includes BigV AuthorTimeline post.
+- FOLLOW response still filters unfollowed/blocked/invalid posts.
+- Recommendation or profile assertions remain unchanged.
+
+- [ ] **Step 4: Verify**
+
+Run:
+
+```bash
+mvn -pl nexus-app test -Dtest=ReliableMqArchitectureContractTest
+mvn -pl nexus-app test -Dtest=FeedFanoutRealIntegrationTest,FeedHttpRealIntegrationTest
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+Run:
+
+```bash
+git add nexus-app/src/test/java/cn/nexus/contract/mq/ReliableMqArchitectureContractTest.java nexus-app/src/test/java/cn/nexus/integration/FeedFanoutRealIntegrationTest.java nexus-app/src/test/java/cn/nexus/integration/feed/FeedHttpRealIntegrationTest.java
+git commit -m "test: update feed simplification contracts"
 ```
 
 ---
@@ -1207,90 +814,96 @@ git commit -m "test: update integration tests for feed simplification"
 
 **Files:** No production edits.
 
-- [ ] **Step 1: Full compile**
+- [ ] **Step 1: Compile all modules**
 
 Run: `mvn compile`
-Expected: BUILD SUCCESS
 
-- [ ] **Step 2: All feed-related tests**
+Expected: BUILD SUCCESS.
+
+- [ ] **Step 2: Run focused test suites**
 
 Run:
+
 ```bash
-mvn -pl nexus-infrastructure test
-mvn -pl nexus-trigger test
-mvn -pl nexus-domain test
-mvn -pl nexus-app test -Dtest="ReliableMqArchitectureContractTest"
+mvn -pl nexus-infrastructure test -Dtest=FeedAuthorTimelineRepositoryTest,FeedTimelineRepositoryTest
+mvn -pl nexus-domain test -Dtest=FeedInboxActivationServiceTest,FeedServiceTest,FeedFollowCompensationServiceTest,FeedAuthorCategoryStateMachineTest,FeedDistributionServiceTest
+mvn -pl nexus-trigger test -Dtest=FeedFollowCompensationMqConfigTest,FollowFeedCompensationConsumerTest,FeedFanoutConfigTest,FeedIndexCleanupConsumerTest,FeedFanoutDispatcherConsumerTest
+mvn -pl nexus-app test -Dtest=ReliableMqArchitectureContractTest,FeedFanoutRealIntegrationTest,FeedHttpRealIntegrationTest
 ```
 
-Expected: All PASS
+Expected: all PASS.
 
 - [ ] **Step 3: Drift scan**
 
-Run and confirm no regressions:
+Run:
 
 ```bash
-# No Lua scripts left in inbox/timeline repos
-rg -n "REPLACE_INBOX_SCRIPT\|REPLACE_OUTBOX_SCRIPT\|eval\|redisScript" \
-   nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepository.java
-
-# No __NOMORE__ sentinel
-rg -n "__NOMORE__\|NOMORE" nexus-*
-
-# No rebuild lock keys in timeline repo
-rg -n "rebuild.*lock\|lock.*rebuild" \
-   nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepository.java
-
-# No addToLatest/addToPool in dispatcher
-rg -n "addToLatest\|addToPool" \
-   nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java
-
-# No bigV pool references in cleanup consumer
-rg -n "BigVPool\|bigVPool\|bigv.*pool" \
-   nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java
-
-# No outbox rebuild references in state machine
-rg -n "rebuild\|OutboxRebuild" \
-   nexus-domain/src/main/java/cn/nexus/domain/social/service/FeedAuthorCategoryStateMachine.java
+rg -n "REPLACE_INBOX_SCRIPT|__NOMORE__|feed:inbox:tmp|feed:inbox:rebuild:lock|replaceInbox" nexus-domain nexus-infrastructure/src/main/java/cn/nexus/infrastructure/adapter/social/repository/FeedTimelineRepository.java nexus-trigger nexus-app
+rg -n "addToLatest|addToPool|IFeedBigVPoolRepository|IFeedGlobalLatestRepository" nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedFanoutDispatcherConsumer.java nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java
+rg -n "IFeedOutboxRebuildService|FeedOutboxRebuildService|forceRebuild" nexus-domain nexus-infrastructure nexus-trigger nexus-app
+rg -n "feed.author.timeline|relation.counter.follow.compensate" nexus-domain nexus-infrastructure nexus-trigger nexus-app
 ```
 
-- [ ] **Step 4: Verify git status**
+Expected:
+
+- First three commands return no production matches.
+- Fourth command returns no matches; config must use `feed.timeline.*`, and compensation must bind to existing `relation.counter.follow`.
+- Legacy `FeedOutboxRepository` may still contain its old Lua script during compatibility; that is allowed only if no FOLLOW production path references it.
+
+- [ ] **Step 4: Git status review**
 
 Run: `git status --short`
-Confirm only expected files are changed.
+
+Expected: only files from this plan are changed.
 
 ---
 
 ## Execution Order
 
-Fixed order (each task depends on previous):
+Fixed order:
 
-1. Task 1: AuthorTimeline Repository
-2. Task 2: Follow Compensation MQ Topology
-3. Task 3: FollowFeedCompensationConsumer
-4. Task 4: Merge Cleanup Queues
-5. Task 5: Simplify Cleanup Consumer
-6. Task 6: Simplify Dispatcher
-7. Task 7: Replace Rebuild with Activation
-8. Task 8: Update FeedService Read Path
-9. Task 9: Update Compensation Service
-10. Task 10: Remove Dead Code
-11. Task 11: Update Contract Test
-12. Task 12: Update Integration Tests
-13. Task 13: Final Verification
+1. AuthorTimeline repository
+2. Follow compensation MQ topology
+3. Follow compensation consumer
+4. Merge feed cleanup queues
+5. Simplify cleanup consumer
+6. Simplify fanout dispatcher
+7. Replace inbox rebuild with activation
+8. FOLLOW read path
+9. Follow compensation service
+10. Remove rebuild coupling and dead FOLLOW dependencies
+11. Compatibility and reference cleanup
+12. Architecture contract and integration tests
+13. Final verification
 
----
+Do not parallelize tasks that edit the same files. Safe parallel candidates after Task 1 are limited to test-only exploration; implementation should remain sequential unless using separate agents with disjoint write sets.
 
-## Drift Review Checklist
+## Per-Task Drift Checklist
 
-每个任务完成后检查:
-1. 是否引入了新的 Redis key 类型（除 inbox 和 AuthorTimeline 外）
-2. 是否引入了 Lua 脚本、重建锁或 `__NOMORE__` 哨兵
-3. 是否在 FOLLOW dispatcher 中写了 latest 或 pool
-4. 是否在 cleanup consumer 中清理了 inbox
-5. 是否在关系写事务内同步写了 Feed Redis
-6. 是否修改了推荐/热门/邻近流路径
-7. 是否删除了推荐系统仍在使用的 `feed:global:latest` key
-8. 配置键是否使用了计划外名称
+After every task, check:
+
+1. Did this task add a Redis key outside `feed:inbox:*` or `feed:timeline:*` for FOLLOW?
+2. Did this task add Lua, locks, tmp keys, merge windows, or sentinels?
+3. Did dispatcher write latest, pool, or author inbox?
+4. Did cleanup remove inbox, latest, pool, or scan timelines?
+5. Did relation write transaction gain Feed Redis side effects?
+6. Did recommendation, popular, neighbors, or profile behavior change?
+7. Did code delete or repurpose recommendation latest fallback?
+8. Did config use `feed.timeline.*` rather than `feed.outbox.*` or `feed.author.timeline.*`?
+9. Did any test assert old outbox/pool/latest FOLLOW behavior?
+10. Did any commit stage unrelated dirty files?
+
+## Self-Review Notes
+
+This plan closes the prior ambiguity points:
+
+- Uses the actual existing plan filename and records that the requested `*-design.md` plan path does not exist.
+- Reuses relation FOLLOW routing for compensation instead of inventing an unroutable normal key.
+- Keeps recommendation latest fallback out of FOLLOW ownership without deleting recommendation storage.
+- Uses `feed.timeline.*` config to match the spec.
+- Replaces large implementation code blocks with executable rules and test requirements.
+- Fixes Redis trim, TTL mock, Max-ID pagination, and activation semantics before implementation.
+- Prevents deleting legacy outbox/global/pool repositories prematurely.
 
 ## Handoff
 
@@ -1299,6 +912,6 @@ Plan complete and saved to `docs/superpowers/plans/2026-05-04-nexus-feed-simplif
 Two execution options:
 
 1. **Subagent-Driven (recommended)** - dispatch a fresh subagent per task, review between tasks, fast iteration
-2. **Incline Execution** - execute tasks in this session using executing-plans, batch execution with checkpoints
+2. **Inline Execution** - execute tasks in this session using executing-plans, batch execution with checkpoints
 
 Which approach?

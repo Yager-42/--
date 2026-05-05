@@ -5,7 +5,9 @@
       "mcp__desktop-commander__write_file",
       "mcp__shrimp-task-manager__plan_task",
       "mcp__shrimp-task-manager__analyze_task",
-      "mcp__shrimp-task-manager__reflect_task"
+      "mcp__shrimp-task-manager__reflect_task",
+      "Bash(git *)",
+      "Bash(mvn -pl nexus-domain,nexus-infrastructure test -Dtest=FeedAuthorTimelineRepositoryTest -Dsurefire.failIfNoSpecifiedTests=false)"
     ]
   }
 }

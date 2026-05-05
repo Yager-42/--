@@ -1,7 +1,5 @@
 package cn.nexus.domain.social.service;
 
-import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
-import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IRelationRepository;
 import lombok.RequiredArgsConstructor;
@@ -28,8 +26,6 @@ public class FeedDistributionService implements IFeedDistributionService {
 
     private final IRelationRepository relationRepository;
     private final IFeedTimelineRepository feedTimelineRepository;
-    private final IFeedOutboxRepository feedOutboxRepository;
-    private final IFeedBigVPoolRepository feedBigVPoolRepository;
 
     /**
      * fanout 粉丝批量大小，默认 200。

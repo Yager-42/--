@@ -198,7 +198,7 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         long postId = seedPublishedPost(followeeId);
 
         clearFeedKeys(followeeId, followerId);
-        feedTimelineRepository.replaceInbox(followerId, List.of());
+        long markerPostId = createOnlineInboxMarker(followerId);
         ensureRelationTopology();
         ensureRelationConsumersReady();
 
@@ -226,6 +226,8 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
                     .extracting(item -> item.getPostId())
                     .contains(postId);
         });
+
+        removeOnlineInboxMarker(followerId, markerPostId);
     }
 
     @Test
@@ -237,7 +239,7 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
         long postId = seedPublishedPost(followeeId);
 
         clearFeedKeys(followeeId, followerId);
-        feedTimelineRepository.replaceInbox(followerId, List.of());
+        long markerPostId = createOnlineInboxMarker(followerId);
         ensureRelationTopology();
         ensureRelationConsumersReady();
 
@@ -259,6 +261,8 @@ class ReliableJobRealIntegrationTest extends RealMiddlewareIntegrationTestSuppor
                     .extracting(item -> item.getPostId())
                     .contains(postId);
         });
+
+        removeOnlineInboxMarker(followerId, markerPostId);
     }
 
     @Test

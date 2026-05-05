@@ -1,9 +1,11 @@
 package cn.nexus.infrastructure.adapter.social.repository;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,103 +14,139 @@ import static org.mockito.Mockito.when;
 import cn.nexus.domain.social.model.valobj.FeedInboxEntryVO;
 import cn.nexus.infrastructure.config.FeedInboxProperties;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisKeyCommands;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
-import org.springframework.data.redis.core.script.RedisScript;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.data.redis.core.ZSetOperations;
 
 class FeedTimelineRepositoryTest {
 
     @Test
-    void replaceInbox_nonEmptySnapshotUsesAtomicBoundedLuaRebuild() {
+    void addToInbox_trimsByCardinality() {
         Fixture fixture = new Fixture();
         fixture.properties.setMaxSize(3);
-        ReflectionTestUtils.setField(fixture.repository, "rebuildMergeWindowSize", 2);
-        when(fixture.valueOperations.setIfAbsent(eq("feed:inbox:rebuild:lock:7"), eq("1"), eq(Duration.ofSeconds(30))))
-                .thenReturn(Boolean.TRUE);
+        when(fixture.zSetOperations.zCard("feed:inbox:7")).thenReturn(4L);
 
-        fixture.repository.replaceInbox(7L, List.of(
-                FeedInboxEntryVO.builder().postId(101L).publishTimeMs(1001L).build(),
-                FeedInboxEntryVO.builder().postId(102L).publishTimeMs(1002L).build()));
+        fixture.repository.addToInbox(7L, 101L, 1001L);
 
-        CapturedScript captured = fixture.captureScript();
-        assertEquals(List.of("feed:inbox:7"), captured.keys());
-        assertEquals("feed:inbox:7", captured.arg(0));
-        assertTrue(captured.arg(1).startsWith("feed:inbox:tmp:7:"));
-        assertEquals("2592000", captured.arg(2));
-        assertEquals("3", captured.arg(3));
-        assertEquals("2", captured.arg(4));
-        assertEquals("__NOMORE__", captured.arg(5));
-        assertEquals("2", captured.arg(6));
-        assertEquals("101", captured.arg(7));
-        assertEquals("1001", captured.arg(8));
-        assertEquals("102", captured.arg(9));
-        assertEquals("1002", captured.arg(10));
-        assertTrue(captured.script().contains("ZREVRANGE"));
-        assertFalse(captured.script().contains("ZRANGE', realKey, 0, -1"));
-        verify(fixture.redisTemplate, never()).rename(any(), any());
-        verify(fixture.redisTemplate, never()).expire(eq("feed:inbox:7"), any(Duration.class));
+        verify(fixture.zSetOperations).add("feed:inbox:7", "101", 1001.0);
+        verify(fixture.zSetOperations).removeRange("feed:inbox:7", 0L, 0L);
     }
 
     @Test
-    void replaceInbox_emptySnapshotDoesNotMergeOldMembers() {
+    void addToInbox_doesNotTrimWhenCardinalityIsWithinLimit() {
         Fixture fixture = new Fixture();
-        when(fixture.valueOperations.setIfAbsent(eq("feed:inbox:rebuild:lock:8"), eq("1"), eq(Duration.ofSeconds(30))))
-                .thenReturn(Boolean.TRUE);
+        fixture.properties.setMaxSize(3);
+        when(fixture.zSetOperations.zCard("feed:inbox:7")).thenReturn(3L);
 
-        fixture.repository.replaceInbox(8L, List.of());
+        fixture.repository.addToInbox(7L, 101L, 1001L);
 
-        CapturedScript captured = fixture.captureScript();
-        assertEquals("0", captured.arg(6));
-        assertEquals(7, captured.args().length);
-        assertTrue(captured.script().contains("if entryCount > 0 and windowSize > 0 then"));
+        verify(fixture.zSetOperations, never()).removeRange(anyString(), anyLong(), anyLong());
     }
 
     @Test
-    void replaceInbox_lockMissSkipsRebuild() {
+    void pageInboxEntries_respectsMaxIdCursorAndSkipsMalformedMembers() {
         Fixture fixture = new Fixture();
-        when(fixture.valueOperations.setIfAbsent(eq("feed:inbox:rebuild:lock:9"), eq("1"), eq(Duration.ofSeconds(30))))
-                .thenReturn(Boolean.FALSE);
+        Set<ZSetOperations.TypedTuple<String>> tuples = new LinkedHashSet<>();
+        tuples.add(tuple("201", 2000.0));
+        tuples.add(tuple("200", 2000.0));
+        tuples.add(tuple("bad", 1999.0));
+        tuples.add(tuple("", 1998.0));
+        tuples.add(tuple("199", 1997.0));
+        when(fixture.zSetOperations.reverseRangeByScoreWithScores(
+                eq("feed:inbox:7"), eq(0.0), eq(2000.0), eq(0L), eq(23L)))
+                .thenReturn(tuples);
 
-        fixture.repository.replaceInbox(9L, List.of(FeedInboxEntryVO.builder().postId(1L).publishTimeMs(1L).build()));
+        List<FeedInboxEntryVO> result = fixture.repository.pageInboxEntries(7L, 2000L, 201L, 3);
 
-        verify(fixture.redisTemplate, never()).execute(any(RedisScript.class), any(), Mockito.<Object[]>any());
+        assertEquals(List.of(200L, 199L), result.stream().map(FeedInboxEntryVO::getPostId).toList());
+        assertEquals(List.of(2000L, 1997L), result.stream().map(FeedInboxEntryVO::getPublishTimeMs).toList());
+        verify(fixture.redisTemplate).expire("feed:inbox:7", Duration.ofDays(30));
     }
 
-    private record CapturedScript(String script, List<String> keys, Object[] args) {
-        private String arg(int index) {
-            return String.valueOf(args[index]);
-        }
+    @Test
+    void pageInboxEntries_nullRedisResultReturnsEmpty() {
+        Fixture fixture = new Fixture();
+        when(fixture.zSetOperations.reverseRangeByScoreWithScores(
+                eq("feed:inbox:7"), eq(0.0), eq((double) Long.MAX_VALUE), eq(0L), eq(21)))
+                .thenReturn(null);
+
+        List<FeedInboxEntryVO> result = fixture.repository.pageInboxEntries(7L, null, null, 1);
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void filterOnlineUsers_usesInboxKeyExistence() {
+        Fixture fixture = new Fixture();
+        when(fixture.redisTemplate.executePipelined(any(RedisCallback.class)))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    RedisCallback<Object> callback = invocation.getArgument(0);
+                    RedisConnection connection = Mockito.mock(RedisConnection.class);
+                    RedisKeyCommands keyCommands = Mockito.mock(RedisKeyCommands.class);
+                    when(connection.keyCommands()).thenReturn(keyCommands);
+                    callback.doInRedis(connection);
+                    verify(keyCommands).exists("feed:inbox:1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    verify(keyCommands).exists("feed:inbox:2".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    return List.of(Boolean.TRUE, Boolean.FALSE);
+                });
+
+        Set<Long> result = fixture.repository.filterOnlineUsers(Arrays.asList(1L, null, 2L));
+
+        assertEquals(Set.of(1L), result);
+    }
+
+    @Test
+    void removeFromInbox_isIdempotent() {
+        Fixture fixture = new Fixture();
+
+        fixture.repository.removeFromInbox(7L, 101L);
+        fixture.repository.removeFromInbox(7L, 101L);
+
+        verify(fixture.zSetOperations, Mockito.times(2)).remove("feed:inbox:7", "101");
+    }
+
+    @Test
+    void removeFromInbox_nullArgsAreNoOp() {
+        Fixture fixture = new Fixture();
+
+        fixture.repository.removeFromInbox(null, 101L);
+        fixture.repository.removeFromInbox(7L, null);
+
+        verify(fixture.zSetOperations, never()).remove(anyString(), any(Object[].class));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ZSetOperations.TypedTuple<String> tuple(String value, Double score) {
+        ZSetOperations.TypedTuple<String> tuple = Mockito.mock(ZSetOperations.TypedTuple.class);
+        when(tuple.getValue()).thenReturn(value);
+        when(tuple.getScore()).thenReturn(score);
+        return tuple;
     }
 
     private static final class Fixture {
         private final StringRedisTemplate redisTemplate = Mockito.mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")
-        private final ValueOperations<String, String> valueOperations = Mockito.mock(ValueOperations.class);
+        private final ZSetOperations<String, String> zSetOperations = Mockito.mock(ZSetOperations.class);
         private final FeedInboxProperties properties = new FeedInboxProperties();
         private final FeedTimelineRepository repository = new FeedTimelineRepository(redisTemplate, properties);
 
         private Fixture() {
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(redisTemplate.execute(Mockito.<RedisScript<Long>>any(), Mockito.<List<String>>any(), Mockito.<Object[]>any()))
-                    .thenReturn(1L);
             properties.setMaxSize(1000);
             properties.setTtlDays(30);
-            ReflectionTestUtils.setField(repository, "rebuildLockSeconds", 30);
-        }
-
-        private CapturedScript captureScript() {
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<RedisScript<Long>> scriptCaptor = ArgumentCaptor.forClass(RedisScript.class);
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<List<String>> keysCaptor = ArgumentCaptor.forClass(List.class);
-            ArgumentCaptor<Object[]> argsCaptor = ArgumentCaptor.forClass(Object[].class);
-            verify(redisTemplate).execute(scriptCaptor.capture(), keysCaptor.capture(), argsCaptor.capture());
-            return new CapturedScript(scriptCaptor.getValue().getScriptAsString(), keysCaptor.getValue(), argsCaptor.getValue());
+            when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+            when(redisTemplate.getExpire(anyString())).thenReturn(1000L);
+            when(zSetOperations.reverseRangeByScoreWithScores(anyString(), anyDouble(), anyDouble(), anyLong(), anyLong()))
+                    .thenReturn(new HashSet<>());
         }
     }
 }

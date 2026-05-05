@@ -8,7 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
- * Feed 作者类别状态机驱动器：根据粉丝数变化推导 NORMAL / BIGV，并在切换时触发 Outbox 重建。
+ * Feed 作者类别状态机驱动器：根据粉丝数变化推导 NORMAL / BIGV。
  *
  * @author m0_52354773
  * @author codex
@@ -20,7 +20,6 @@ public class FeedAuthorCategoryStateMachine {
 
     private final IRelationRepository relationRepository;
     private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository;
-    private final IFeedOutboxRebuildService feedOutboxRebuildService;
 
     @Value("${feed.bigv.followerThreshold:500000}")
     private int bigvFollowerThreshold;
@@ -45,10 +44,7 @@ public class FeedAuthorCategoryStateMachine {
         Integer oldCategoryRaw = feedAuthorCategoryRepository.getCategory(authorId);
         int oldCategory = oldCategoryRaw == null ? FeedAuthorCategoryEnumVO.NORMAL.getCode() : oldCategoryRaw;
         if (newCategory != oldCategory) {
-            // 只有类别真的切换时才回写 Redis 并重建 Outbox，避免每次粉丝波动都触发昂贵重建。
             feedAuthorCategoryRepository.setCategory(authorId, newCategory);
-            feedOutboxRebuildService.forceRebuild(authorId);
         }
     }
 }
-

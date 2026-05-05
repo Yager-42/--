@@ -42,16 +42,6 @@ public interface IFeedTimelineRepository {
     Set<Long> filterOnlineUsers(List<Long> userIds);
 
     /**
-     * 原子化重建用户 InboxTimeline：写入临时 key 并通过 RENAME 覆盖正式 inbox。
-     *
-     * <p>注意：即使 entries 为空，也必须写入“无更多数据”哨兵，避免反复重建。</p>
-     *
-     * @param userId  用户 ID {@link Long}
-     * @param entries inbox 条目列表 {@link List} {@link FeedInboxEntryVO}
-     */
-    void replaceInbox(Long userId, List<FeedInboxEntryVO> entries);
-
-    /**
      * 分页读取用户 InboxTimeline 的 postId 列表。
      *
      * <p>cursor 协议：cursor=上一页最后一条的 postId（字符串），内部使用 ZREVRANK 定位并翻页。</p>

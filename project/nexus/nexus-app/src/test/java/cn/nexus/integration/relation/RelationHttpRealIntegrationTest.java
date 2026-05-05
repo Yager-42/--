@@ -16,7 +16,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Duration;
 import java.util.Date;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
@@ -44,7 +43,7 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
 
         // follower 在线态：inbox key 存在才会触发 follow 补偿回填。
         clearFeedKeys(follower.userId(), follower.userId());
-        feedTimelineRepository.replaceInbox(follower.userId(), List.of());
+        long markerPostId = createOnlineInboxMarker(follower.userId());
 
         JsonNode follow = postJson("/api/v1/relation/follow", JsonNodeFactory.instance.objectNode()
                 .put("targetId", followee.userId()), follower.token());
@@ -66,6 +65,7 @@ class RelationHttpRealIntegrationTest extends RealHttpIntegrationTestSupport {
                     .extracting(item -> item.getPostId())
                     .contains(postId);
         });
+        removeOnlineInboxMarker(follower.userId(), markerPostId);
 
         JsonNode following = assertSuccess(getJson("/api/v1/relation/following?userId=" + follower.userId() + "&limit=10", follower.token()));
         assertThat(following.path("items"))

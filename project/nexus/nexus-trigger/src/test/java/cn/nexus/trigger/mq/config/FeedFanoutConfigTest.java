@@ -1,6 +1,7 @@
 package cn.nexus.trigger.mq.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Binding;
@@ -10,29 +11,38 @@ import org.springframework.amqp.core.Queue;
 class FeedFanoutConfigTest {
 
     @Test
-    void indexCleanupQueuesBindUpdatedAndDeletedSeparately() {
+    void indexCleanupQueueBindsUpdatedAndDeletedToSameQueue() {
         FeedFanoutConfig config = new FeedFanoutConfig();
         DirectExchange feedExchange = config.feedExchange();
         DirectExchange dlxExchange = config.feedDlxExchange();
 
-        Queue updatedQueue = config.feedIndexCleanupUpdatedQueue();
-        Queue deletedQueue = config.feedIndexCleanupDeletedQueue();
-        Queue updatedDlq = config.feedIndexCleanupUpdatedDlqQueue();
-        Queue deletedDlq = config.feedIndexCleanupDeletedDlqQueue();
-        Binding updatedBinding = config.feedIndexCleanupUpdatedBinding(updatedQueue, feedExchange);
-        Binding deletedBinding = config.feedIndexCleanupDeletedBinding(deletedQueue, feedExchange);
-        Binding updatedDlqBinding = config.feedIndexCleanupUpdatedDlqBinding(updatedDlq, dlxExchange);
-        Binding deletedDlqBinding = config.feedIndexCleanupDeletedDlqBinding(deletedDlq, dlxExchange);
+        Queue cleanupQueue = config.feedIndexCleanupQueue();
+        Queue cleanupDlq = config.feedIndexCleanupDlqQueue();
+        Binding updatedBinding = config.feedIndexCleanupUpdatedBinding(cleanupQueue, feedExchange);
+        Binding deletedBinding = config.feedIndexCleanupDeletedBinding(cleanupQueue, feedExchange);
+        Binding cleanupDlqBinding = config.feedIndexCleanupDlqBinding(cleanupDlq, dlxExchange);
 
-        assertEquals("feed.index.cleanup.updated.queue", updatedQueue.getName());
-        assertEquals("feed.index.cleanup.deleted.queue", deletedQueue.getName());
+        assertEquals("feed.index.cleanup.queue", FeedFanoutConfig.Q_FEED_INDEX_CLEANUP);
+        assertEquals("feed.index.cleanup.dlq.queue", FeedFanoutConfig.DLQ_FEED_INDEX_CLEANUP);
+        assertEquals("feed.index.cleanup.queue", cleanupQueue.getName());
+        assertEquals(cleanupQueue.getName(), updatedBinding.getDestination());
+        assertEquals(cleanupQueue.getName(), deletedBinding.getDestination());
         assertEquals("post.updated", updatedBinding.getRoutingKey());
         assertEquals("post.deleted", deletedBinding.getRoutingKey());
-        assertEquals("feed.index.cleanup.updated.dlx", updatedQueue.getArguments().get("x-dead-letter-routing-key"));
-        assertEquals("feed.index.cleanup.deleted.dlx", deletedQueue.getArguments().get("x-dead-letter-routing-key"));
-        assertEquals("feed.index.cleanup.updated.dlq.queue", updatedDlq.getName());
-        assertEquals("feed.index.cleanup.deleted.dlq.queue", deletedDlq.getName());
-        assertEquals("feed.index.cleanup.updated.dlx", updatedDlqBinding.getRoutingKey());
-        assertEquals("feed.index.cleanup.deleted.dlx", deletedDlqBinding.getRoutingKey());
+        assertEquals("feed.index.cleanup.dlx", cleanupQueue.getArguments().get("x-dead-letter-routing-key"));
+        assertEquals("feed.index.cleanup.dlq.queue", cleanupDlq.getName());
+        assertEquals("feed.index.cleanup.dlx", cleanupDlqBinding.getRoutingKey());
+    }
+
+    @Test
+    void oldIndexCleanupQueueConstantsAreRemoved() {
+        assertThrows(NoSuchFieldException.class,
+                () -> FeedFanoutConfig.class.getField("Q_FEED_INDEX_CLEANUP_UPDATED"));
+        assertThrows(NoSuchFieldException.class,
+                () -> FeedFanoutConfig.class.getField("Q_FEED_INDEX_CLEANUP_DELETED"));
+        assertThrows(NoSuchFieldException.class,
+                () -> FeedFanoutConfig.class.getField("DLQ_FEED_INDEX_CLEANUP_UPDATED"));
+        assertThrows(NoSuchFieldException.class,
+                () -> FeedFanoutConfig.class.getField("DLQ_FEED_INDEX_CLEANUP_DELETED"));
     }
 }

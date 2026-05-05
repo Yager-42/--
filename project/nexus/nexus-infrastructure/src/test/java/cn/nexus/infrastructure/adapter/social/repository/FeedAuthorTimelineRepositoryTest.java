@@ -8,6 +8,7 @@ import org.springframework.data.redis.core.ZSetOperations;
 
 import java.time.Duration;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -160,12 +161,12 @@ class FeedAuthorTimelineRepositoryTest {
     void pageTimeline_returnsEntriesOrderedByPublishTimeDescPostIdDesc() {
         Fixture fx = new Fixture();
 
-        // Simulate Redis returning entries: score=publishTimeMs, member=postId
-        // Redis returns in reverse-score order (highest first)
-        Set<ZSetOperations.TypedTuple<String>> tuples = new HashSet<>();
+        Set<ZSetOperations.TypedTuple<String>> tuples = new LinkedHashSet<>();
         tuples.add(tuple("301", 3000.0));
-        tuples.add(tuple("201", 2000.0));
-        tuples.add(tuple("101", 1000.0));
+        tuples.add(tuple("101", 2000.0));
+        tuples.add(tuple("103", 2000.0));
+        tuples.add(tuple("102", 2000.0));
+        tuples.add(tuple("201", 1000.0));
 
         when(fx.zSetOps.reverseRangeByScoreWithScores(
                 eq("feed:timeline:42"), eq(0.0), eq((double) Long.MAX_VALUE), eq(0L), anyLong()))
@@ -173,14 +174,17 @@ class FeedAuthorTimelineRepositoryTest {
 
         List<FeedInboxEntryVO> result = fx.repository.pageTimeline(42L, null, null, 10);
 
-        assertEquals(3, result.size());
-        // Ordered by publishTimeMs DESC, postId DESC
+        assertEquals(5, result.size());
         assertEquals(301L, result.get(0).getPostId());
         assertEquals(3000L, result.get(0).getPublishTimeMs());
-        assertEquals(201L, result.get(1).getPostId());
+        assertEquals(103L, result.get(1).getPostId());
         assertEquals(2000L, result.get(1).getPublishTimeMs());
-        assertEquals(101L, result.get(2).getPostId());
-        assertEquals(1000L, result.get(2).getPublishTimeMs());
+        assertEquals(102L, result.get(2).getPostId());
+        assertEquals(2000L, result.get(2).getPublishTimeMs());
+        assertEquals(101L, result.get(3).getPostId());
+        assertEquals(2000L, result.get(3).getPublishTimeMs());
+        assertEquals(201L, result.get(4).getPostId());
+        assertEquals(1000L, result.get(4).getPublishTimeMs());
     }
 
     @Test
@@ -204,14 +208,11 @@ class FeedAuthorTimelineRepositoryTest {
         // cursor at (2000, 201) -> should exclude exactly this item
         List<FeedInboxEntryVO> result = fx.repository.pageTimeline(42L, 2000L, 201L, 10);
 
-        // Only (2000, 200) and (1999, 999) should remain
         assertEquals(2, result.size());
-        // The entries won't be in a deterministic order from HashSet, but we can verify no entry equals cursor
-        for (FeedInboxEntryVO entry : result) {
-            assertFalse(
-                    entry.getPublishTimeMs() == 2000L && entry.getPostId() == 201L,
-                    "cursor item should be excluded");
-        }
+        assertEquals(200L, result.get(0).getPostId());
+        assertEquals(2000L, result.get(0).getPublishTimeMs());
+        assertEquals(999L, result.get(1).getPostId());
+        assertEquals(1999L, result.get(1).getPublishTimeMs());
     }
 
     @Test
@@ -228,7 +229,62 @@ class FeedAuthorTimelineRepositoryTest {
 
         List<FeedInboxEntryVO> result = fx.repository.pageTimeline(42L, null, null, 3);
 
-        assertTrue(result.size() <= 3);
+        assertEquals(3, result.size());
+        assertEquals(1000L, result.get(0).getPostId());
+        assertEquals(10000L, result.get(0).getPublishTimeMs());
+        assertEquals(1001L, result.get(1).getPostId());
+        assertEquals(9999L, result.get(1).getPublishTimeMs());
+        assertEquals(1002L, result.get(2).getPostId());
+        assertEquals(9998L, result.get(2).getPublishTimeMs());
+    }
+
+    @Test
+    void pageTimeline_capsLimitAtConfiguredMaxSize() {
+        Fixture fx = new Fixture();
+        fx.properties.setMaxSize(3);
+
+        Set<ZSetOperations.TypedTuple<String>> tuples = new LinkedHashSet<>();
+        for (long i = 0; i < 5; i++) {
+            tuples.add(tuple(String.valueOf(1000 + i), (double) (10000 - i)));
+        }
+
+        when(fx.zSetOps.reverseRangeByScoreWithScores(
+                eq("feed:timeline:42"), eq(0.0), eq((double) Long.MAX_VALUE), eq(0L), eq(23L)))
+                .thenReturn(tuples);
+
+        List<FeedInboxEntryVO> result = fx.repository.pageTimeline(42L, null, null, 10);
+
+        assertEquals(3, result.size());
+        assertEquals(1000L, result.get(0).getPostId());
+        assertEquals(1001L, result.get(1).getPostId());
+        assertEquals(1002L, result.get(2).getPostId());
+    }
+
+    @Test
+    void pageTimeline_fetchesAdditionalChunksWhenCursorScoreClusterExceedsInitialCushion() {
+        Fixture fx = new Fixture();
+        Set<ZSetOperations.TypedTuple<String>> firstChunk = new LinkedHashSet<>();
+        for (long postId = 1050; postId >= 1029; postId--) {
+            firstChunk.add(tuple(String.valueOf(postId), 2000.0));
+        }
+        Set<ZSetOperations.TypedTuple<String>> secondChunk = new LinkedHashSet<>();
+        secondChunk.add(tuple("999", 1999.0));
+        secondChunk.add(tuple("998", 1998.0));
+
+        when(fx.zSetOps.reverseRangeByScoreWithScores(
+                eq("feed:timeline:42"), eq(0.0), eq(2000.0), eq(0L), eq(22L)))
+                .thenReturn(firstChunk);
+        when(fx.zSetOps.reverseRangeByScoreWithScores(
+                eq("feed:timeline:42"), eq(0.0), eq(2000.0), eq(22L), eq(22L)))
+                .thenReturn(secondChunk);
+
+        List<FeedInboxEntryVO> result = fx.repository.pageTimeline(42L, 2000L, 1000L, 2);
+
+        assertEquals(2, result.size());
+        assertEquals(999L, result.get(0).getPostId());
+        assertEquals(1999L, result.get(0).getPublishTimeMs());
+        assertEquals(998L, result.get(1).getPostId());
+        assertEquals(1998L, result.get(1).getPublishTimeMs());
     }
 
     @Test
@@ -263,7 +319,7 @@ class FeedAuthorTimelineRepositoryTest {
     }
 
     @Test
-    void pageTimeline_expiresKeyOnRead() {
+    void pageTimeline_doesNotExpireKeyOnRead() {
         Fixture fx = new Fixture();
         when(fx.zSetOps.reverseRangeByScoreWithScores(
                 eq("feed:timeline:42"), eq(0.0), eq((double) Long.MAX_VALUE), eq(0L), anyLong()))
@@ -271,7 +327,7 @@ class FeedAuthorTimelineRepositoryTest {
 
         fx.repository.pageTimeline(42L, null, null, 10);
 
-        verify(fx.redisTemplate).expire(eq("feed:timeline:42"), eq(Duration.ofDays(30)));
+        verify(fx.redisTemplate, never()).expire(eq("feed:timeline:42"), any(Duration.class));
     }
 
     // ── timelineExists ───────────────────────────────────────────────

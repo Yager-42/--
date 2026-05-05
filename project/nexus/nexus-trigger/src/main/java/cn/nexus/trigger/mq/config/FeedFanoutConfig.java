@@ -75,24 +75,14 @@ public class FeedFanoutConfig {
     public static final String DLQ_FANOUT_TASK = "feed.fanout.task.dlx.queue";
 
     /**
-     * Queue：Feed 索引清理内容更新队列。
+     * Queue：Feed 索引清理队列。
      */
-    public static final String Q_FEED_INDEX_CLEANUP_UPDATED = "feed.index.cleanup.updated.queue";
+    public static final String Q_FEED_INDEX_CLEANUP = "feed.index.cleanup.queue";
 
     /**
-     * Queue：Feed 索引清理内容删除队列。
+     * DLQ：Feed 索引清理死信队列。
      */
-    public static final String Q_FEED_INDEX_CLEANUP_DELETED = "feed.index.cleanup.deleted.queue";
-
-    /**
-     * DLQ：Feed 索引清理内容更新死信队列。
-     */
-    public static final String DLQ_FEED_INDEX_CLEANUP_UPDATED = "feed.index.cleanup.updated.dlq.queue";
-
-    /**
-     * DLQ：Feed 索引清理内容删除死信队列。
-     */
-    public static final String DLQ_FEED_INDEX_CLEANUP_DELETED = "feed.index.cleanup.deleted.dlq.queue";
+    public static final String DLQ_FEED_INDEX_CLEANUP = "feed.index.cleanup.dlq.queue";
 
     /**
      * DLX RoutingKey：内容发布事件进入死信队列的路由键。
@@ -105,14 +95,9 @@ public class FeedFanoutConfig {
     public static final String DLX_ROUTING_KEY_FANOUT_TASK = "feed.fanout.task.dlx";
 
     /**
-     * DLX RoutingKey：Feed 索引清理内容更新死信路由键。
+     * DLX RoutingKey：Feed 索引清理死信路由键。
      */
-    public static final String DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_UPDATED = "feed.index.cleanup.updated.dlx";
-
-    /**
-     * DLX RoutingKey：Feed 索引清理内容删除死信路由键。
-     */
-    public static final String DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_DELETED = "feed.index.cleanup.deleted.dlx";
+    public static final String DLX_ROUTING_KEY_FEED_INDEX_CLEANUP = "feed.index.cleanup.dlx";
 
     /**
      * 统一 MQ 消息序列化为 JSON：避免默认 Java 序列化导致的跨语言/跨版本不稳定。
@@ -178,19 +163,11 @@ public class FeedFanoutConfig {
     }
 
     @Bean
-    public Queue feedIndexCleanupUpdatedQueue() {
+    public Queue feedIndexCleanupQueue() {
         Map<String, Object> args = new HashMap<>();
         args.put("x-dead-letter-exchange", DLX_EXCHANGE);
-        args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_UPDATED);
-        return new Queue(Q_FEED_INDEX_CLEANUP_UPDATED, true, false, false, args);
-    }
-
-    @Bean
-    public Queue feedIndexCleanupDeletedQueue() {
-        Map<String, Object> args = new HashMap<>();
-        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
-        args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_DELETED);
-        return new Queue(Q_FEED_INDEX_CLEANUP_DELETED, true, false, false, args);
+        args.put("x-dead-letter-routing-key", DLX_ROUTING_KEY_FEED_INDEX_CLEANUP);
+        return new Queue(Q_FEED_INDEX_CLEANUP, true, false, false, args);
     }
 
     /**
@@ -214,13 +191,8 @@ public class FeedFanoutConfig {
     }
 
     @Bean
-    public Queue feedIndexCleanupUpdatedDlqQueue() {
-        return new Queue(DLQ_FEED_INDEX_CLEANUP_UPDATED, true);
-    }
-
-    @Bean
-    public Queue feedIndexCleanupDeletedDlqQueue() {
-        return new Queue(DLQ_FEED_INDEX_CLEANUP_DELETED, true);
+    public Queue feedIndexCleanupDlqQueue() {
+        return new Queue(DLQ_FEED_INDEX_CLEANUP, true);
     }
 
     /**
@@ -250,15 +222,15 @@ public class FeedFanoutConfig {
     }
 
     @Bean
-    public Binding feedIndexCleanupUpdatedBinding(@Qualifier("feedIndexCleanupUpdatedQueue") Queue feedIndexCleanupUpdatedQueue,
+    public Binding feedIndexCleanupUpdatedBinding(@Qualifier("feedIndexCleanupQueue") Queue feedIndexCleanupQueue,
                                                   @Qualifier("feedExchange") DirectExchange feedExchange) {
-        return BindingBuilder.bind(feedIndexCleanupUpdatedQueue).to(feedExchange).with(RK_POST_UPDATED);
+        return BindingBuilder.bind(feedIndexCleanupQueue).to(feedExchange).with(RK_POST_UPDATED);
     }
 
     @Bean
-    public Binding feedIndexCleanupDeletedBinding(@Qualifier("feedIndexCleanupDeletedQueue") Queue feedIndexCleanupDeletedQueue,
+    public Binding feedIndexCleanupDeletedBinding(@Qualifier("feedIndexCleanupQueue") Queue feedIndexCleanupQueue,
                                                   @Qualifier("feedExchange") DirectExchange feedExchange) {
-        return BindingBuilder.bind(feedIndexCleanupDeletedQueue).to(feedExchange).with(RK_POST_DELETED);
+        return BindingBuilder.bind(feedIndexCleanupQueue).to(feedExchange).with(RK_POST_DELETED);
     }
 
     /**
@@ -288,18 +260,10 @@ public class FeedFanoutConfig {
     }
 
     @Bean
-    public Binding feedIndexCleanupUpdatedDlqBinding(@Qualifier("feedIndexCleanupUpdatedDlqQueue") Queue feedIndexCleanupUpdatedDlqQueue,
-                                                     @Qualifier("feedDlxExchange") DirectExchange feedDlxExchange) {
-        return BindingBuilder.bind(feedIndexCleanupUpdatedDlqQueue)
+    public Binding feedIndexCleanupDlqBinding(@Qualifier("feedIndexCleanupDlqQueue") Queue feedIndexCleanupDlqQueue,
+                                              @Qualifier("feedDlxExchange") DirectExchange feedDlxExchange) {
+        return BindingBuilder.bind(feedIndexCleanupDlqQueue)
                 .to(feedDlxExchange)
-                .with(DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_UPDATED);
-    }
-
-    @Bean
-    public Binding feedIndexCleanupDeletedDlqBinding(@Qualifier("feedIndexCleanupDeletedDlqQueue") Queue feedIndexCleanupDeletedDlqQueue,
-                                                     @Qualifier("feedDlxExchange") DirectExchange feedDlxExchange) {
-        return BindingBuilder.bind(feedIndexCleanupDeletedDlqQueue)
-                .to(feedDlxExchange)
-                .with(DLX_ROUTING_KEY_FEED_INDEX_CLEANUP_DELETED);
+                .with(DLX_ROUTING_KEY_FEED_INDEX_CLEANUP);
     }
 }

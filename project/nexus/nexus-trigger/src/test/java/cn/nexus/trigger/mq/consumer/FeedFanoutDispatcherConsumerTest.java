@@ -1,6 +1,7 @@
 package cn.nexus.trigger.mq.consumer;
 
 import cn.nexus.domain.social.adapter.repository.IFeedAuthorCategoryRepository;
+import cn.nexus.domain.social.adapter.repository.IFeedAuthorTimelineRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedBigVPoolRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedGlobalLatestRepository;
 import cn.nexus.domain.social.adapter.repository.IFeedOutboxRepository;
@@ -18,14 +19,40 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FeedFanoutDispatcherConsumerTest {
+
+    @Test
+    void consumerDoesNotDependOnReadSideFanoutRepositories() {
+        Set<Class<?>> forbiddenDependencies = Set.of(
+                IFeedTimelineRepository.class,
+                IFeedOutboxRepository.class,
+                IFeedBigVPoolRepository.class,
+                IFeedGlobalLatestRepository.class);
+
+        for (Field field : FeedFanoutDispatcherConsumer.class.getDeclaredFields()) {
+            assertFalse(forbiddenDependencies.contains(field.getType()),
+                    () -> "FeedFanoutDispatcherConsumer field depends on " + field.getType().getName());
+        }
+        for (Constructor<?> constructor : FeedFanoutDispatcherConsumer.class.getDeclaredConstructors()) {
+            for (Class<?> parameterType : constructor.getParameterTypes()) {
+                assertFalse(forbiddenDependencies.contains(parameterType),
+                        () -> "FeedFanoutDispatcherConsumer constructor depends on " + parameterType.getName());
+            }
+        }
+    }
 
     @Test
     void onMessage_duplicateDoneDoesNotInvokeBusinessDependency() throws Throwable {
@@ -37,12 +64,12 @@ class FeedFanoutDispatcherConsumerTest {
 
         fixture.invokeThroughAspect(event);
 
-        verify(fixture.feedOutboxRepository, never()).addToOutbox(Mockito.any(), Mockito.any(), Mockito.any());
+        verify(fixture.feedAuthorTimelineRepository, never()).addToTimeline(Mockito.any(), Mockito.any(), Mockito.any());
         verify(fixture.consumerRecordService, never()).markDone(Mockito.any(), Mockito.any());
     }
 
     @Test
-    void onMessage_startedSuccessInvokesBusinessDependencyAndMarksDone() throws Throwable {
+    void onMessage_startedSuccessWritesAuthorTimelineOnlyForPublishSideStoresAndMarksDone() throws Throwable {
         Fixture fixture = new Fixture();
         PostPublishedEvent event = validEvent("evt-fanout-2");
         when(fixture.consumerRecordService.startManual(Mockito.eq("evt-fanout-2"),
@@ -53,15 +80,28 @@ class FeedFanoutDispatcherConsumerTest {
 
         fixture.invokeThroughAspect(event);
 
-        verify(fixture.feedOutboxRepository).addToOutbox(11L, 22L, 33L);
-        verify(fixture.feedTimelineRepository).addToInbox(11L, 22L, 33L);
-        verify(fixture.feedGlobalLatestRepository).addToLatest(22L, 33L);
-        verify(fixture.feedBigVPoolRepository).addToPool(11L, 22L, 33L);
+        verify(fixture.feedAuthorTimelineRepository).addToTimeline(11L, 22L, 33L);
         verify(fixture.consumerRecordService).markDone("evt-fanout-2", "FeedFanoutDispatcherConsumer");
     }
 
     @Test
-    void onMessage_shouldPublishFanoutTasksThroughProducerWithDeterministicChildEventIds() throws Throwable {
+    void onMessage_bigvAuthorWritesAuthorTimelineAndDoesNotPublishFanoutTasks() throws Throwable {
+        Fixture fixture = new Fixture();
+        PostPublishedEvent event = validEvent("evt-fanout-bigv");
+        when(fixture.consumerRecordService.startManual(Mockito.eq("evt-fanout-bigv"),
+                Mockito.eq("FeedFanoutDispatcherConsumer"), Mockito.anyString()))
+                .thenReturn(StartResult.STARTED);
+        when(fixture.feedAuthorCategoryRepository.getCategory(11L))
+                .thenReturn(FeedAuthorCategoryEnumVO.BIGV.getCode());
+
+        fixture.invokeThroughAspect(event);
+
+        verify(fixture.feedAuthorTimelineRepository).addToTimeline(11L, 22L, 33L);
+        verify(fixture.feedFanoutTaskProducer, never()).publish(Mockito.any());
+    }
+
+    @Test
+    void onMessage_normalAuthorWritesAuthorTimelineAndPublishesExpectedFanoutTasks() throws Throwable {
         Fixture fixture = new Fixture();
         PostPublishedEvent event = validEvent("evt-fanout-4");
         when(fixture.consumerRecordService.startManual(Mockito.eq("evt-fanout-4"),
@@ -73,6 +113,7 @@ class FeedFanoutDispatcherConsumerTest {
 
         fixture.invokeThroughAspect(event);
 
+        verify(fixture.feedAuthorTimelineRepository).addToTimeline(11L, 22L, 33L);
         verify(fixture.feedFanoutTaskProducer).publish(argThat(task ->
                 task != null
                         && "evt-fanout-4:0:200".equals(task.eventId())
@@ -97,17 +138,17 @@ class FeedFanoutDispatcherConsumerTest {
     void onMessage_businessFailureMarksFailAndRethrows() throws Throwable {
         Fixture fixture = new Fixture();
         PostPublishedEvent event = validEvent("evt-fanout-3");
-        RuntimeException failure = new RuntimeException("outbox down");
+        RuntimeException failure = new RuntimeException("timeline down");
         when(fixture.consumerRecordService.startManual(Mockito.eq("evt-fanout-3"),
                 Mockito.eq("FeedFanoutDispatcherConsumer"), Mockito.anyString()))
                 .thenReturn(StartResult.STARTED);
-        Mockito.doThrow(failure).when(fixture.feedOutboxRepository).addToOutbox(11L, 22L, 33L);
+        doThrow(failure).when(fixture.feedAuthorTimelineRepository).addToTimeline(11L, 22L, 33L);
 
         RuntimeException thrown = assertThrows(RuntimeException.class, () -> fixture.invokeThroughAspect(event));
 
         assertSame(failure, thrown);
         verify(fixture.consumerRecordService).markFail("evt-fanout-3",
-                "FeedFanoutDispatcherConsumer", "outbox down");
+                "FeedFanoutDispatcherConsumer", "timeline down");
     }
 
     @Test
@@ -117,7 +158,7 @@ class FeedFanoutDispatcherConsumerTest {
 
         assertThrows(ReliableMqPermanentFailureException.class, () -> fixture.invokeThroughAspect(event));
 
-        verify(fixture.feedOutboxRepository, never()).addToOutbox(Mockito.any(), Mockito.any(), Mockito.any());
+        verify(fixture.feedAuthorTimelineRepository, never()).addToTimeline(Mockito.any(), Mockito.any(), Mockito.any());
         verify(fixture.consumerRecordService, never()).startManual(Mockito.any(), Mockito.any(), Mockito.any());
     }
 
@@ -132,20 +173,14 @@ class FeedFanoutDispatcherConsumerTest {
 
     private static final class Fixture {
         private final FeedFanoutTaskProducer feedFanoutTaskProducer = Mockito.mock(FeedFanoutTaskProducer.class);
-        private final IFeedTimelineRepository feedTimelineRepository = Mockito.mock(IFeedTimelineRepository.class);
-        private final IFeedOutboxRepository feedOutboxRepository = Mockito.mock(IFeedOutboxRepository.class);
-        private final IFeedBigVPoolRepository feedBigVPoolRepository = Mockito.mock(IFeedBigVPoolRepository.class);
-        private final IFeedGlobalLatestRepository feedGlobalLatestRepository = Mockito.mock(IFeedGlobalLatestRepository.class);
+        private final IFeedAuthorTimelineRepository feedAuthorTimelineRepository = Mockito.mock(IFeedAuthorTimelineRepository.class);
         private final IRelationRepository relationRepository = Mockito.mock(IRelationRepository.class);
         private final IFeedAuthorCategoryRepository feedAuthorCategoryRepository = Mockito.mock(IFeedAuthorCategoryRepository.class);
         private final FeedAuthorCategoryStateMachine feedAuthorCategoryStateMachine = Mockito.mock(FeedAuthorCategoryStateMachine.class);
         private final ReliableMqConsumerRecordService consumerRecordService = Mockito.mock(ReliableMqConsumerRecordService.class);
         private final FeedFanoutDispatcherConsumer consumer = new FeedFanoutDispatcherConsumer(
                 feedFanoutTaskProducer,
-                feedTimelineRepository,
-                feedOutboxRepository,
-                feedBigVPoolRepository,
-                feedGlobalLatestRepository,
+                feedAuthorTimelineRepository,
                 relationRepository,
                 feedAuthorCategoryRepository,
                 feedAuthorCategoryStateMachine);

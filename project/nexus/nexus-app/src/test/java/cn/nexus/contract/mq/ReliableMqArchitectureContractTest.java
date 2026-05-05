@@ -95,6 +95,7 @@ class ReliableMqArchitectureContractTest {
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemDeleteDlqConsumer.java:onMessage",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertConsumer.java:onMessage",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedRecommendItemUpsertDlqConsumer.java:onMessage",
+            "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FollowFeedCompensationConsumer.java:onMessage",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyConsumer.java:onMessage",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/InteractionNotifyDlqConsumer.java:onMessage",
             "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/PostSummaryGenerateConsumer.java:onPostSummaryGenerate",
@@ -116,6 +117,9 @@ class ReliableMqArchitectureContractTest {
 
     private static final Pattern METHOD_DECLARATION = Pattern.compile(
             "^\\s*(?:(?:public|private|protected)\\s+)?(?:static\\s+)?[^\\n=;]+?\\s+(\\w+)\\s*\\([^\\n;]*\\)\\s*(?:throws\\s+[^\\n{]+)?\\s*\\{?\\s*$",
+            Pattern.MULTILINE);
+    private static final Pattern CLASS_DECLARATION = Pattern.compile(
+            "^\\s*(?:(?:public|private|protected)\\s+)?(?:abstract\\s+|final\\s+)?(?:class|interface|enum)\\s+\\w+.*$",
             Pattern.MULTILINE);
     private static final Pattern CONVERT_AND_SEND_START = Pattern.compile("(?:\\w+\\.)?convertAndSend\\s*\\(");
 
@@ -156,6 +160,22 @@ class ReliableMqArchitectureContractTest {
     }
 
     @Test
+    void feedIndexCleanupHandlersShareCleanupQueue() {
+        String source = read(nexusRoot().resolve(
+                "nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java"));
+
+        assertEquals("FeedFanoutConfig.Q_FEED_INDEX_CLEANUP", classRabbitListenerQueues(source));
+        assertEquals(List.of(
+                new ListenerMethod("nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java",
+                        "onUpdated", true),
+                new ListenerMethod("nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java",
+                        "onDeleted", true)
+        ), rabbitListenerMethods(
+                nexusRoot().resolve("nexus-trigger/src/main/java/cn/nexus/trigger/mq/consumer/FeedIndexCleanupConsumer.java"),
+                source));
+    }
+
+    @Test
     void reliableConsumeDetectionHandlesMultilineAnnotationBlocks() {
         String source = """
                 class Example {
@@ -179,6 +199,24 @@ class ReliableMqArchitectureContractTest {
                     )
                     public void consumeOther(Object event) {
                     }
+
+                    @RabbitListener(queues = "class.queue")
+                    class HandlerExample {
+                        @RabbitHandler
+                        @ReliableMqConsume(
+                                consumerName = "handler",
+                                eventId = "#event.id",
+                                payload = "#event"
+                        )
+                        public void handle(Object event) {
+                        }
+                    }
+
+                    class PlainHandlerExample {
+                        @RabbitHandler
+                        public void ignored(Object event) {
+                        }
+                    }
                 }
                 """;
 
@@ -186,7 +224,8 @@ class ReliableMqArchitectureContractTest {
 
         assertEquals(List.of(
                 new ListenerMethod("nexus-app/Example.java", "consume", true),
-                new ListenerMethod("nexus-app/Example.java", "consumeOther", true)
+                new ListenerMethod("nexus-app/Example.java", "consumeOther", true),
+                new ListenerMethod("nexus-app/Example.java", "handle", true)
         ), methods);
     }
 
@@ -272,13 +311,56 @@ class ReliableMqArchitectureContractTest {
         List<ListenerMethod> listeners = new ArrayList<>();
         while (matcher.find()) {
             String annotationBlock = annotationBlockBefore(source, matcher.start());
-            if (annotationBlock.contains("@RabbitListener")) {
+            boolean methodLevelListener = annotationBlock.contains("@RabbitListener");
+            boolean classLevelHandler = enclosingClassHasRabbitListener(source, matcher.start())
+                    && annotationBlock.contains("@RabbitHandler");
+            if (methodLevelListener || classLevelHandler) {
                 listeners.add(new ListenerMethod(relative(path), matcher.group(1),
                         annotationBlock.contains("@ReliableMqConsume")
                                 || annotationBlock.contains("@cn.nexus.infrastructure.mq.reliable.annotation.ReliableMqConsume")));
             }
         }
         return listeners;
+    }
+
+    private static boolean enclosingClassHasRabbitListener(String source, int methodStart) {
+        Matcher matcher = CLASS_DECLARATION.matcher(source);
+        int classStart = -1;
+        while (matcher.find()) {
+            if (matcher.start() >= methodStart) {
+                break;
+            }
+            classStart = matcher.start();
+        }
+        return classStart >= 0 && annotationBlockBefore(source, classStart).contains("@RabbitListener");
+    }
+
+    private static String classRabbitListenerQueues(String source) {
+        Matcher matcher = CLASS_DECLARATION.matcher(source);
+        while (matcher.find()) {
+            String annotationBlock = annotationBlockBefore(source, matcher.start());
+            int listenerIndex = annotationBlock.indexOf("@RabbitListener");
+            if (listenerIndex < 0) {
+                continue;
+            }
+            int queuesIndex = annotationBlock.indexOf("queues", listenerIndex);
+            if (queuesIndex < 0) {
+                return "";
+            }
+            int equalIndex = annotationBlock.indexOf('=', queuesIndex);
+            if (equalIndex < 0) {
+                return "";
+            }
+            int endIndex = annotationBlock.indexOf(',', equalIndex);
+            if (endIndex < 0) {
+                endIndex = annotationBlock.indexOf(')', equalIndex);
+            }
+            if (endIndex < 0) {
+                return "";
+            }
+            return normalize(annotationBlock.substring(equalIndex + 1, endIndex));
+        }
+        return "";
     }
 
     private static String annotationBlockBefore(String source, int methodStart) {
